@@ -97,12 +97,18 @@ endif
 all: $(BUILD)
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
-$(BUILD):
+# Sprites de la pantalla de carga (generados por tools/gen_art.py)
+$(ROMFS)/gfx/sprites.t3x: gfx/sprites.t3s $(wildcard gfx/*.png)
+	@mkdir -p $(ROMFS)/gfx
+	@cd gfx && $(DEVKITPRO)/tools/bin/tex3ds -i sprites.t3s -o ../$@
+	@echo built ... $(notdir $@)
+
+$(BUILD): $(ROMFS)/gfx/sprites.t3x
 	@mkdir -p $@
 
 clean:
 	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).3dsx $(OUTPUT).smdh $(TARGET).elf
+	@rm -fr $(BUILD) $(TARGET).3dsx $(OUTPUT).smdh $(TARGET).elf $(ROMFS)/gfx
 
 #---------------------------------------------------------------------------------
 else

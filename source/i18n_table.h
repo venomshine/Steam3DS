@@ -96,6 +96,7 @@ static const TrEntry tr_table[] = {
 	{"Todavía no hay reseñas en tu idioma", "No reviews in your language yet", "あなたの言語のレビューはまだありません"},
 	{"Violencia", "Violence", "暴力"},
 	{"Volver", "Back", "戻る"},
+	{"hecho por VENOMSHiNE", "made by VENOMSHiNE", "VENOMSHiNE 作"},
 	{"¿Salir de Steam3DS?", "Exit Steam3DS?", "Steam3DSを終了しますか？"},
 	{"‹ Anterior", "‹ Previous", "‹ 前へ"},
 };

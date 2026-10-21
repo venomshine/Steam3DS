@@ -16,7 +16,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_STORE, SC_GAME, SC_SHOTS } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 enum { SEC_SUMMARY, SEC_REQS, SEC_REVIEWS, SEC_EXTRAS, SEC_SIMILAR, SEC_COUNT };
 
@@ -84,6 +84,8 @@ static struct {
 
 static InfoEnt cache[CACHE];
 static u64 frame_no;
+static C2D_SpriteSheet sprites;
+static float splash_t, splash_out = -1;
 
 static void toast(const char *msg)
 {
@@ -938,6 +940,95 @@ static void draw_overlays_bottom(void)
 	}
 }
 
+
+// ============================================================================
+// Pantalla de carga: la rueda de válvula gira, sale vapor y una barra de carga
+
+enum { SPR_WHEEL, SPR_PUFF, SPR_GLOW };
+
+static float ease_out_back(float t)
+{
+	if (t >= 1) return 1;
+	const float c1 = 1.70158f, c3 = c1 + 1;
+	return 1 + c3 * powf(t - 1, 3) + c1 * powf(t - 1, 2);
+}
+
+static float clampf(float v, float lo, float hi)
+{
+	return v < lo ? lo : v > hi ? hi : v;
+}
+
+static void draw_sprite(int idx, float cx, float cy, float scale, float angle, float alpha)
+{
+	if (!sprites || alpha <= 0) return;
+	C2D_Image img = C2D_SpriteSheetGetImage(sprites, idx);
+	C2D_ImageTint tint;
+	C2D_AlphaImageTint(&tint, clampf(alpha, 0, 1));
+	C2D_DrawImageAtRotated(img, cx, cy, 0.5f, angle, &tint, scale, scale);
+}
+
+static bool splash_ready(void)
+{
+	return S.offers.count > 0 || S.offers.err[0] || net_status_text()[0];
+}
+
+static void draw_splash_top(void)
+{
+	float t = splash_t;
+	ui_vgrad(0, 0, TOP_W, SCR_H, C2D_Color32(0x24, 0x3b, 0x50, 0xff), C2D_Color32(0x17, 0x1a, 0x21, 0xff));
+	float cx = TOP_W / 2, cy = 100;
+	float pop = ease_out_back(clampf(t / 0.55f, 0, 1));
+	draw_sprite(SPR_GLOW, cx, cy, (1.7f + 0.08f * sinf(t * 2.4f)) * pop, 0, 0.55f * pop);
+	// Como una válvula que se abre: arranca despacio y coge velocidad
+	float spin = t < 0.8f ? 0.9f * t * t : 0.576f + 1.44f * (t - 0.8f);
+	draw_sprite(SPR_WHEEL, cx, cy, 0.62f * pop, spin, pop);
+	// Vapor: nubes que suben a la derecha, crecen y se desvanecen
+	for (int i = 0; i < 5; i++) {
+		float life = fmodf(t * 0.75f + i * 0.2f, 1.0f);
+		if (t < 0.35f + i * 0.12f) continue;
+		float a = (life < 0.15f ? life / 0.15f : 1 - (life - 0.15f) / 0.85f) * 0.75f;
+		float x = cx + 30 + life * 34 + sinf(i * 2.1f + t) * 4;
+		float y = cy - 34 - life * 58;
+		draw_sprite(SPR_PUFF, x, y, 0.35f + life * 0.65f, 0, a);
+	}
+	float ta = clampf((t - 0.25f) / 0.4f, 0, 1);
+	u8 a8 = (u8)(255 * ta);
+	float w1 = ui_text_w("Steam", SZ_HUGE), w2 = ui_text_w("3DS", SZ_HUGE);
+	float x = cx - (w1 + w2) / 2;
+	ui_text(x, 158, "Steam", SZ_HUGE, C2D_Color32(0xff, 0xff, 0xff, a8), AL_LEFT, 0);
+	ui_text(x + w1 - 1, 158, "3DS", SZ_HUGE, C2D_Color32(0x66, 0xc0, 0xf4, a8), AL_LEFT, 0);
+	// Barra de carga: un tramo que va y viene hasta que la tienda responde
+	float bw = 150, bx = cx - bw / 2, by = 196;
+	ui_rect(bx, by, bw, 3, C2D_Color32(0x2a, 0x47, 0x5e, a8));
+	if (splash_out >= 0) {
+		ui_rect(bx, by, bw, 3, C2D_Color32(0x66, 0xc0, 0xf4, a8));
+	} else {
+		float seg = 46, p = (sinf(t * 3.0f) + 1) / 2;
+		ui_rect(bx + p * (bw - seg), by, seg, 3, C2D_Color32(0x66, 0xc0, 0xf4, a8));
+	}
+}
+
+static void draw_splash_bottom(void)
+{
+	ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0x12, 0x15, 0x1b, 0xff));
+	float ta = clampf((splash_t - 0.5f) / 0.5f, 0, 1);
+	u8 a8 = (u8)(255 * ta);
+	ui_text(BOT_W / 2, 104, _("hecho por VENOMSHiNE"), SZ_BODY, C2D_Color32(0xc7, 0xd5, 0xe0, a8), AL_CENTER, 0);
+	ui_text(BOT_W / 2, 124, "v" APP_VERSION, SZ_SMALL, C2D_Color32(0x8f, 0x98, 0xa0, a8), AL_CENTER, 0);
+}
+
+static void splash_update(float dt, u32 kd)
+{
+	splash_t += dt;
+	if (splash_out < 0) {
+		bool skip = splash_t > 0.6f && (kd & (KEY_A | KEY_B | KEY_TOUCH));
+		if ((splash_t > 2.0f && splash_ready()) || splash_t > 6.0f || skip) splash_out = 0;
+	} else {
+		splash_out += dt;
+		if (splash_out > 0.35f) S.scene = SC_STORE;
+	}
+}
+
 // ============================================================================
 // Entrada
 
@@ -1114,8 +1205,13 @@ int main(int argc, char **argv)
 	img_init();
 	net_init();
 
-	S.scene = SC_STORE;
+	S.scene = SC_SPLASH;
 	S.tab = TAB_OFFERS;
+	sprites = C2D_SpriteSheetLoad("romfs:/gfx/sprites.t3x");
+	if (sprites) {
+		for (int i = 0; i < 3; i++)
+			C3D_TexSetFilter(C2D_SpriteSheetGetImage(sprites, i).tex, GPU_LINEAR, GPU_LINEAR);
+	}
 	// Primero el país (para los precios en tu moneda); si no responde, el último guardado
 	S.country_req = steam_req_country();
 
@@ -1170,6 +1266,7 @@ int main(int argc, char **argv)
 		case SC_STORE: input_store(kd, kh, ku, &tp); break;
 		case SC_GAME: input_game(kd, kh, ku, &tp); break;
 		case SC_SHOTS: input_shots(kd); break;
+		case SC_SPLASH: splash_update(dt, kd); break;
 		}
 
 		// Vista previa: la ficha del seleccionado, cuando el cursor se queda quieto un momento
@@ -1205,7 +1302,9 @@ int main(int argc, char **argv)
 		case SC_STORE: draw_store_top(); break;
 		case SC_GAME: draw_game_top(); break;
 		case SC_SHOTS: draw_shots_top(); break;
+		case SC_SPLASH: draw_splash_top(); break;
 		}
+		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.ask_exit) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, 0x80));
 
 		C2D_TargetClear(bot, COL_BG);
@@ -1214,7 +1313,9 @@ int main(int argc, char **argv)
 		case SC_STORE: draw_store_bottom(); break;
 		case SC_GAME: draw_game_bottom(); break;
 		case SC_SHOTS: draw_shots_bottom(); break;
+		case SC_SPLASH: draw_splash_bottom(); break;
 		}
+		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		draw_overlays_bottom();
 		C3D_FrameEnd(0);
 	}
@@ -1231,6 +1332,7 @@ int main(int argc, char **argv)
 		if (cache[i].sum) net_release(cache[i].sum);
 		appinfo_free(&cache[i].info);
 	}
+	if (sprites) C2D_SpriteSheetFree(sprites);
 	img_exit();
 	net_exit();
 	ui_exit();

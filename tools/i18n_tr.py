@@ -133,6 +133,9 @@ TR = {
     "‹ Anterior": ("‹ Previous", "‹ 前へ"),
     "Siguiente ›": ("Next ›", "次へ ›"),
 
+    # Pantalla de carga
+    "hecho por VENOMSHiNE": ("made by VENOMSHiNE", "VENOMSHiNE 作"),
+
     # Salir
     "¿Salir de Steam3DS?": ("Exit Steam3DS?", "Steam3DSを終了しますか？"),
     "Cancelar": ("Cancel", "キャンセル"),

@@ -1,0 +1,4 @@
+--atlas -f rgba8888 -z auto
+wheel.png
+puff.png
+glow.png

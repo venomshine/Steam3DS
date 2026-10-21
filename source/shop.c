@@ -1,0 +1,254 @@
+#include "shop.h"
+#include "auth.h"
+#include "cJSON.h"
+#include "net.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static struct {
+	// Opciones de compra del juego abierto
+	u32 opt_app;
+	BuyOpt opt[8];
+	int nopt;
+	bool opt_done, opt_failed;
+	Req *opt_req;
+
+	// Carrito
+	CartInfo cart;
+	bool cart_loaded;
+	u32 cart_ver;
+	Req *cart_req, *names_req;
+
+	// La acción en curso
+	Req *act;
+	ShopKind kind;
+	u32 appid;
+	char what[96];
+
+	ShopEvent ev[4];
+	int nev;
+} H;
+
+static void push_event(bool ok, int code)
+{
+	if (H.nev >= 4) memmove(H.ev, H.ev + 1, sizeof H.ev[0] * 3), H.nev = 3;
+	ShopEvent *e = &H.ev[H.nev++];
+	e->kind = H.kind;
+	e->ok = ok;
+	e->appid = H.appid;
+	e->code = code;
+	snprintf(e->what, sizeof e->what, "%s", H.what);
+	netlog("cuenta: accion %d -> %s (codigo %d)", H.kind, ok ? "ok" : "fallo", code);
+}
+
+bool shop_event(ShopEvent *ev)
+{
+	if (!H.nev) return false;
+	*ev = H.ev[0];
+	memmove(H.ev, H.ev + 1, sizeof H.ev[0] * (H.nev - 1));
+	H.nev--;
+	return true;
+}
+
+bool shop_busy(void) { return H.act != NULL; }
+
+void shop_reset(void)
+{
+	Req **all[] = {&H.opt_req, &H.cart_req, &H.names_req, &H.act};
+	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
+		if (*all[i]) net_release(*all[i]);
+	memset(&H, 0, sizeof H);
+}
+
+// ---------------------------------------------------------------------------- Opciones de compra
+
+void shop_buyopts_load(u32 appid)
+{
+	if (H.opt_app == appid && (H.opt_req || H.opt_done)) return;
+	if (H.opt_req) net_release(H.opt_req);
+	H.opt_app = appid;
+	H.nopt = 0;
+	H.opt_done = H.opt_failed = false;
+	H.opt_req = steam_req_buyopts(appid);
+}
+
+const BuyOpt *shop_buyopts(u32 appid, int *n, bool *failed)
+{
+	*n = 0;
+	if (failed) *failed = H.opt_app == appid && H.opt_failed;
+	if (H.opt_app != appid || !H.opt_done) return NULL;
+	*n = H.nopt;
+	return H.opt;
+}
+
+// ---------------------------------------------------------------------------- Carrito
+
+static cJSON *country_input(void)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON_AddStringToObject(in, "user_country", steam_country());
+	return in;
+}
+
+void shop_cart_load(void)
+{
+	if (!auth_logged() || H.cart_req) return;
+	H.cart_req = steam_post_service("IAccountCartService/GetCart", country_input(), auth_token());
+}
+
+const CartInfo *shop_cart(void) { return &H.cart; }
+bool shop_cart_loaded(void) { return H.cart_loaded; }
+bool shop_cart_loading(void) { return H.cart_req || H.names_req; }
+u32 shop_cart_version(void) { return H.cart_ver; }
+
+bool shop_in_cart(u32 appid, const BuyOpt *opts, int nopts)
+{
+	for (int i = 0; i < H.cart.n; i++) {
+		const CartLine *l = &H.cart.line[i];
+		if (appid && l->appid == appid) return true;
+		for (int k = 0; k < nopts; k++)
+			if ((opts[k].packageid && opts[k].packageid == l->packageid && !l->bundleid) ||
+			    (opts[k].bundleid && opts[k].bundleid == l->bundleid))
+				return true;
+	}
+	return false;
+}
+
+static void cart_changed(void)
+{
+	H.cart_loaded = true;
+	H.cart_ver++;
+	// Los nombres y el juego de cada línea se piden aparte (el carrito solo trae los números)
+	bool need = false;
+	for (int i = 0; i < H.cart.n; i++)
+		if (!H.cart.line[i].name[0] || !H.cart.line[i].appid) need = true;
+	if (need && H.cart.n) {
+		if (H.names_req) net_release(H.names_req);
+		H.names_req = steam_req_cart_names(&H.cart);
+	}
+}
+
+static bool start_action(ShopKind k, u32 appid, const char *what)
+{
+	if (H.act || !auth_logged()) return false;
+	H.kind = k;
+	H.appid = appid;
+	snprintf(H.what, sizeof H.what, "%s", what ? what : "");
+	return true;
+}
+
+void shop_cart_add(u32 appid, const BuyOpt *o)
+{
+	if (!start_action(SH_CART_ADD, appid, o->name)) return;
+	cJSON *in = country_input();
+	cJSON *items = cJSON_AddArrayToObject(in, "items");
+	cJSON *it = cJSON_CreateObject();
+	if (o->bundleid) cJSON_AddNumberToObject(it, "bundleid", o->bundleid);
+	else cJSON_AddNumberToObject(it, "packageid", o->packageid);
+	cJSON_AddItemToArray(items, it);
+	H.act = steam_post_service("IAccountCartService/AddItemsToCart", in, auth_token());
+}
+
+void shop_cart_remove(int line)
+{
+	if (line < 0 || line >= H.cart.n) return;
+	const CartLine *l = &H.cart.line[line];
+	if (!start_action(SH_CART_REMOVE, l->appid, l->name)) return;
+	cJSON *in = country_input();
+	char id[24];
+	snprintf(id, sizeof id, "%llu", (unsigned long long)l->line_id);
+	cJSON_AddStringToObject(in, "line_item_id", id);
+	H.act = steam_post_service("IAccountCartService/RemoveItemFromCart", in, auth_token());
+}
+
+// ---------------------------------------------------------------------------- Deseados y gratis
+
+void shop_wish(u32 appid, const char *name, bool add)
+{
+	if (!start_action(add ? SH_WISH_ADD : SH_WISH_REMOVE, appid, name)) return;
+	cJSON *in = cJSON_CreateObject();
+	cJSON_AddNumberToObject(in, "appid", appid);
+	H.act = steam_post_service(add ? "IWishlistService/AddToWishlist" : "IWishlistService/RemoveFromWishlist", in, auth_token());
+}
+
+void shop_free(u32 appid, const char *name)
+{
+	if (!start_action(SH_FREE, appid, name)) return;
+	cJSON *in = cJSON_CreateObject();
+	cJSON *id = cJSON_AddObjectToObject(in, "item_id");
+	cJSON_AddNumberToObject(id, "appid", appid);
+	H.act = steam_post_service("ICheckoutService/AddFreeLicense", in, auth_token());
+}
+
+// ---------------------------------------------------------------------------- Cada frame
+
+// ¿Salió bien? Steam dice el resultado en la cabecera x-eresult (1 = OK)
+static bool req_ok(Req *r)
+{
+	if (r->state != REQ_DONE) return false;
+	return r->eresult == 1 || (r->eresult == 0 && r->data && strstr(r->data, "\"response\""));
+}
+
+static int req_code(Req *r)
+{
+	if (r->eresult) return r->eresult;
+	return r->http ? (int)-r->http : -1;
+}
+
+void shop_update(void)
+{
+	if (H.opt_req && H.opt_req->state >= REQ_DONE) {
+		int n = H.opt_req->state == REQ_DONE ? steam_parse_buyopts(H.opt_req->data, H.opt_app, H.opt, 8) : -1;
+		H.opt_failed = n < 0;
+		H.nopt = n < 0 ? 0 : n;
+		H.opt_done = n >= 0;
+		net_release(H.opt_req);
+		H.opt_req = NULL;
+	}
+
+	if (H.cart_req && H.cart_req->state >= REQ_DONE) {
+		if (req_ok(H.cart_req) && steam_parse_cart(H.cart_req->data, &H.cart)) cart_changed();
+		else netlog("cuenta: no se pudo leer el carrito (codigo %d)", req_code(H.cart_req));
+		net_release(H.cart_req);
+		H.cart_req = NULL;
+	}
+	if (H.names_req && H.names_req->state >= REQ_DONE) {
+		if (H.names_req->state == REQ_DONE) {
+			steam_parse_cart_names(H.names_req->data, &H.cart);
+			H.cart_ver++;
+		}
+		net_release(H.names_req);
+		H.names_req = NULL;
+	}
+
+	if (H.act && H.act->state >= REQ_DONE) {
+		Req *r = H.act;
+		bool ok = req_ok(r);
+		int code = req_code(r);
+		if (H.kind == SH_CART_ADD || H.kind == SH_CART_REMOVE) {
+			if (ok && steam_parse_cart(r->data, &H.cart)) cart_changed();
+		} else if (H.kind == SH_FREE && ok) {
+			// Si Steam no añadió nada, el detalle de la compra dice por qué
+			cJSON *root = cJSON_Parse(r->data);
+			const cJSON *resp = cJSON_GetObjectItemCaseSensitive(root, "response");
+			int added = cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(resp, "appids_added")) +
+			            cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(resp, "packageids_added"));
+			const cJSON *d = cJSON_GetObjectItemCaseSensitive(resp, "purchase_result_detail");
+			if (!added && cJSON_IsNumber(d) && d->valueint != 0) {
+				ok = false;
+				code = 1000 + d->valueint;
+			}
+			cJSON_Delete(root);
+		}
+		H.act = NULL;
+		push_event(ok, ok ? 0 : code);
+		net_release(r);
+	}
+}
+
+bool shop_busy_with(ShopKind k, u32 appid)
+{
+	return H.act && H.kind == k && H.appid == appid;
+}

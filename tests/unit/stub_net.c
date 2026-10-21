@@ -7,6 +7,8 @@ static Req dummy;
 Req *net_get(const char *url, NetLane lane) { strncpy(last_url, url, sizeof last_url - 1); return &dummy; }
 Req *net_get_jpeg(const char *url, int w) { return net_get(url, LANE_IMG); }
 Req *net_head(const char *url) { return net_get(url, LANE_API); }
+char last_body[8192];
+Req *net_post(const char *url, const char *body) { strncpy(last_body, body, sizeof last_body - 1); return net_get(url, LANE_API); }
 void net_release(Req *r) {}
 void netlog(const char *f, ...) {}
 char *url_escape(const char *s) {

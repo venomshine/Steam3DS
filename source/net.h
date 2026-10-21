@@ -26,6 +26,7 @@ typedef struct Req {
 	volatile ReqState state;
 	volatile bool cancel;
 	long http;
+	int eresult;            // cabecera x-eresult de la Web API (1 = OK; 0 si no vino)
 	char err[112];
 
 	char *data;             // cuerpo (terminado en '\0')

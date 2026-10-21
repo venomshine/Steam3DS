@@ -12,6 +12,7 @@
 #include "i18n.h"
 #include "img.h"
 #include "net.h"
+#include "shop.h"
 #include "steam.h"
 #include "ui.h"
 #include "util.h"
@@ -22,7 +23,7 @@
 typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
-enum { TAB_LIBRARY = TAB_COUNT, TAB_WISHLIST, TAB_ALL };
+enum { TAB_LIBRARY = TAB_COUNT, TAB_WISHLIST, TAB_CART, TAB_ALL };
 enum { SEC_SUMMARY, SEC_REQS, SEC_REVIEWS, SEC_EXTRAS, SEC_SIMILAR, SEC_COUNT };
 
 #define ROW_H      29
@@ -48,7 +49,8 @@ typedef struct {
 static struct {
 	Scene scene;
 	bool quit, ask_exit;
-	char toast[96];
+	char toast[160];
+	int toast_ic;                // icono del aviso (-1 sin icono)
 	float toast_t;
 	bool show_qr;
 
@@ -109,6 +111,13 @@ static struct {
 	int prev_tab;                // pestaña de la tienda a la que vuelven Biblioteca y Deseados
 	float login_done;            // segundos desde que entró (para el saludo)
 	AuthState last_auth;
+
+	// Compras
+	bool pick_open;              // elegir edición (cuando hay varias formas de comprarlo)
+	float pick_anim;
+	int pick_sel;
+	bool cart_qr;                // carrito: QR para pagarlo en el móvil
+	u32 cart_seen;               // versión del carrito ya copiada a la lista
 } S;
 
 enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
@@ -156,6 +165,13 @@ static void toast(const char *msg)
 {
 	snprintf(S.toast, sizeof S.toast, "%s", msg);
 	S.toast_t = 2.6f;
+	S.toast_ic = -1;
+}
+
+static void toast_icon(const char *msg, Icon ic)
+{
+	toast(msg);
+	S.toast_ic = ic;
 }
 
 static void go_scene(Scene sc, int dir)
@@ -307,6 +323,9 @@ static void tab_more(int ti)
 			t->list.req = steam_req_items(t->wish + t->wish_next, n);
 			t->wish_next += n;
 		}
+	} else if (ti == TAB_CART) {
+		if (!auth_logged()) return;
+		shop_cart_load();
 	} else if (tab_paged(ti)) {
 		if (t->list.end) return;
 		static const StoreQuery q[TAB_COUNT] = {[TAB_OFFERS] = Q_OFFERS, [TAB_DEMOS] = Q_DEMOS, [TAB_BETAS] = Q_EARLY};
@@ -370,6 +389,66 @@ static void account_lists_clear(void)
 		free(t->wish);
 		memset(t, 0, sizeof *t);
 	}
+}
+
+// El carrito vive en shop.c; la pestaña lo copia como lista cuando cambia
+static void cart_sync(void)
+{
+	if (S.cart_seen == shop_cart_version()) return;
+	S.cart_seen = shop_cart_version();
+	Tab *t = &tabs[TAB_CART];
+	const CartInfo *c = shop_cart();
+	t->list.count = 0;
+	for (int i = 0; i < c->n; i++) {
+		const CartLine *l = &c->line[i];
+		StoreRow r = {0};
+		r.appid = l->appid;
+		snprintf(r.name, sizeof r.name, "%s", l->name[0] ? l->name : "…");
+		snprintf(r.price, sizeof r.price, "%s", l->price);
+		snprintf(r.orig, sizeof r.orig, "%s", l->orig);
+		r.disc = l->disc;
+		add_row(&t->list, &r);
+	}
+	t->list.total = c->n;
+	t->list.end = true;
+	t->started = true;
+	if (t->sel >= t->list.count) t->sel = t->list.count ? t->list.count - 1 : 0;
+	t->sel_changed = osGetTime();
+}
+
+// Deseados cambiados desde la consola: se actualizan los ids y la lista se vuelve a pedir
+static void wish_changed(u32 appid, bool add)
+{
+	Tab *t = &tabs[TAB_WISHLIST];
+	if (!t->wish_loaded) return;
+	if (add) {
+		u32 *n = realloc(t->wish, (t->nwish + 1) * sizeof(u32));
+		if (!n) return;
+		t->wish = n;
+		t->wish[t->nwish++] = appid;
+	} else {
+		int k = 0;
+		for (int i = 0; i < t->nwish; i++)
+			if (t->wish[i] != appid) t->wish[k++] = t->wish[i];
+		t->nwish = k;
+	}
+	if (t->list.req) net_release(t->list.req);
+	t->list.req = NULL;
+	t->list.count = 0;
+	t->list.total = t->nwish;
+	t->list.end = t->nwish == 0;
+	t->wish_next = 0;
+	t->started = false;
+	if (t->sel >= t->nwish) t->sel = t->nwish ? t->nwish - 1 : 0;
+}
+
+static void library_changed(void)
+{
+	Tab *t = &tabs[TAB_LIBRARY];
+	if (t->list.req) net_release(t->list.req);
+	rowlist_free(&t->list);
+	t->started = false;
+	t->sel = 0;
 }
 
 // Inicio: cuando llegan los cuatro apartados se juntan en una lista con títulos
@@ -706,6 +785,10 @@ static void footer_text(char *out, size_t n)
 		break;
 	}
 	case TAB_WISHLIST: snprintf(out, n, _("Deseado %d de %d"), t->sel + 1, t->list.total); break;
+	case TAB_CART:
+		if (shop_cart()->subtotal[0]) snprintf(out, n, _("Total del carrito: %s"), shop_cart()->subtotal);
+		else out[0] = 0;
+		break;
 	default:
 		if (t->term[0]) snprintf(out, n, _("%d resultados para «%s»"), t->list.count, t->term);
 		else out[0] = 0;
@@ -778,6 +861,22 @@ static void draw_store_top(void)
 		if (S.nrecents) ui_text(TOP_W / 2, 154, _("Abajo, tus búsquedas recientes"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
 		return;
 	}
+	if (S.tab == TAB_CART && S.cart_qr) {
+		ui_qr("https://store.steampowered.com/cart/", 20, 34, 170);
+		ui_text(206, 50, _("Pagar en el móvil"), SZ_LARGE, COL_WHITE, AL_LEFT, 180);
+		ui_text_wrap(206, 74, 180, _("Escanea el código: se abre tu carrito de Steam, el mismo de aquí, y lo pagas desde ahí."), SZ_SMALL, COL_TXT, 6, 14);
+		char tot[64];
+		snprintf(tot, sizeof tot, _("Total: %s"), shop_cart()->subtotal);
+		ui_text(206, 160, tot, SZ_BODY, COL_LIME, AL_LEFT, 180);
+		ui_text(TOP_W / 2, SCR_H - 18, _("B para volver"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+		return;
+	}
+	if (S.tab == TAB_CART && shop_cart_loaded() && shop_cart()->n == 0) {
+		ui_icon(IC_CART, TOP_W / 2 - 14, 80, 28, COL_ACC);
+		ui_text(TOP_W / 2, 120, _("Tu carrito está vacío"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
+		ui_text(TOP_W / 2, 144, _("Añade juegos desde su ficha con el botón del carrito"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		return;
+	}
 	if (!row || (row->appid == 0)) {
 		if (t->list.err[0] && !t->list.req) {
 			int left = retry_delay(t->list.err) - (int)((osGetTime() - t->fail_at) / 1000);
@@ -840,8 +939,11 @@ static void draw_account_bar(void)
 	Tab *t = CUR;
 	char title[64];
 	if (S.tab == TAB_LIBRARY) snprintf(title, sizeof title, _("Biblioteca · %d juegos"), t->list.count);
+	else if (S.tab == TAB_CART) snprintf(title, sizeof title, _("Carrito · %d"), t->list.count);
 	else snprintf(title, sizeof title, _("Lista de deseos · %d"), t->list.total);
-	ui_icon(S.tab == TAB_LIBRARY ? IC_PAD : IC_HEART, 28, 6, 12, COL_ACC);
+	ui_icon(S.tab == TAB_LIBRARY ? IC_PAD : S.tab == TAB_CART ? IC_CART : IC_HEART, 28, 6, 12, COL_ACC);
+	if (S.tab == TAB_CART && shop_cart()->subtotal[0])
+		ui_text(BOT_W - 10, 5, shop_cart()->subtotal, SZ_SMALL, COL_LIME, AL_RIGHT, 0);
 	ui_text(46, 5, title, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
 	ui_rect(0, LIST_Y - 1, BOT_W, 1, COL_LINE);
 }
@@ -919,6 +1021,12 @@ static void draw_store_bottom(void)
 		ui_text(BOT_W / 2, top + 30, _("Aún no has buscado nada"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 	if (S.tab == TAB_WISHLIST && t->wish_loaded && !t->nwish)
 		ui_text(BOT_W / 2, top + 30, _("Tu lista de deseos está vacía"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+	if (S.tab == TAB_CART) {
+		if (shop_cart_loaded() && !shop_cart()->n)
+			ui_text(BOT_W / 2, top + 30, _("Tu carrito está vacío"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+		else if (!shop_cart_loaded() && shop_cart_loading())
+			ui_spinner(BOT_W / 2, top + 36, 6, COL_DIM);
+	}
 	ui_scissor_off();
 	// Barra de scroll
 	float total = t->list.count * ROW_H;
@@ -928,7 +1036,12 @@ static void draw_store_bottom(void)
 		float y = top + (lh - hh) * (t->scroll / (total - lh));
 		ui_rect(BOT_W - 2, y, 2, hh, C2D_Color32(0x3d, 0x5a, 0x73, 0xff));
 	}
-	if (S.tab >= TAB_COUNT) {
+	if (S.tab == TAB_CART) {
+		static const char *hc[] = {"A", "Ficha", "Y", "Quitar", "X", "Pagar", "B", "Volver"};
+		static const char *hb[] = {"B", "Volver"};
+		if (t->list.count) draw_hints(hc, 4);
+		else draw_hints(hb, 1);
+	} else if (S.tab >= TAB_COUNT) {
 		static const char *ha[] = {"A", "Ficha", "B", "Volver", "START", "Menú"};
 		draw_hints(ha, 3);
 	} else if (S.tab == TAB_SEARCH) {
@@ -1114,6 +1227,7 @@ static void open_game(u32 appid, bool push)
 	S.app = appid;
 	S.sec = SEC_SUMMARY;
 	S.show_qr = false;
+	S.pick_open = false;
 	for (int i = 0; i < S.nreviews; i++) free(S.reviews[i].text);
 	S.nreviews = 0;
 	S.rcursor[0] = 0;
@@ -1434,6 +1548,47 @@ static void draw_button(const Box *b, Icon ic, const char *label, u32 top, u32 b
 	ui_text(x + 18, b->y + (b->h - ui_line_h(SZ_SMALL)) / 2 + 1, label, SZ_SMALL, f, AL_LEFT, b->w - 24);
 }
 
+// Gratis: el juego lo es, es una demo, o la única forma de tenerlo es una licencia gratuita
+static bool game_is_free(const AppInfo *a, const BuyOpt *opts, int nopt)
+{
+	if (a->is_free || a->is_demo) return true;
+	return nopt > 0 && opts[0].free && nopt == 1;
+}
+
+// Elegir edición: un panel que sube desde abajo, como el menú de START
+#define PICK_ROW 32
+static float pick_y(int n)
+{
+	return SCR_H - (34 + n * PICK_ROW + 10);
+}
+
+static void draw_pick(const AppInfo *a)
+{
+	float an = ease_out_cubic(S.pick_anim);
+	if (an <= 0.01f) return;
+	int n = 0;
+	const BuyOpt *o = shop_buyopts(a->appid, &n, NULL);
+	if (!o || !n) return;
+	ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x90 * an)));
+	float y0 = pick_y(n) + (1 - an) * 60;
+	ui_rrect(6, y0, BOT_W - 12, SCR_H - y0 + 10, 10, col_alpha(COL_PANEL, an));
+	ui_rect(BOT_W / 2 - 16, y0 + 5, 32, 3, col_alpha(COL_DIM, an * 0.6f));
+	ui_text(18, y0 + 12, _("¿Qué quieres añadir al carrito?"), SZ_BODY, col_alpha(COL_WHITE, an), AL_LEFT, BOT_W - 36);
+	for (int i = 0; i < n; i++) {
+		float y = y0 + 34 + i * PICK_ROW;
+		bool on = i == S.pick_sel;
+		if (on) ui_rrect(12, y, BOT_W - 24, PICK_ROW - 3, 5, col_alpha(COL_SEL, an));
+		StoreRow pr = {0};
+		pr.disc = o[i].disc;
+		snprintf(pr.price, sizeof pr.price, "%s", o[i].price);
+		snprintf(pr.orig, sizeof pr.orig, "%s", o[i].orig);
+		pr.free = o[i].free;
+		float pw = pr.disc > 0 ? 36 + 50 : ui_text_w(pr.price, SZ_BODY) + 10;
+		ui_text(20, y + 8, o[i].name, SZ_BODY - 0.02f, col_alpha(on ? COL_WHITE : COL_TXT, an), AL_LEFT, BOT_W - 44 - pw);
+		if (an > 0.95f) draw_price_right(BOT_W - 18, y + 2, PICK_ROW - 7, &pr, 36, 50);
+	}
+}
+
 static void draw_game_bottom(void)
 {
 	ui_rect(0, 0, BOT_W, SCR_H, COL_BG);
@@ -1478,13 +1633,21 @@ static void draw_game_bottom(void)
 			ui_rect(308 - w, 36, w, 32, COL_SHADE);
 			ui_text(308 - 8, 44, p, SZ_BODY + 0.05f, a->is_free ? COL_LIME : COL_TXT, AL_RIGHT, 0);
 		}
-		// Sin sesión, carrito, deseados e instalar se ven apagados. Con sesión se ve lo tuyo;
-		// las acciones (añadir, instalar) llegan con la fase 4
+		// Sin sesión, carrito, deseados e instalar se ven apagados
 		bool in = auth_logged();
-		draw_button(&B_CART, IC_CART, own ? _("Ya lo tienes") : a->is_free ? _("Añadir a la biblioteca") : _("Añadir al carrito"),
-			C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), C2D_Color32(0xd2, 0xef, 0xa9, 0xff), 0.45f, S.pressed == BT_CART);
-		if (wished) draw_button(&B_WISH, IC_HEART, _("En deseados"), C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_WISH);
-		else draw_button(&B_WISH, IC_HEART, _("Deseados"), COL_BTN2, COL_BTN2, COL_ACC, 0.45f, S.pressed == BT_WISH);
+		int nopt = 0;
+		const BuyOpt *opts = in ? shop_buyopts(a->appid, &nopt, NULL) : NULL;
+		bool free = game_is_free(a, opts, nopt);
+		bool carted = in && !own && shop_in_cart(a->appid, opts, nopt);
+		bool busy_cart = shop_busy_with(free ? SH_FREE : SH_CART_ADD, a->appid);
+		const char *cl = own ? _("Ya lo tienes") : free ? _("Añadir a la biblioteca") : carted ? _("En el carrito · Ver") : _("Añadir al carrito");
+		if (busy_cart) cl = free ? _("Añadiendo a tu biblioteca…") : _("Añadiendo al carrito…");
+		if (carted) draw_button(&B_CART, IC_CART, cl, C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_CART);
+		else draw_button(&B_CART, IC_CART, cl, C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), C2D_Color32(0xd2, 0xef, 0xa9, 0xff),
+			in && !own ? 1 : 0.45f, S.pressed == BT_CART);
+		bool busy_wish = shop_busy_with(wished ? SH_WISH_REMOVE : SH_WISH_ADD, a->appid);
+		if (wished) draw_button(&B_WISH, IC_HEART, busy_wish ? _("Quitando…") : _("En deseados"), C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_WISH);
+		else draw_button(&B_WISH, IC_HEART, busy_wish ? _("Añadiendo…") : _("Deseados"), COL_BTN2, COL_BTN2, COL_ACC, in && !own ? 1 : 0.45f, S.pressed == BT_WISH);
 		char shots[40];
 		snprintf(shots, sizeof shots, _("Capturas (%d)"), a->nshots);
 		draw_button(&B_SHOTS, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, a->nshots ? 1 : 0.45f, S.pressed == BT_SHOTS);
@@ -1500,6 +1663,7 @@ static void draw_game_bottom(void)
 		static const char *h[] = {"L R", "Apartado", "B", "Volver", "X", "Comprar en el móvil"};
 		draw_hints(h, 3);
 	}
+	if (a) draw_pick(a);
 }
 
 // ============================================================================
@@ -1632,12 +1796,13 @@ static void draw_overlays_bottom(void)
 		// Sube desde abajo y se apaga al final
 		float in = ease_out_cubic((2.6f - S.toast_t) / 0.25f);
 		float a = clampf(S.toast_t / 0.3f, 0, 1) * in;
-		float w = ui_text_w(S.toast, SZ_SMALL) + 44;
+		float pad = S.toast_ic >= 0 ? 44 : 28;
+		float w = ui_text_w(S.toast, SZ_SMALL) + pad;
 		if (w > 300) w = 300;
 		float x = (BOT_W - w) / 2, y = 190 + (1 - in) * 16;
 		ui_rrect(x, y, w, 26, 13, col_alpha(C2D_Color32(0x0e, 0x14, 0x1b, 0xf0), a));
-		ui_icon(IC_LOCK, x + 12, y + 7, 12, col_alpha(COL_ACC, a));
-		ui_text(x + 30, y + 5, S.toast, SZ_SMALL, col_alpha(COL_WHITE, a), AL_LEFT, w - 40);
+		if (S.toast_ic >= 0) ui_icon((Icon)S.toast_ic, x + 12, y + 7, 12, col_alpha(COL_ACC, a));
+		ui_text(x + pad - 14, y + 5, S.toast, SZ_SMALL, col_alpha(COL_WHITE, a), AL_LEFT, w - pad);
 	}
 	if (S.exit_anim > 0.01f) draw_exit_dialog();
 }
@@ -1649,7 +1814,7 @@ static void draw_overlays_bottom(void)
 
 static bool key_repeat(u32 down, u32 held, u32 mask);
 
-enum { MI_LOGIN, MI_PROFILE, MI_LIBRARY, MI_WISHLIST, MI_LOGOUT, MI_EXIT };
+enum { MI_LOGIN, MI_PROFILE, MI_LIBRARY, MI_WISHLIST, MI_CART, MI_LOGOUT, MI_EXIT };
 #define MENU_ROW 30
 #define MENU_HEAD 44
 
@@ -1662,6 +1827,7 @@ static int menu_items(int *out)
 		out[n++] = MI_PROFILE;
 		out[n++] = MI_LIBRARY;
 		out[n++] = MI_WISHLIST;
+		out[n++] = MI_CART;
 		out[n++] = MI_LOGOUT;
 	}
 	out[n++] = MI_EXIT;
@@ -1688,8 +1854,9 @@ static void open_account_list(int ti)
 	S.tab = ti;
 	go_scene(SC_STORE, 1);
 	Tab *t = CUR;
-	if (!t->started) tab_more(ti);
+	if (!t->started || ti == TAB_CART) tab_more(ti);   // el carrito puede haber cambiado en el móvil
 	t->sel_changed = osGetTime();
+	S.cart_qr = false;
 }
 
 // ---------------------------------------------------------------------------- Perfil
@@ -1782,7 +1949,10 @@ static void do_logout(void)
 	auth_logout();
 	account_lists_clear();
 	friends_reset();
-	toast(_("Sesión cerrada"));
+	shop_reset();
+	S.cart_seen = 0;
+	S.pick_open = false;
+	toast_icon(_("Sesión cerrada"), IC_LOCK);
 }
 
 static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
@@ -1821,6 +1991,7 @@ static void menu_choose(int item)
 		break;
 	case MI_LIBRARY: open_account_list(TAB_LIBRARY); break;
 	case MI_WISHLIST: open_account_list(TAB_WISHLIST); break;
+	case MI_CART: open_account_list(TAB_CART); break;
 	case MI_EXIT:
 		S.ask_exit = true;
 		S.exit_anim = 0;
@@ -1864,6 +2035,7 @@ static void draw_menu(void)
 		[MI_PROFILE] = {IC_USER, "Mi perfil"},
 		[MI_LIBRARY] = {IC_PAD, "Biblioteca"},
 		[MI_WISHLIST] = {IC_HEART, "Lista de deseos"},
+		[MI_CART] = {IC_CART, "Carrito"},
 		[MI_LOGOUT] = {IC_LOCK, "Cerrar sesión"},
 		[MI_EXIT] = {IC_POWER, "Salir de Steam3DS"},
 	};
@@ -1874,6 +2046,14 @@ static void draw_menu(void)
 		u32 c = items[i] == MI_EXIT || items[i] == MI_LOGOUT ? C2D_Color32(0xff, 0x8a, 0x7a, 0xff) : COL_ACC;
 		ui_icon(info[items[i]].ic, 22, y + 8, 12, col_alpha(c, a));
 		ui_text(42, y + 6, _(info[items[i]].label), SZ_BODY - 0.02f, col_alpha(on ? COL_WHITE : COL_TXT, a), AL_LEFT, BOT_W - 60);
+		if (items[i] == MI_CART && shop_cart()->n) {
+			// Cuántos hay, en una píldora verde
+			char nc[8];
+			snprintf(nc, sizeof nc, "%d", shop_cart()->n);
+			float w = ui_text_w(nc, SZ_SMALL) + 12;
+			ui_rrect(BOT_W - 24 - w, y + 6, w, 16, 8, col_alpha(C2D_Color32(0x5c, 0x7e, 0x10, 0xff), a));
+			ui_text(BOT_W - 24 - w / 2, y + 7, nc, SZ_SMALL, col_alpha(COL_WHITE, a), AL_CENTER, 0);
+		}
 	}
 }
 
@@ -2273,6 +2453,19 @@ static void close_account_list(void)
 
 static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 {
+	if (S.tab == TAB_CART) {
+		if (S.cart_qr) {
+			if (kd & (KEY_B | KEY_X)) S.cart_qr = false;
+			return;
+		}
+		const CartInfo *c = shop_cart();
+		int sel = CUR->sel;
+		if ((kd & KEY_Y) && sel >= 0 && sel < c->n) {
+			if (shop_busy()) toast(_("Un momento, estoy con lo anterior"));
+			else shop_cart_remove(sel);
+		}
+		if ((kd & KEY_X) && c->n) S.cart_qr = true;
+	}
 	if (S.tab >= TAB_COUNT) {
 		static const int ids[] = {BT_BACKBAR};
 		if ((kd & KEY_B) || press_update(kd, kh, ku, tp, ids, 1) == BT_BACKBAR) {
@@ -2421,10 +2614,77 @@ static int press_update(u32 kd, u32 kh, u32 ku, touchPosition *tp, const int *id
 	return BT_NONE;
 }
 
+static void pick_choose(const AppInfo *a, int i)
+{
+	int n = 0;
+	const BuyOpt *o = shop_buyopts(a->appid, &n, NULL);
+	S.pick_open = false;
+	if (!o || i < 0 || i >= n) return;
+	if (o[i].free) shop_free(a->appid, a->name);
+	else shop_cart_add(a->appid, &o[i]);
+}
+
+static void input_pick(const AppInfo *a, u32 kd, u32 kh, touchPosition *tp)
+{
+	int n = 0;
+	shop_buyopts(a->appid, &n, NULL);
+	if (!n) { S.pick_open = false; return; }
+	if (key_repeat(kd, kh, KEY_DOWN)) S.pick_sel = (S.pick_sel + 1) % n;
+	if (key_repeat(kd, kh, KEY_UP)) S.pick_sel = (S.pick_sel + n - 1) % n;
+	if (kd & KEY_B) S.pick_open = false;
+	if (kd & KEY_A) pick_choose(a, S.pick_sel);
+	if (kd & KEY_TOUCH) {
+		float y0 = pick_y(n);
+		int i = (int)((tp->py - y0 - 34) / PICK_ROW);
+		if (tp->py < y0) S.pick_open = false;
+		else if (tp->py >= y0 + 34 && i >= 0 && i < n) {
+			S.pick_sel = i;
+			pick_choose(a, i);
+		}
+	}
+}
+
+// El botón verde de la ficha
+static void game_cart_button(const AppInfo *a)
+{
+	if (owned_row(a->appid)) {
+		toast(_("Ya está en tu biblioteca"));
+		return;
+	}
+	if (shop_busy()) {
+		toast(_("Un momento, estoy con lo anterior"));
+		return;
+	}
+	int n = 0;
+	bool failed = false;
+	const BuyOpt *o = shop_buyopts(a->appid, &n, &failed);
+	if (a->is_free || a->is_demo) {
+		shop_free(a->appid, a->name);
+	} else if (shop_in_cart(a->appid, o, n)) {
+		open_account_list(TAB_CART);
+	} else if (!o) {
+		if (failed) shop_buyopts_load(a->appid);
+		toast(failed ? _("No se pudo saber cómo se compra: reintentando") : _("Un momento, mirando las ediciones…"));
+	} else if (n == 0) {
+		toast(a->coming_soon ? _("Aún no se puede comprar: está por salir") : _("Steam no lo vende ahora mismo en tu país"));
+	} else if (n == 1) {
+		if (o[0].free) shop_free(a->appid, a->name);
+		else shop_cart_add(a->appid, &o[0]);
+	} else {
+		S.pick_open = true;
+		S.pick_sel = 0;
+		S.pick_anim = 0;
+	}
+}
+
 static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 {
 	InfoEnt *e = info_get(S.app, false);
 	const AppInfo *a = (e && e->done) ? &e->info : NULL;
+	if (S.pick_open && a) {
+		input_pick(a, kd, kh, tp);
+		return;
+	}
 	if (kd & KEY_B) { game_back(); return; }
 	if ((kd & KEY_A) && e && e->failed) { info_retry(e); return; }
 	if (kd & (KEY_L | KEY_LEFT)) game_set_sec(S.sec - 1);
@@ -2452,9 +2712,16 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		S.shot = 0;
 		S.strip = 0;
 		S.shot_anim = 1;
-	} else if (b == BT_CART || b == BT_WISH || b == BT_INST) {
-		if (!auth_logged()) toast(_("Disponible al iniciar sesión"));
-		else toast(_("Llega en la próxima actualización"));
+	} else if ((b == BT_CART || b == BT_WISH || b == BT_INST) && !auth_logged()) {
+		toast(_("Disponible al iniciar sesión"));
+	} else if (b == BT_CART) {
+		game_cart_button(a);
+	} else if (b == BT_WISH) {
+		if (owned_row(a->appid)) toast(_("Ya está en tu biblioteca"));
+		else if (shop_busy()) toast(_("Un momento, estoy con lo anterior"));
+		else shop_wish(a->appid, a->name, !in_wishlist(a->appid));
+	} else if (b == BT_INST) {
+		toast(_("Instalar en el PC llega en la próxima actualización"));
 	}
 }
 
@@ -2496,6 +2763,66 @@ static void input_shots(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 }
 
 // ============================================================================
+
+// Por qué Steam no hizo lo que se le pidió, en palabras normales
+static const char *shop_err(int code)
+{
+	switch (code) {
+	case 2: return _("Steam dio un error, prueba otra vez");
+	case 15: return _("Steam no lo permite con esta cuenta");
+	case 25: case 41: return _("No caben más cosas");
+	case 29: return _("Ya estaba hecho");
+	case 84: return _("Demasiadas peticiones: espera un poco");
+	case 1009: return _("Ya lo tienes");
+	case 1013: case 1019: return _("No está disponible en tu país");
+	case 1024: return _("Necesitas el juego base");
+	case 1004: case 1008: return _("Steam está ocupado, prueba en un rato");
+	}
+	if (code < 0) return _("No hay conexión con Steam");
+	return _("Steam no lo aceptó");
+}
+
+static void shop_events(void)
+{
+	ShopEvent ev;
+	while (shop_event(&ev)) {
+		char t[160];
+		// «Ya estaba» en deseados cuenta como hecho: el resultado es el que querías
+		if (!ev.ok && ev.code == 29 && (ev.kind == SH_WISH_ADD || ev.kind == SH_WISH_REMOVE)) ev.ok = true;
+		switch (ev.kind) {
+		case SH_CART_ADD:
+			if (ev.ok) snprintf(t, sizeof t, _("Añadido al carrito: %s"), ev.what);
+			else snprintf(t, sizeof t, _("No se pudo añadir al carrito: %s"), shop_err(ev.code));
+			break;
+		case SH_CART_REMOVE:
+			if (ev.ok) snprintf(t, sizeof t, "%s", _("Quitado del carrito"));
+			else snprintf(t, sizeof t, _("No se pudo quitar: %s"), shop_err(ev.code));
+			break;
+		case SH_WISH_ADD:
+		case SH_WISH_REMOVE:
+			if (ev.ok) {
+				wish_changed(ev.appid, ev.kind == SH_WISH_ADD);
+				snprintf(t, sizeof t, "%s", ev.kind == SH_WISH_ADD ? _("Añadido a tu lista de deseos") : _("Quitado de tu lista de deseos"));
+			} else {
+				snprintf(t, sizeof t, _("No se pudo cambiar la lista de deseos: %s"), shop_err(ev.code));
+			}
+			break;
+		case SH_FREE:
+			if (ev.ok) {
+				library_changed();
+				snprintf(t, sizeof t, _("¡Ya está en tu biblioteca! %s"), ev.what);
+			} else if (ev.code == 1009) {
+				snprintf(t, sizeof t, "%s", _("Ya está en tu biblioteca"));
+			} else {
+				snprintf(t, sizeof t, _("No se pudo añadir a tu biblioteca: %s"), shop_err(ev.code));
+			}
+			break;
+		}
+		static const Icon ic[] = {[SH_CART_ADD] = IC_CART, [SH_CART_REMOVE] = IC_CART, [SH_WISH_ADD] = IC_HEART,
+			[SH_WISH_REMOVE] = IC_HEART, [SH_FREE] = IC_PAD};
+		toast_icon(t, ic[ev.kind]);
+	}
+}
 
 static void start_store(void)
 {
@@ -2678,7 +3005,15 @@ int main(int argc, char **argv)
 		if (auth_logged() && S.ctx_ready) {
 			if (!tabs[TAB_LIBRARY].started) tab_more(TAB_LIBRARY);
 			if (!tabs[TAB_WISHLIST].started) tab_more(TAB_WISHLIST);
+			if (!tabs[TAB_CART].started) {
+				tabs[TAB_CART].started = true;
+				shop_cart_load();
+			}
+			if (S.scene == SC_GAME || S.scene == SC_SHOTS) shop_buyopts_load(S.app);
 		}
+		shop_update();
+		cart_sync();
+		shop_events();
 		// Avisos de la sesión: entró desde la sesión guardada, o Steam ya no la acepta
 		if (auth_info()->state != S.last_auth) {
 			if (auth_info()->state == AUTH_IN && S.scene == SC_GAME) friends_request(S.app);
@@ -2706,6 +3041,7 @@ int main(int argc, char **argv)
 		S.strip = approach(S.strip, S.shot, 12);
 		S.exit_anim = approach(S.exit_anim, S.ask_exit ? 1 : 0, S.ask_exit ? 7 : 16);
 		S.menu_anim = approach(S.menu_anim, S.menu_open ? 1 : 0, S.menu_open ? 12 : 18);
+		S.pick_anim = approach(S.pick_anim, S.pick_open ? 1 : 0, S.pick_open ? 12 : 18);
 		S.sec_anim = clampf(S.sec_anim + dt / 0.22f, 0, 1);
 		S.scene_anim = clampf(S.scene_anim + dt / 0.28f, 0, 1);
 		S.shot_anim = clampf(S.shot_anim + dt / 0.30f, 0, 1);

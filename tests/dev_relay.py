@@ -114,7 +114,83 @@ def fake_post(host, path, body):
         cookie = "steamLoginSecure=%d%%7C%%7C%s; Path=/; Secure; HttpOnly; SameSite=None" % (FAKE_ID, fake_jwt("access", [aud]))
         return {"result": 1}, [("Set-Cookie", cookie)]
     r = fake_post_api(path, body)
-    return (r, []) if r is not None else None
+    if r is None:
+        r = fake_shop(path, body)
+    if isinstance(r, tuple):   # (json, eresult)
+        return r[0], [("X-eresult", str(r[1]))]
+    return (r, [("X-eresult", "1")]) if r is not None else None
+
+
+# Carrito, deseados y licencias gratis simulados (con nombres y precios reales de la tienda)
+CART = []
+next_line = [9000000000000001]
+
+
+def real_item(kind, ident):
+    inp = {"ids": [{kind: ident}], "context": {"language": "spanish", "country_code": os.environ.get("RELAY_COUNTRY", "US")}}
+    url = "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=" + urllib.parse.quote(json.dumps(inp))
+    try:
+        _, _, b = fetch("GET", url)
+        return json.loads(b)["response"]["store_items"][0]
+    except Exception:
+        return {}
+
+
+def cart_json():
+    lines, total = [], 0
+    for l in CART:
+        it = real_item("bundleid" if "bundleid" in l else "packageid", l.get("bundleid") or l.get("packageid"))
+        bp = it.get("best_purchase_option", {})
+        cents = int(bp.get("final_price_in_cents", 0) or 0)
+        total += cents
+        d = dict(l)
+        d["is_valid"] = True
+        d["price_when_added"] = {"amount_in_cents": str(cents), "currency_code": 3, "formatted_amount": bp.get("formatted_final_price", "")}
+        lines.append(d)
+    sub = {"amount_in_cents": str(total), "currency_code": 3, "formatted_amount": ("%d,%02d€" % (total // 100, total % 100))}
+    return {"line_items": lines, "subtotal": sub, "is_valid": True} if CART else {}
+
+
+def fake_shop(path, body):
+    form = dict(urllib.parse.parse_qsl(body))
+    inp = json.loads(form.get("input_json", "{}") or "{}")
+    if path.endswith("IAccountCartService/GetCart/v1/"):
+        return {"response": {"cart": cart_json()}}
+    if path.endswith("IAccountCartService/AddItemsToCart/v1/"):
+        ids = []
+        for it in inp.get("items", []):
+            key = "bundleid" if "bundleid" in it else "packageid"
+            if any(l.get(key) == it[key] for l in CART):
+                continue
+            l = {"line_item_id": str(next_line[0]), "type": 1, key: it[key], "time_added": int(time.time())}
+            next_line[0] += 1
+            CART.append(l)
+            ids.append(l["line_item_id"])
+        return {"response": {"line_item_ids": ids, "cart": cart_json()}}
+    if path.endswith("IAccountCartService/RemoveItemFromCart/v1/"):
+        CART[:] = [l for l in CART if l["line_item_id"] != str(inp.get("line_item_id"))]
+        return {"response": {"cart": cart_json()}}
+    if path.endswith("IWishlistService/AddToWishlist/v1/"):
+        a = int(inp.get("appid", 0))
+        if a in WISH:
+            return {"response": {}}, 29
+        WISH.append(a)
+        return {"response": {"wishlist_count": len(WISH)}}
+    if path.endswith("IWishlistService/RemoveFromWishlist/v1/"):
+        a = int(inp.get("appid", 0))
+        if a in WISH:
+            WISH.remove(a)
+        return {"response": {"wishlist_count": len(WISH)}}
+    if path.endswith("ICheckoutService/AddFreeLicense/v1/"):
+        a = int(inp.get("item_id", {}).get("appid", 0))
+        if any(x[0] == a for x in OWNED):
+            return {"response": {"purchase_result_detail": 9}}
+        it = real_item("appid", a)
+        if not it.get("is_free") and it.get("type") != 1:
+            return {"response": {"purchase_result_detail": 5}}
+        OWNED.append((a, it.get("name", "Juego %d" % a), 0, 0))
+        return {"response": {"appids_added": [a], "packageids_added": [], "purchase_result_detail": 0}}
+    return None
 
 
 def fake_post_api(path, body):

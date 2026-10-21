@@ -2,6 +2,7 @@
 #include <3ds.h>
 #include <stdbool.h>
 #include "net.h"
+#include "cJSON.h"
 
 // Tienda de Steam: URLs y lectura de las respuestas (JSON) a estructuras simples.
 
@@ -136,3 +137,42 @@ int steam_parse_wishlist(const char *json, u32 **ids);       // appids por prior
 
 void appinfo_free(AppInfo *a);
 void rowlist_free(RowList *l);
+
+// ---------------------------------------------------------------------------- Compras (fase 4)
+
+// Una forma de comprar un juego (edición normal, edición completa, pack…)
+typedef struct {
+	u32 packageid, bundleid;    // uno de los dos
+	char name[96];
+	char price[20], orig[20];
+	int disc;
+	bool free;                  // licencia gratuita
+} BuyOpt;
+
+Req *steam_req_buyopts(u32 appid);
+int steam_parse_buyopts(const char *json, u32 appid, BuyOpt *out, int max);
+
+// Carrito de la cuenta (IAccountCartService): el mismo que ves en el móvil y en el PC
+typedef struct {
+	u64 line_id;
+	u32 packageid, bundleid;
+	u32 appid;                  // juego principal (para la ficha), cuando se conoce
+	char name[96];
+	char price[20], orig[20];   // precio de ahora (o el de cuando se añadió)
+	int disc;
+	bool valid;
+} CartLine;
+
+#define CART_MAX 40
+typedef struct {
+	CartLine line[CART_MAX];
+	int n;
+	char subtotal[24];
+	bool valid;
+} CartInfo;
+
+// POST a un servicio de la Web API con sesión (input_json en el cuerpo)
+Req *steam_post_service(const char *iface_method, cJSON *input, const char *token);
+bool steam_parse_cart(const char *json, CartInfo *c);           // respuesta con «cart»
+Req *steam_req_cart_names(const CartInfo *c);
+void steam_parse_cart_names(const char *json, CartInfo *c);     // nombres, precios y juego de cada línea

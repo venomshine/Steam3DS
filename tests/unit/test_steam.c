@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 extern char last_url[];
+extern char last_body[];
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FALLO %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 static char *slurp(const char *p) { FILE *f = fopen(p, "rb"); if (!f) { printf("falta %s\n", p); exit(2); }
@@ -95,6 +96,32 @@ int main(void) {
 	CHECK(steam_parse_wishlist("basura", &ids) == -1);
 	steam_req_appdetails(10);
 	CHECK(!strcmp(last_url, "https://store.steampowered.com/api/appdetails?appids=10&cc=ES&l=spanish"));
+	// Formas de comprar: Cyberpunk tiene el juego (paquete) y la Ultimate (lote)
+	BuyOpt bo[8];
+	int nb = steam_parse_buyopts(slurp("data/purchase_options.json"), 1091500, bo, 8);
+	printf("ediciones: %d (%s %s, %s %s)\n", nb, bo[0].name, bo[0].price, bo[1].name, bo[1].price);
+	CHECK(nb == 2 && bo[0].packageid == 367653 && !bo[0].bundleid && bo[0].disc == 70 && bo[0].orig[0]);
+	CHECK(bo[1].bundleid == 32470 && !bo[1].packageid);
+	CHECK(steam_parse_buyopts(slurp("data/purchase_options.json"), 2507950, bo, 8) == 0);   // gratis, sin opciones
+	CHECK(steam_parse_buyopts("basura", 1, bo, 8) == -1);
+	// Carrito: líneas con id de 64 bits en texto, y el total
+	CartInfo cart = {0};
+	CHECK(steam_parse_cart(slurp("data/cart.json"), &cart));
+	printf("carrito: %d líneas, total %s\n", cart.n, cart.subtotal);
+	CHECK(cart.n == 2 && cart.line[0].line_id == 9000000000000001ULL && cart.line[1].bundleid == 32470);
+	CHECK(!strcmp(cart.subtotal, "51,09€") && !strcmp(cart.line[1].price, "33,10€"));
+	steam_parse_cart_names(slurp("data/items_pkg.json"), &cart);
+	CHECK(!strcmp(cart.line[0].name, "Cyberpunk 2077") && cart.line[0].appid == 1091500);
+	CHECK(!strcmp(cart.line[1].name, "Cyberpunk 2077: Ultimate Edition") && cart.line[1].appid == 1091500 && cart.line[1].disc == 60);
+	// Al volver a leer el carrito no se pierden los nombres ya conocidos
+	CHECK(steam_parse_cart(slurp("data/cart.json"), &cart) && !strcmp(cart.line[1].name, "Cyberpunk 2077: Ultimate Edition"));
+	CHECK(steam_parse_cart("{\"response\":{\"cart\":{}}}", &cart) && cart.n == 0);
+	// POST con sesión: el token va en la URL y la entrada en el cuerpo
+	cJSON *in = cJSON_CreateObject();
+	cJSON_AddNumberToObject(in, "appid", 570);
+	steam_post_service("IWishlistService/AddToWishlist", in, "TOKEN");
+	CHECK(!strcmp(last_url, "https://api.steampowered.com/IWishlistService/AddToWishlist/v1/?access_token=TOKEN"));
+	CHECK(!strcmp(last_body, "input_json=%7B%22appid%22%3A570%7D"));
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

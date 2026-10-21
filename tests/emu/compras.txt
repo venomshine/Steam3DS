@@ -1,0 +1,65 @@
+# Fase 4a: carrito, deseados y demo gratis a la biblioteca (sesión guardada; relé con RELAY_FAKE_LOGIN=1)
+wait 800
+press R
+wait 360
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+wait 250
+press A
+wait 450
+shot p01_ficha
+touch 160 89
+wait 60
+shot p02_elegir_o_anadido
+press A
+wait 120
+shot p03_en_carrito
+touch 84 121
+wait 90
+shot p04_deseado
+touch 84 121
+wait 90
+shot p05_quitado_deseado
+press B
+wait 30
+press START
+wait 30
+press DOWN
+press DOWN
+press DOWN
+wait 10
+shot p06_menu_carrito
+press A
+wait 300
+shot p07_carrito
+press X
+wait 30
+shot p08_pagar_qr
+press B
+wait 20
+press Y
+wait 120
+shot p09_quitado
+press B
+wait 40
+press R
+wait 360
+press A
+wait 450
+shot p10_demo
+touch 160 89
+wait 120
+shot p11_demo_anadida
+press B
+wait 30
+press START
+wait 30
+press DOWN
+press A
+wait 300
+shot p12_biblioteca
+quit

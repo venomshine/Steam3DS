@@ -703,3 +703,165 @@ void rowlist_free(RowList *l)
 	if (l->req) net_release(l->req);
 	memset(l, 0, sizeof *l);
 }
+
+// ----------------------------------------------------------------------------
+// Compras
+
+Req *steam_req_buyopts(u32 appid)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON *arr = cJSON_AddArrayToObject(in, "ids");
+	cJSON *o = cJSON_CreateObject();
+	cJSON_AddNumberToObject(o, "appid", appid);
+	cJSON_AddItemToArray(arr, o);
+	cJSON_AddItemToObject(in, "context", context());
+	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
+	cJSON_AddBoolToObject(dr, "include_all_purchase_options", true);
+	return service_call("IStoreBrowseService/GetItems", in);
+}
+
+static void opt_prices(const cJSON *p, char *price, char *orig, int *disc)
+{
+	copy(price, 20, jstr(p, "formatted_final_price"));
+	copy(orig, 20, jstr(p, "formatted_original_price"));
+	*disc = (int)jnum(p, "discount_pct", 0);
+	if (jbool(p, "hide_discount_pct_for_compliance")) *disc = 0;
+	if (*disc <= 0) orig[0] = 0;
+}
+
+int steam_parse_buyopts(const char *json, u32 appid, BuyOpt *out, int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *items = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "response"), "store_items");
+	if (!cJSON_IsArray(items)) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *it;
+	cJSON_ArrayForEach(it, items) {
+		if ((u32)jnum(it, "appid", jnum(it, "id", 0)) != appid) continue;
+		const cJSON *opts = cJSON_GetObjectItemCaseSensitive(it, "purchase_options");
+		const cJSON *p;
+		cJSON_ArrayForEach(p, opts) {
+			if (n >= max) break;
+			BuyOpt *b = &out[n];
+			memset(b, 0, sizeof *b);
+			b->packageid = (u32)jnum(p, "packageid", 0);
+			b->bundleid = (u32)jnum(p, "bundleid", 0);
+			if (!b->packageid && !b->bundleid) continue;
+			copy_utf8(b->name, sizeof b->name, jstr(p, "purchase_option_name"));
+			opt_prices(p, b->price, b->orig, &b->disc);
+			b->free = jbool(p, "is_free_license");
+			n++;
+		}
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
+Req *steam_post_service(const char *iface_method, cJSON *input, const char *token)
+{
+	char *js = cJSON_PrintUnformatted(input);
+	char *esc = url_escape(js);
+	size_t n = strlen(esc) + 16;
+	char *body = malloc(n);
+	snprintf(body, n, "input_json=%s", esc);
+	size_t un = strlen(token) + 128;
+	char *url = malloc(un);
+	snprintf(url, un, "https://api.steampowered.com/%s/v1/?access_token=%s", iface_method, token);
+	Req *r = net_post(url, body);
+	memset(url, 0, un);
+	free(url);
+	free(body);
+	free(esc);
+	free(js);
+	cJSON_Delete(input);
+	return r;
+}
+
+static void amount(const cJSON *a, char *out, size_t n)
+{
+	copy(out, n, jstr(a, "formatted_amount"));
+}
+
+bool steam_parse_cart(const char *json, CartInfo *c)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = cJSON_GetObjectItemCaseSensitive(root, "response");
+	const cJSON *cart = cJSON_GetObjectItemCaseSensitive(resp, "cart");
+	if (!resp) {
+		cJSON_Delete(root);
+		return false;
+	}
+	CartInfo old = *c;
+	memset(c, 0, sizeof *c);
+	// Un carrito vacío llega como «cart: {}» (o sin «cart»)
+	const cJSON *lines = cJSON_GetObjectItemCaseSensitive(cart, "line_items");
+	const cJSON *li;
+	cJSON_ArrayForEach(li, lines) {
+		if (c->n >= CART_MAX) break;
+		CartLine *l = &c->line[c->n];
+		const cJSON *id = cJSON_GetObjectItemCaseSensitive(li, "line_item_id");
+		l->line_id = cJSON_IsString(id) ? strtoull(id->valuestring, NULL, 10) : (u64)jnum(li, "line_item_id", 0);
+		l->packageid = (u32)jnum(li, "packageid", 0);
+		l->bundleid = (u32)jnum(li, "bundleid", 0);
+		const cJSON *v = cJSON_GetObjectItemCaseSensitive(li, "is_valid");
+		l->valid = !v || cJSON_IsTrue(v);
+		amount(cJSON_GetObjectItemCaseSensitive(li, "price_when_added"), l->price, sizeof l->price);
+		// Lo que ya se sabía de esta línea (nombre, juego) se conserva hasta que lleguen los datos nuevos
+		for (int i = 0; i < old.n; i++)
+			if (old.line[i].line_id == l->line_id) {
+				memcpy(l->name, old.line[i].name, sizeof l->name);
+				l->appid = old.line[i].appid;
+				if (old.line[i].price[0]) {
+					memcpy(l->price, old.line[i].price, sizeof l->price);
+					memcpy(l->orig, old.line[i].orig, sizeof l->orig);
+					l->disc = old.line[i].disc;
+				}
+			}
+		c->n++;
+	}
+	amount(cJSON_GetObjectItemCaseSensitive(cart, "subtotal"), c->subtotal, sizeof c->subtotal);
+	const cJSON *v = cJSON_GetObjectItemCaseSensitive(cart, "is_valid");
+	c->valid = !v || cJSON_IsTrue(v);
+	cJSON_Delete(root);
+	return true;
+}
+
+Req *steam_req_cart_names(const CartInfo *c)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON *arr = cJSON_AddArrayToObject(in, "ids");
+	for (int i = 0; i < c->n; i++) {
+		cJSON *o = cJSON_CreateObject();
+		if (c->line[i].bundleid) cJSON_AddNumberToObject(o, "bundleid", c->line[i].bundleid);
+		else cJSON_AddNumberToObject(o, "packageid", c->line[i].packageid);
+		cJSON_AddItemToArray(arr, o);
+	}
+	cJSON_AddItemToObject(in, "context", context());
+	return service_call("IStoreBrowseService/GetItems", in);
+}
+
+void steam_parse_cart_names(const char *json, CartInfo *c)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *items = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "response"), "store_items");
+	const cJSON *it;
+	cJSON_ArrayForEach(it, items) {
+		int type = (int)jnum(it, "item_type", -1);   // 1 paquete, 2 lote
+		u32 id = (u32)jnum(it, "id", 0);
+		for (int i = 0; i < c->n; i++) {
+			CartLine *l = &c->line[i];
+			if (!(type == 2 ? l->bundleid == id : type == 1 && !l->bundleid && l->packageid == id)) continue;
+			const char *name = jstr(it, "name");
+			if (name && *name) copy_utf8(l->name, sizeof l->name, name);
+			const cJSON *apps = cJSON_GetObjectItemCaseSensitive(it, "included_appids");
+			const cJSON *a0 = cJSON_GetArrayItem(apps, 0);
+			if (cJSON_IsNumber(a0)) l->appid = (u32)a0->valuedouble;
+			const cJSON *bp = cJSON_GetObjectItemCaseSensitive(it, "best_purchase_option");
+			if (bp && jstr(bp, "formatted_final_price")) opt_prices(bp, l->price, l->orig, &l->disc);
+		}
+	}
+	cJSON_Delete(root);
+}

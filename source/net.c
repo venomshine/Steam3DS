@@ -268,6 +268,8 @@ static size_t on_header(char *p, size_t sz, size_t n, void *ud)
 			r->country[2] = 0;
 		}
 	}
+	static const char er[] = "x-eresult:";
+	if (len > sizeof(er) && strncasecmp(p, er, sizeof(er) - 1) == 0) r->eresult = atoi(p + sizeof(er) - 1);
 	static const char login[] = "set-cookie: steamLoginSecure=";
 	if (len > sizeof(login) && strncasecmp(p, login, sizeof(login) - 1) == 0) {
 		const char *v = p + sizeof(login) - 1;

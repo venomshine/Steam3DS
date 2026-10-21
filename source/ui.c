@@ -8,7 +8,7 @@
 #include <string.h>
 
 C2D_Font g_font = NULL;     // NULL = fuente del sistema
-float g_time;
+float g_time, g_dt;
 
 static C2D_TextBuf tbuf;
 static float line_feed = 30.0f;
@@ -299,16 +299,29 @@ void ui_vgrad(float x, float y, float w, float h, u32 top, u32 bottom)
 	C2D_DrawRectangle(x, y, 0.5f, w, h, top, top, bottom, bottom);
 }
 
+// Cuarto de círculo en abanico (sin solaparse con nada: con colores semitransparentes
+// los solapes se verían más oscuros)
+static void quarter(float cx, float cy, float r, float a0, u32 col)
+{
+	const int N = 6;
+	for (int i = 0; i < N; i++) {
+		float b0 = a0 + i * (M_PI / 2) / N, b1 = a0 + (i + 1) * (M_PI / 2) / N;
+		C2D_DrawTriangle(cx, cy, col, cx + cosf(b0) * r, cy + sinf(b0) * r, col, cx + cosf(b1) * r, cy + sinf(b1) * r, col, 0.5f);
+	}
+}
+
 void ui_rrect(float x, float y, float w, float h, float r, u32 col)
 {
+	if (r > h / 2) r = h / 2;
+	if (r > w / 2) r = w / 2;
 	if (r <= 0.5f) { ui_rect(x, y, w, h, col); return; }
 	ui_rect(x + r, y, w - 2 * r, h, col);
 	ui_rect(x, y + r, r, h - 2 * r, col);
 	ui_rect(x + w - r, y + r, r, h - 2 * r, col);
-	C2D_DrawCircleSolid(x + r, y + r, 0.5f, r, col);
-	C2D_DrawCircleSolid(x + w - r, y + r, 0.5f, r, col);
-	C2D_DrawCircleSolid(x + r, y + h - r, 0.5f, r, col);
-	C2D_DrawCircleSolid(x + w - r, y + h - r, 0.5f, r, col);
+	quarter(x + r, y + r, r, M_PI, col);
+	quarter(x + w - r, y + r, r, -M_PI / 2, col);
+	quarter(x + w - r, y + h - r, r, 0, col);
+	quarter(x + r, y + h - r, r, M_PI / 2, col);
 }
 
 void ui_hline(float x, float y, float w, u32 col)
@@ -480,6 +493,14 @@ void ui_icon(Icon ic, float x, float y, float s, u32 c)
 		}
 		ui_circle(X(6), Y(10.3), 1.2f * u, c);
 		break;
+	case IC_POWER:
+		// Aro abierto por arriba y una raya: el símbolo de apagar
+		for (int k = 0; k < 16; k++) {
+			float a0 = (-60 + k * 18.75f) * M_PI / 180, a1 = (-60 + (k + 1) * 18.75f) * M_PI / 180;
+			seg(X(6) + cosf(a0) * 4.6f * u, Y(6.6) + sinf(a0) * 4.6f * u, X(6) + cosf(a1) * 4.6f * u, Y(6.6) + sinf(a1) * 4.6f * u, 1.6f * u, c);
+		}
+		seg(X(6), Y(0.8), X(6), Y(6), 1.7f * u, c);
+		break;
 	case IC_LOCK:
 		ring(X(6), Y(4.6), 2.8f * u, 1.3f * u, c);
 		ui_rrect(X(2), Y(5.4), 8 * u, 6.2f * u, 1 * u, c);
@@ -562,4 +583,70 @@ void ui_qr(const char *text, float x, float y, float size)
 			i = k;
 		}
 	}
+}
+
+// ----------------------------------------------------------------------------
+// Animación
+
+float clampf(float v, float lo, float hi)
+{
+	return v < lo ? lo : v > hi ? hi : v;
+}
+
+float ease_out_cubic(float t)
+{
+	t = clampf(t, 0, 1);
+	float u = 1 - t;
+	return 1 - u * u * u;
+}
+
+float ease_out_back(float t)
+{
+	t = clampf(t, 0, 1);
+	const float c1 = 1.70158f, c3 = c1 + 1;
+	return 1 + c3 * powf(t - 1, 3) + c1 * powf(t - 1, 2);
+}
+
+float approach(float v, float target, float speed)
+{
+	float r = v + (target - v) * (1 - expf(-g_dt * speed));
+	if (fabsf(r - target) < 0.01f) r = target;
+	return r;
+}
+
+u32 col_alpha(u32 c, float a)
+{
+	u32 al = (u32)((c >> 24) * clampf(a, 0, 1));
+	return (c & 0x00FFFFFF) | (al << 24);
+}
+
+u32 col_lerp(u32 a, u32 b, float t)
+{
+	t = clampf(t, 0, 1);
+	u32 r = 0;
+	for (int s = 0; s < 32; s += 8) {
+		float ca = (a >> s) & 0xff, cb = (b >> s) & 0xff;
+		r |= (u32)(ca + (cb - ca) * t) << s;
+	}
+	return r;
+}
+
+const char *ui_button_glyph(const char *key)
+{
+	static const struct { const char *k, *g; u32 cp; } map[] = {
+		{"A", "\xEE\x80\x80", 0xE000}, {"B", "\xEE\x80\x81", 0xE001}, {"X", "\xEE\x80\x82", 0xE002},
+		{"Y", "\xEE\x80\x83", 0xE003}, {"L", "\xEE\x80\x84", 0xE004}, {"R", "\xEE\x80\x85", 0xE005},
+		{"+", "\xEE\x80\x86", 0xE006},
+	};
+	static int have = -1;
+	if (have < 0) {
+		// La fuente libre de Azahar no los trae: entonces se dibujan las teclas a mano
+		FINF_s *fi = C2D_FontGetInfo(g_font);
+		int gi = C2D_FontGlyphIndexFromCodePoint(g_font, 0xE000);
+		have = fi && gi != fi->alterCharIndex && char_w(0xE000) > 0;
+	}
+	if (!have) return NULL;
+	for (size_t i = 0; i < sizeof map / sizeof *map; i++)
+		if (!strcmp(key, map[i].k)) return map[i].g;
+	return NULL;
 }

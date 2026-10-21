@@ -1,13 +1,15 @@
 #include "img.h"
 #include "net.h"
+#include "ui.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#define SLOTS 8
+#define SLOTS 14
 
 typedef struct {
 	char *url;
+	int max_w;          // la misma imagen puede pedirse grande (captura) y pequeña (miniatura)
 	Req *req;
 	bool ready, failed;
 	C3D_Tex tex;
@@ -71,6 +73,7 @@ static bool upload(Slot *s, const u8 *rgb, int w, int h)
 	s->pic.img.subtex = &s->sub;
 	s->pic.w = w;
 	s->pic.h = h;
+	s->pic.born = g_time;
 	return true;
 }
 
@@ -96,17 +99,17 @@ void img_update(void)
 	}
 }
 
-static Slot *find(const char *url)
+static Slot *find(const char *url, int max_w)
 {
 	for (int i = 0; i < SLOTS; i++)
-		if (slots[i].url && !strcmp(slots[i].url, url)) return &slots[i];
+		if (slots[i].url && slots[i].max_w == max_w && !strcmp(slots[i].url, url)) return &slots[i];
 	return NULL;
 }
 
 const Pic *img_get(const char *url, int max_w)
 {
 	if (!url || !*url) return NULL;
-	Slot *s = find(url);
+	Slot *s = find(url, max_w);
 	if (!s) {
 		// Hueco libre o el que lleva más tiempo sin usarse (nunca uno de este frame)
 		Slot *best = NULL;
@@ -119,6 +122,7 @@ const Pic *img_get(const char *url, int max_w)
 		if (!best) return NULL;
 		slot_clear(best);
 		best->url = strdup(url);
+		best->max_w = max_w;
 		best->req = net_get_jpeg(url, max_w);
 		s = best;
 	}
@@ -128,8 +132,15 @@ const Pic *img_get(const char *url, int max_w)
 
 bool img_failed(const char *url)
 {
-	Slot *s = url ? find(url) : NULL;
-	return s && s->failed;
+	for (int i = 0; url && i < SLOTS; i++)
+		if (slots[i].url && slots[i].failed && !strcmp(slots[i].url, url)) return true;
+	return false;
+}
+
+static float fade_in(const Pic *p)
+{
+	float a = (g_time - p->born) / 0.25f;
+	return a < 0 ? 0 : a > 1 ? 1 : a;
 }
 
 void img_draw_cover(const Pic *p, float x, float y, float w, float h, float focus_y)
@@ -147,13 +158,22 @@ void img_draw_cover(const Pic *p, float x, float y, float w, float h, float focu
 		.top = full->top - sy / th, .bottom = full->top - (sy + vh) / th,
 	};
 	C2D_Image im = { p->img.tex, &sub };
-	C2D_DrawImageAt(im, x, y, 0.5f, NULL, w / sub.width, h / sub.height);
+	C2D_ImageTint tint;
+	C2D_AlphaImageTint(&tint, fade_in(p));
+	C2D_DrawImageAt(im, x, y, 0.5f, &tint, w / sub.width, h / sub.height);
 }
 
-void img_draw_fit(const Pic *p, float x, float y, float w, float h)
+void img_draw_fit_a(const Pic *p, float x, float y, float w, float h, float alpha)
 {
 	float scale = w / p->w;
 	if (p->h * scale > h) scale = h / p->h;
 	float dw = p->w * scale, dh = p->h * scale;
-	C2D_DrawImageAt(p->img, x + (w - dw) / 2, y + (h - dh) / 2, 0.5f, NULL, scale, scale);
+	C2D_ImageTint tint;
+	C2D_AlphaImageTint(&tint, fade_in(p) * alpha);
+	C2D_DrawImageAt(p->img, x + (w - dw) / 2, y + (h - dh) / 2, 0.5f, &tint, scale, scale);
+}
+
+void img_draw_fit(const Pic *p, float x, float y, float w, float h)
+{
+	img_draw_fit_a(p, x, y, w, h, 1);
 }

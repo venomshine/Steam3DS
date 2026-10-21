@@ -1,0 +1,43 @@
+# Animaciones: capturas a mitad de cada transición
+wait 900
+shot a_tienda
+press DOWN 2
+shot b_franja_moviendo
+wait 60
+press A 2
+shot c_abrir_mitad
+wait 300
+shot d_ficha
+press R 2
+shot e_apartado_mitad
+wait 40
+down 235 121
+wait 4
+shot f_boton_hundido
+up
+wait 6
+shot g_capturas_mitad
+wait 300
+shot h_capturas
+press RIGHT 2
+shot i_captura_mitad
+wait 200
+shot j_captura2
+touch 262 100
+wait 200
+shot k_miniatura
+press B
+wait 30
+press B
+wait 30
+press START 2
+shot l_salir_mitad
+wait 40
+shot m_salir
+down 222 155
+wait 4
+shot n_salir_hundido
+up
+wait 8
+shot o_fundido
+wait 30

@@ -80,8 +80,22 @@ static struct {
 	float lscroll;
 
 	// Capturas
-	int shot;
+	int shot, shot_dir;
+	float shot_anim, strip;
+
+	// Animaciones
+	float tab_x;                 // pestaña marcada (se desliza)
+	float sel_y, lsel_y;         // franja de selección de las listas
+	float seg_x;                 // apartado marcado en el selector
+	float sec_anim; int sec_dir; // entrada del apartado
+	float scene_anim; int scene_dir;
+	float exit_anim;             // diálogo de salida (0 cerrado, 1 abierto)
+	float quit_fade;             // fundido a negro al salir (-1 = no)
+	int pressed;                 // botón táctil hundido (B_*)
+	float toast_y;
 } S;
+
+enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES };
 
 static InfoEnt cache[CACHE];
 static u64 frame_no;
@@ -92,7 +106,14 @@ static float splash_t, splash_out = -1;
 static void toast(const char *msg)
 {
 	snprintf(S.toast, sizeof S.toast, "%s", msg);
-	S.toast_t = 2.5f;
+	S.toast_t = 2.6f;
+}
+
+static void go_scene(Scene sc, int dir)
+{
+	S.scene = sc;
+	S.scene_anim = 0;
+	S.scene_dir = dir;
 }
 
 // El error de red en palabras de persona (el código exacto queda en net.log)
@@ -123,12 +144,6 @@ static int retry_delay(const char *err)
 	return strstr(err, "HTTP 429") ? 30 : 8;
 }
 
-static float approach(float cur, float target, float speed)
-{
-	float d = target - cur;
-	if (fabsf(d) < 0.3f) return target;
-	return cur + d * speed;
-}
 
 // ============================================================================
 // Caché de fichas
@@ -235,23 +250,46 @@ static void draw_status(const char *user)
 	ui_text(r, 2, right, SZ_SMALL, COL_DIM, AL_RIGHT, 230);
 }
 
+// Tecla de una pista: el glifo del sistema si la fuente lo tiene; si no, una tecla dibujada
+static float hint_key(float x, float y, const char *key, bool draw)
+{
+	char g[16] = "";
+	if (!strcmp(key, "L R")) {
+		const char *l = ui_button_glyph("L"), *r = ui_button_glyph("R");
+		if (l && r) snprintf(g, sizeof g, "%s%s", l, r);
+	} else if (!strcmp(key, "↑↓") || !strcmp(key, "← →")) {
+		const char *d = ui_button_glyph("+");
+		if (d) snprintf(g, sizeof g, "%s", d);
+	} else {
+		const char *b = ui_button_glyph(key);
+		if (b) snprintf(g, sizeof g, "%s", b);
+	}
+	if (g[0]) {
+		float w = ui_text_w(g, SZ_SMALL);
+		if (draw) ui_text(x, y + 1, g, SZ_SMALL, COL_WHITE, AL_LEFT, 0);
+		return w;
+	}
+	float kw = ui_text_w(key, SZ_TINY) + 6;
+	if (kw < 11) kw = 11;
+	if (draw) {
+		ui_rrect(x, y + 3.5f, kw, 11, 5.5f, C2D_Color32(0x3d, 0x44, 0x50, 0xff));
+		ui_text(x + kw / 2, y + 3.5f, key, SZ_TINY, COL_WHITE, AL_CENTER, 0);
+	}
+	return kw;
+}
+
 static void draw_hints(const char *const *pairs, int n)
 {
 	float y = SCR_H - 18;
 	ui_rect(0, y, BOT_W, 18, COL_BAR);
 	float total = 0, widths[8];
 	for (int i = 0; i < n; i++) {
-		float kw = ui_text_w(pairs[i * 2], SZ_TINY) + 6;
-		if (kw < 11) kw = 11;
-		widths[i] = kw + 3 + ui_text_w(_(pairs[i * 2 + 1]), SZ_TINY);
+		widths[i] = hint_key(0, y, pairs[i * 2], false) + 3 + ui_text_w(_(pairs[i * 2 + 1]), SZ_TINY);
 		total += widths[i] + (i ? 12 : 0);
 	}
 	float x = (BOT_W - total) / 2;
 	for (int i = 0; i < n; i++) {
-		float kw = ui_text_w(pairs[i * 2], SZ_TINY) + 6;
-		if (kw < 11) kw = 11;
-		ui_rrect(x, y + 3.5f, kw, 11, 5.5f, C2D_Color32(0x3d, 0x44, 0x50, 0xff));
-		ui_text(x + kw / 2, y + 3.5f, pairs[i * 2], SZ_TINY, COL_WHITE, AL_CENTER, 0);
+		float kw = hint_key(x, y, pairs[i * 2], true);
 		ui_text(x + kw + 3, y + 3.5f, _(pairs[i * 2 + 1]), SZ_TINY, COL_DIM, AL_LEFT, 0);
 		x += widths[i] + 12;
 	}
@@ -385,7 +423,6 @@ static const char *tab_name(int t)
 
 static void draw_store_top(void)
 {
-	draw_status(NULL);
 	if (S.tab != TAB_OFFERS) {
 		ui_text(TOP_W / 2, 100, tab_name(S.tab)[0] ? tab_name(S.tab) : _("Buscar"), SZ_TITLE, COL_WHITE, AL_CENTER, 0);
 		ui_text(TOP_W / 2, 126, _("Esta pestaña llega en la próxima fase"), SZ_BODY, COL_DIM, AL_CENTER, 0);
@@ -458,6 +495,9 @@ static void draw_store_top(void)
 		ui_spinner(TOP_W / 2, 165, 7, COL_DIM);
 	}
 
+	float fe = clampf((osGetTime() - S.sel_changed) / 160.0f, 0, 1);
+	if (fe < 1) ui_rect(0, 22, TOP_W, SCR_H - 40, col_alpha(COL_BG, (1 - ease_out_cubic(fe)) * 0.85f));
+
 	char cnt[64];
 	snprintf(cnt, sizeof cnt, _("Oferta %d de %d"), S.sel + 1, S.offers.total);
 	ui_text(TOP_W - 12, SCR_H - 18, cnt, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
@@ -467,15 +507,16 @@ static void draw_tabs(void)
 {
 	ui_rect(0, 0, BOT_W, LIST_Y, COL_BAR);
 	float w = BOT_W / 4.6f;
+	// El fondo y la raya de la pestaña marcada se deslizan hasta su sitio
+	float sx = S.tab_x * w, sw = S.tab_x > TAB_COUNT - 1.5f ? BOT_W - sx : w;
+	ui_rect(sx, 0, sw, LIST_Y, COL_PANEL);
+	ui_rect(sx, LIST_Y - 2, sw, 2, COL_ACC);
 	for (int t = 0; t < TAB_COUNT; t++) {
 		float x = t * w, tw = t == TAB_SEARCH ? BOT_W - x : w;
-		bool on = t == S.tab;
-		if (on) {
-			ui_rect(x, 0, tw, LIST_Y, COL_PANEL);
-			ui_rect(x, LIST_Y - 2, tw, 2, COL_ACC);
-		}
-		if (t == TAB_SEARCH) ui_icon(IC_SEARCH, x + tw / 2 - 6, 6, 12, on ? COL_WHITE : COL_DIM);
-		else ui_text(x + tw / 2, 5, tab_name(t), SZ_SMALL, on ? COL_WHITE : COL_DIM, AL_CENTER, tw - 4);
+		float on = 1 - clampf(fabsf(S.tab_x - t), 0, 1);
+		u32 c = col_lerp(COL_DIM, COL_WHITE, on);
+		if (t == TAB_SEARCH) ui_icon(IC_SEARCH, x + tw / 2 - 6, 6, 12, c);
+		else ui_text(x + tw / 2, 5, tab_name(t), SZ_SMALL, c, AL_CENTER, tw - 4);
 	}
 }
 
@@ -486,14 +527,15 @@ static void draw_store_bottom(void)
 	if (S.tab == TAB_OFFERS) {
 		ui_scissor(GFX_BOTTOM, 0, LIST_Y, BOT_W, LIST_H);
 		int first = (int)(S.scroll / ROW_H);
+		if (S.offers.count) {
+			float hy = LIST_Y + S.sel_y * ROW_H - S.scroll;
+			ui_rect(0, hy, BOT_W, ROW_H, COL_SEL);
+			ui_rect(0, hy, 3, ROW_H, COL_ACC);
+		}
 		for (int i = first; i < S.offers.count && i < first + LIST_H / ROW_H + 2; i++) {
 			const StoreRow *r = &S.offers.rows[i];
 			float y = LIST_Y + i * ROW_H - S.scroll;
 			bool on = i == S.sel;
-			if (on) {
-				ui_rect(0, y, BOT_W, ROW_H, COL_SEL);
-				ui_rect(0, y, 3, ROW_H, COL_ACC);
-			}
 			ui_hline(0, y + ROW_H - 1, BOT_W, COL_LINE);
 			float pw = r->disc > 0 ? 36 + 50 : 50;
 			ui_text(8, y + 7, r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 18 - pw);
@@ -545,7 +587,7 @@ static void open_game(u32 appid, bool push)
 		S.depth++;
 	}
 	if (!push) S.depth = 0;
-	S.scene = SC_GAME;
+	go_scene(SC_GAME, 1);
 	S.app = appid;
 	S.sec = SEC_SUMMARY;
 	S.show_qr = false;
@@ -560,6 +602,9 @@ static void open_game(u32 appid, bool push)
 	S.rscroll = 0;
 	S.lsel = 0;
 	S.lscroll = 0;
+	S.lsel_y = 0;
+	S.seg_x = 0;
+	S.sec_anim = 1;
 	InfoEnt *e = info_get(appid, true);
 	if (e && e->failed) info_retry(e);
 }
@@ -574,10 +619,13 @@ static void game_back(void)
 		open_game(a, false);
 		S.depth = keep;
 		S.sec = sec;
+		S.seg_x = sec;
 		S.lsel = lsel;
+		S.lsel_y = lsel;
+		S.scene_dir = -1;
 		return;
 	}
-	S.scene = SC_STORE;
+	go_scene(SC_STORE, -1);
 }
 
 static void reviews_more(void)
@@ -744,15 +792,14 @@ static void draw_list_top(const char *title, const RowList *l, const char *empty
 		return;
 	}
 	ui_scissor(GFX_TOP, 0, top, TOP_W, bottom - top);
+	float hy = top + S.lsel_y * rh - S.lscroll;
+	ui_rect(12, hy, TOP_W - 24, rh - 1, COL_SEL);
+	ui_rect(12, hy, 3, rh - 1, COL_ACC);
 	for (int i = 0; i < l->count; i++) {
 		float y = top + i * rh - S.lscroll;
 		if (y + rh < top || y > bottom) continue;
 		const StoreRow *r = &l->rows[i];
 		bool on = i == S.lsel;
-		if (on) {
-			ui_rect(12, y, TOP_W - 24, rh - 1, COL_SEL);
-			ui_rect(12, y, 3, rh - 1, COL_ACC);
-		}
 		float pw = r->disc > 0 ? 36 + 52 : 56;
 		float nw = ui_text(20, y + 4, r->name, SZ_SMALL, on ? COL_WHITE : COL_TXT, AL_LEFT, TOP_W - 40 - pw);
 		if (r->review[0] && r->review_pct > 0 && 20 + nw + 20 < TOP_W - 40 - pw) {
@@ -767,7 +814,6 @@ static void draw_list_top(const char *title, const RowList *l, const char *empty
 
 static void draw_game_top(void)
 {
-	draw_status(NULL);
 	InfoEnt *e = info_get(S.app, false);
 	if (!e || !e->done) {
 		if (e && e->failed) {
@@ -794,6 +840,10 @@ static void draw_game_top(void)
 		ui_text(TOP_W / 2, SCR_H - 18, _("B para volver"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 		return;
 	}
+	C3D_Mtx view;
+	C2D_ViewSave(&view);
+	float se = ease_out_cubic(S.sec_anim);
+	C2D_ViewTranslate(S.sec_dir * (1 - se) * 22, 0);
 	switch (S.sec) {
 	case SEC_SUMMARY: draw_summary_top(a); break;
 	case SEC_REQS: draw_reqs_top(a); break;
@@ -818,6 +868,8 @@ static void draw_game_top(void)
 		break;
 	}
 	}
+	C2D_ViewRestore(&view);
+	if (se < 1) ui_rect(0, 18, TOP_W, SCR_H - 18, col_alpha(COL_BG, (1 - se) * 0.9f));
 }
 
 // Botones de la ficha (también se usan para el toque)
@@ -833,13 +885,18 @@ static bool hit(const Box *b, int x, int y)
 	return x >= b->x && x < b->x + b->w && y >= b->y && y < b->y + b->h;
 }
 
-static void draw_button(const Box *b, Icon ic, const char *label, u32 top, u32 bot, u32 fg, float alpha)
+static void draw_button(const Box *b, Icon ic, const char *label, u32 top, u32 bot, u32 fg, float alpha, bool pressed)
 {
-	u32 a8 = (u32)(alpha * 255) << 24;
-	ui_vgrad(b->x, b->y, b->w, b->h, (top & 0x00FFFFFF) | a8, (bot & 0x00FFFFFF) | a8);
+	// Hundido mientras se toca: un poco más pequeño y más claro
+	float in = pressed ? 2 : 0;
+	if (pressed) {
+		top = col_lerp(top, COL_WHITE, 0.15f);
+		bot = col_lerp(bot, COL_WHITE, 0.15f);
+	}
+	ui_vgrad(b->x + in, b->y + in, b->w - 2 * in, b->h - 2 * in, col_alpha(top, alpha), col_alpha(bot, alpha));
 	float tw = ui_text_w(label, SZ_SMALL) + 18;
 	float x = b->x + (b->w - tw) / 2;
-	u32 f = (fg & 0x00FFFFFF) | ((u32)(alpha < 1 ? 0x80 : 0xff) << 24);
+	u32 f = col_alpha(fg, alpha < 1 ? 0.5f : 1);
 	ui_icon(ic, x, b->y + (b->h - 12) / 2, 12, f);
 	ui_text(x + 18, b->y + (b->h - ui_line_h(SZ_SMALL)) / 2 + 1, label, SZ_SMALL, f, AL_LEFT, b->w - 24);
 }
@@ -854,10 +911,12 @@ static void draw_game_bottom(void)
 	ui_rrect(B_SEG.x, B_SEG.y, B_SEG.w, B_SEG.h, 3, COL_BAR);
 	static const char *secs[] = {"Resumen", "Requisitos", "Opiniones", "Extras", "Similares"};
 	float sw = (B_SEG.w - 4) / SEC_COUNT;
+	// La píldora del apartado se desliza hasta su sitio
+	ui_rrect(B_SEG.x + 2 + S.seg_x * sw, B_SEG.y + 2, sw, B_SEG.h - 4, 2, COL_SEL);
 	for (int i = 0; i < SEC_COUNT; i++) {
 		float x = B_SEG.x + 2 + i * sw;
-		if (i == S.sec) ui_rrect(x, B_SEG.y + 2, sw, B_SEG.h - 4, 2, COL_SEL);
-		ui_text(x + sw / 2, B_SEG.y + 5, _(secs[i]), SZ_TINY, i == S.sec ? COL_WHITE : COL_DIM, AL_CENTER, sw - 4);
+		float on = 1 - clampf(fabsf(S.seg_x - i), 0, 1);
+		ui_text(x + sw / 2, B_SEG.y + 5, _(secs[i]), SZ_TINY, col_lerp(COL_DIM, COL_WHITE, on), AL_CENTER, sw - 4);
 	}
 
 	if (a) {
@@ -879,12 +938,12 @@ static void draw_game_bottom(void)
 		}
 		// Sin sesión: carrito, deseados e instalar se ven apagados
 		draw_button(&B_CART, IC_CART, a->is_free ? _("Añadir a la biblioteca") : _("Añadir al carrito"),
-			C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), C2D_Color32(0xd2, 0xef, 0xa9, 0xff), 0.45f);
-		draw_button(&B_WISH, IC_HEART, _("Deseados"), COL_BTN2, COL_BTN2, COL_ACC, 0.45f);
+			C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), C2D_Color32(0xd2, 0xef, 0xa9, 0xff), 0.45f, S.pressed == BT_CART);
+		draw_button(&B_WISH, IC_HEART, _("Deseados"), COL_BTN2, COL_BTN2, COL_ACC, 0.45f, S.pressed == BT_WISH);
 		char shots[40];
 		snprintf(shots, sizeof shots, _("Capturas (%d)"), a->nshots);
-		draw_button(&B_SHOTS, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, a->nshots ? 1 : 0.45f);
-		draw_button(&B_INST, IC_PC, _("Instalar en mi PC"), C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, 0.4f);
+		draw_button(&B_SHOTS, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, a->nshots ? 1 : 0.45f, S.pressed == BT_SHOTS);
+		draw_button(&B_INST, IC_PC, _("Instalar en mi PC"), C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, 0.4f, S.pressed == BT_INST);
 		ui_text(BOT_W / 2, 172, _("Inicia sesión para usar el carrito, deseados e instalar"), SZ_TINY, COL_DIM, AL_CENTER, 300);
 	}
 
@@ -907,53 +966,134 @@ static void draw_shots_top(void)
 	if (!e || !e->done || e->info.nshots == 0) return;
 	const char *url = e->info.shots[S.shot];
 	const Pic *p = img_get(url, 600);
-	if (p) img_draw_fit(p, 0, 0, TOP_W, SCR_H);
-	else if (img_failed(url)) ui_text(TOP_W / 2, 112, _("No se pudo cargar la captura"), SZ_BODY, COL_DIM, AL_CENTER, 0);
-	else ui_spinner(TOP_W / 2, SCR_H / 2, 9, COL_DIM);
-	// La siguiente, ya pedida para que el cambio sea inmediato
+	// La nueva entra deslizándose desde el lado hacia el que vas
+	float se = ease_out_cubic(S.shot_anim);
+	if (p) {
+		C3D_Mtx view;
+		C2D_ViewSave(&view);
+		C2D_ViewTranslate(S.shot_dir * (1 - se) * 50, 0);
+		img_draw_fit_a(p, 0, 0, TOP_W, SCR_H, 0.25f + 0.75f * se);
+		C2D_ViewRestore(&view);
+	} else if (img_failed(url)) {
+		ui_text(TOP_W / 2, 112, _("No se pudo cargar la captura"), SZ_BODY, COL_DIM, AL_CENTER, 0);
+	} else {
+		ui_spinner(TOP_W / 2, SCR_H / 2, 9, COL_DIM);
+	}
+	// Las de al lado, ya pedidas para que el cambio sea inmediato
 	if (S.shot + 1 < e->info.nshots) img_get(e->info.shots[S.shot + 1], 600);
+	if (S.shot > 0) img_get(e->info.shots[S.shot - 1], 600);
+}
+
+#define THUMB_W 92
+#define THUMB_H 52
+#define THUMB_STEP 100
+#define STRIP_Y 76
+static const Box B_PREV = {12, 156, 140, 34};
+static const Box B_NEXT = {168, 156, 140, 34};
+
+static void draw_round_button(const Box *b, const char *label, bool enabled, bool pressed)
+{
+	float in = pressed ? 2 : 0;
+	u32 bg = pressed ? col_lerp(COL_BTN2, COL_WHITE, 0.15f) : COL_BTN2;
+	ui_rrect(b->x + in, b->y + in, b->w - 2 * in, b->h - 2 * in, (b->h - 2 * in) / 2, col_alpha(bg, enabled ? 1 : 0.45f));
+	ui_text(b->x + b->w / 2, b->y + (b->h - ui_line_h(SZ_BODY)) / 2 + 1, label, SZ_BODY, col_alpha(COL_ACC, enabled ? 1 : 0.4f), AL_CENTER, b->w - 12);
 }
 
 static void draw_shots_bottom(void)
 {
-	ui_rect(0, 0, BOT_W, SCR_H, COL_BG);
+	ui_vgrad(0, 0, BOT_W, SCR_H, C2D_Color32(0x1e, 0x2d, 0x3e, 0xff), C2D_Color32(0x14, 0x19, 0x21, 0xff));
 	InfoEnt *e = info_get(S.app, false);
 	if (e && e->done) {
-		ui_text(BOT_W / 2, 70, e->info.name, SZ_LARGE, COL_WHITE, AL_CENTER, 296);
-		char t[48];
-		snprintf(t, sizeof t, _("Captura %d de %d"), S.shot + 1, e->info.nshots);
-		ui_text(BOT_W / 2, 98, t, SZ_BODY, COL_DIM, AL_CENTER, 0);
-		// Flechas táctiles
-		ui_rrect(12, 130, 140, 40, 4, COL_BTN2);
-		ui_rrect(168, 130, 140, 40, 4, COL_BTN2);
-		ui_text(82, 141, _("‹ Anterior"), SZ_BODY, S.shot > 0 ? COL_ACC : COL_DIM, AL_CENTER, 0);
-		ui_text(238, 141, _("Siguiente ›"), SZ_BODY, S.shot + 1 < e->info.nshots ? COL_ACC : COL_DIM, AL_CENTER, 0);
+		const AppInfo *a = &e->info;
+		ui_text(BOT_W / 2, 10, a->name, SZ_SMALL, COL_DIM, AL_CENTER, 296);
+		// «3 / 19», con el total más apagado
+		char cur[16], tot[16];
+		snprintf(cur, sizeof cur, "%d", S.shot + 1);
+		snprintf(tot, sizeof tot, " / %d", a->nshots);
+		float w1 = ui_text_w(cur, SZ_TITLE), w2 = ui_text_w(tot, SZ_LARGE);
+		float x = (BOT_W - w1 - w2) / 2;
+		ui_text(x, 28, cur, SZ_TITLE, COL_WHITE, AL_LEFT, 0);
+		ui_text(x + w1, 32, tot, SZ_LARGE, COL_DIM, AL_LEFT, 0);
+
+		// Tira de miniaturas: se desliza hasta la actual, que va marcada
+		for (int i = 0; i < a->nshots; i++) {
+			float cx = BOT_W / 2 + (i - S.strip) * THUMB_STEP;
+			if (cx < -THUMB_W || cx > BOT_W + THUMB_W) continue;
+			float on = 1 - clampf(fabsf(S.strip - i), 0, 1);
+			float sc = 1 + 0.14f * on;
+			float w = THUMB_W * sc, hh = THUMB_H * sc;
+			float x0 = cx - w / 2, y0 = STRIP_Y + (THUMB_H * 1.14f - hh) / 2;
+			if (i == S.shot) ui_rrect(x0 - 3, y0 - 3, w + 6, hh + 6, 4, col_alpha(COL_ACC, on));
+			ui_rect(x0, y0, w, hh, C2D_Color32(0x0b, 0x10, 0x16, 0xff));
+			const Pic *p = img_get(a->shots[i], 150);
+			if (p) img_draw_fit_a(p, x0, y0, w, hh, 0.45f + 0.55f * on);
+			else ui_spinner(cx, y0 + hh / 2, 5, COL_DIM);
+		}
+		draw_round_button(&B_PREV, _("‹ Anterior"), S.shot > 0, S.pressed == BT_PREV);
+		draw_round_button(&B_NEXT, _("Siguiente ›"), S.shot + 1 < a->nshots, S.pressed == BT_NEXT);
 	}
-	static const char *h[] = {"← →", "Cambiar", "B", "Volver"};
-	draw_hints(h, 2);
+	static const char *hh[] = {"← →", "Cambiar", "B", "Volver"};
+	draw_hints(hh, 2);
 }
 
 // ============================================================================
 // Diálogo de salida y avisos
 
+static const Box B_EXIT_NO = {42, 138, 112, 34};
+static const Box B_EXIT_YES = {166, 138, 112, 34};
+
+static void draw_exit_dialog(void)
+{
+	float a = ease_out_cubic(S.exit_anim);
+	ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0xa8 * a)));
+	// Aparece con un pequeño rebote, como en Gemi3DS y Cloud3DS
+	float s = 0.88f + 0.12f * (S.ask_exit ? ease_out_back(S.exit_anim) : a);
+	float cx = BOT_W / 2, cy = 112;
+	C3D_Mtx view;
+	C2D_ViewSave(&view);
+	C2D_ViewTranslate(cx, cy);
+	C2D_ViewScale(s, s);
+	C2D_ViewTranslate(-cx, -cy);
+	float x0 = cx - 132, y0 = cy - 78;
+	ui_rrect(x0, y0 + 2, 264, 156, 10, C2D_Color32(0, 0, 0, (u8)(0x60 * a)));
+	ui_rrect(x0, y0, 264, 156, 10, col_alpha(COL_PANEL, a));
+	ui_rect(x0 + 10, y0, 244, 2, col_alpha(C2D_Color32(0xe0, 0x4b, 0x3a, 0xff), a));
+	ui_circle(cx, y0 + 30, 17, col_alpha(C2D_Color32(0xe0, 0x4b, 0x3a, 0x40), a));
+	ui_icon(IC_POWER, cx - 9, y0 + 21, 18, col_alpha(C2D_Color32(0xff, 0x7a, 0x6a, 0xff), a));
+	ui_text(cx, y0 + 54, _("¿Salir de Steam3DS?"), SZ_LARGE, col_alpha(COL_WHITE, a), AL_CENTER, 240);
+	ui_text(cx, y0 + 78, _("Volverás al menú HOME."), SZ_SMALL, col_alpha(COL_DIM, a), AL_CENTER, 240);
+
+	const char *gb = ui_button_glyph("B"), *ga = ui_button_glyph("A");
+	char no[48], yes[48];
+	snprintf(no, sizeof no, "%s%s%s", gb ? gb : "", gb ? " " : "", _("Cancelar"));
+	snprintf(yes, sizeof yes, "%s%s%s", ga ? ga : "", ga ? " " : "", _("Salir"));
+	bool pn = S.pressed == BT_EXIT_NO, py = S.pressed == BT_EXIT_YES;
+	float in = pn ? 2 : 0;
+	ui_rrect(B_EXIT_NO.x + in, B_EXIT_NO.y + in, B_EXIT_NO.w - 2 * in, B_EXIT_NO.h - 2 * in, 17 - in,
+		col_alpha(pn ? col_lerp(COL_BTN2, COL_WHITE, 0.15f) : COL_BTN2, a));
+	ui_text(B_EXIT_NO.x + B_EXIT_NO.w / 2, B_EXIT_NO.y + 9, no, SZ_BODY, col_alpha(COL_ACC, a), AL_CENTER, 104);
+	in = py ? 2 : 0;
+	u32 red = C2D_Color32(0xc8, 0x3b, 0x2e, 0xff);
+	ui_rrect(B_EXIT_YES.x + in, B_EXIT_YES.y + in, B_EXIT_YES.w - 2 * in, B_EXIT_YES.h - 2 * in, 17 - in,
+		col_alpha(py ? col_lerp(red, COL_WHITE, 0.15f) : red, a));
+	ui_text(B_EXIT_YES.x + B_EXIT_YES.w / 2, B_EXIT_YES.y + 9, yes, SZ_BODY, col_alpha(COL_WHITE, a), AL_CENTER, 104);
+	C2D_ViewRestore(&view);
+}
+
 static void draw_overlays_bottom(void)
 {
 	if (S.toast_t > 0) {
-		float a = S.toast_t > 0.3f ? 1 : S.toast_t / 0.3f;
-		float w = ui_text_w(S.toast, SZ_SMALL) + 24;
+		// Sube desde abajo y se apaga al final
+		float in = ease_out_cubic((2.6f - S.toast_t) / 0.25f);
+		float a = clampf(S.toast_t / 0.3f, 0, 1) * in;
+		float w = ui_text_w(S.toast, SZ_SMALL) + 44;
 		if (w > 300) w = 300;
-		ui_rrect((BOT_W - w) / 2, 186, w, 24, 12, C2D_Color32(0x0e, 0x14, 0x1b, (u8)(0xee * a)));
-		ui_text(BOT_W / 2, 191, S.toast, SZ_SMALL, (COL_WHITE & 0x00FFFFFF) | ((u32)(255 * a) << 24), AL_CENTER, 280);
+		float x = (BOT_W - w) / 2, y = 190 + (1 - in) * 16;
+		ui_rrect(x, y, w, 26, 13, col_alpha(C2D_Color32(0x0e, 0x14, 0x1b, 0xf0), a));
+		ui_icon(IC_LOCK, x + 12, y + 7, 12, col_alpha(COL_ACC, a));
+		ui_text(x + 30, y + 5, S.toast, SZ_SMALL, col_alpha(COL_WHITE, a), AL_LEFT, w - 40);
 	}
-	if (S.ask_exit) {
-		ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, 0xa0));
-		ui_rrect(30, 60, 260, 120, 6, COL_PANEL);
-		ui_text(BOT_W / 2, 78, _("¿Salir de Steam3DS?"), SZ_LARGE, COL_WHITE, AL_CENTER, 240);
-		ui_rrect(46, 124, 108, 36, 4, COL_BTN2);
-		ui_rrect(166, 124, 108, 36, 4, C2D_Color32(0xc0, 0x39, 0x2b, 0xff));
-		ui_text(100, 133, _("Cancelar"), SZ_BODY, COL_ACC, AL_CENTER, 100);
-		ui_text(220, 133, _("Salir"), SZ_BODY, COL_WHITE, AL_CENTER, 100);
-	}
+	if (S.exit_anim > 0.01f) draw_exit_dialog();
 }
 
 
@@ -962,17 +1102,7 @@ static void draw_overlays_bottom(void)
 
 enum { SPR_WHEEL, SPR_STEAM, SPR_GLOW };
 
-static float ease_out_back(float t)
-{
-	if (t >= 1) return 1;
-	const float c1 = 1.70158f, c3 = c1 + 1;
-	return 1 + c3 * powf(t - 1, 3) + c1 * powf(t - 1, 2);
-}
 
-static float clampf(float v, float lo, float hi)
-{
-	return v < lo ? lo : v > hi ? hi : v;
-}
 
 static void draw_sprite(int idx, float cx, float cy, float scale, float angle, float alpha)
 {
@@ -1061,7 +1191,7 @@ static void splash_update(float dt, u32 kd)
 		if ((splash_t > 2.6f && splash_ready()) || splash_t > 6.0f || skip) splash_out = 0;
 	} else {
 		splash_out += dt;
-		if (splash_out > 0.35f) S.scene = SC_STORE;
+		if (splash_out > 0.35f) go_scene(SC_STORE, 0);
 	}
 }
 
@@ -1144,10 +1274,53 @@ static RowList *game_list(void)
 
 static void game_set_sec(int sec)
 {
-	S.sec = (sec + SEC_COUNT) % SEC_COUNT;
+	sec = (sec + SEC_COUNT) % SEC_COUNT;
+	if (sec == S.sec) return;
+	S.sec_dir = sec > S.sec ? 1 : -1;
+	S.sec_anim = 0;
+	S.sec = sec;
 	S.lsel = 0;
 	S.lscroll = 0;
+	S.lsel_y = 0;
 	S.show_qr = false;
+}
+
+static const Box *button_box(int id)
+{
+	switch (id) {
+	case BT_CART: return &B_CART;
+	case BT_WISH: return &B_WISH;
+	case BT_SHOTS: return &B_SHOTS;
+	case BT_INST: return &B_INST;
+	case BT_PREV: return &B_PREV;
+	case BT_NEXT: return &B_NEXT;
+	case BT_EXIT_NO: return &B_EXIT_NO;
+	case BT_EXIT_YES: return &B_EXIT_YES;
+	}
+	return NULL;
+}
+
+// Botones táctiles: se hunden al tocar y actúan al soltar dentro (como en Gemi3DS).
+// Devuelve el botón soltado dentro, o BT_NONE.
+static int touch_x, touch_y;
+static int press_update(u32 kd, u32 kh, u32 ku, touchPosition *tp, const int *ids, int n)
+{
+	if (kh & KEY_TOUCH) {
+		touch_x = tp->px;
+		touch_y = tp->py;
+	}
+	if (kd & KEY_TOUCH) {
+		S.pressed = BT_NONE;
+		for (int i = 0; i < n; i++)
+			if (hit(button_box(ids[i]), tp->px, tp->py)) S.pressed = ids[i];
+	}
+	if ((kh & KEY_TOUCH) && S.pressed && !hit(button_box(S.pressed), touch_x, touch_y)) S.pressed = BT_NONE;
+	if (ku & KEY_TOUCH) {
+		int r = S.pressed;
+		S.pressed = BT_NONE;
+		return r;
+	}
+	return BT_NONE;
 }
 
 static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
@@ -1172,26 +1345,55 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		if (S.rsel >= S.nreviews - 3) reviews_more();
 	}
 
-	if (kd & KEY_TOUCH) {
-		int x = tp->px, y = tp->py;
-		if (hit(&B_SEG, x, y)) game_set_sec((int)((x - B_SEG.x) / (B_SEG.w / SEC_COUNT)));
-		else if (a && hit(&B_SHOTS, x, y) && a->nshots) { S.scene = SC_SHOTS; S.shot = 0; }
-		else if (a && (hit(&B_CART, x, y) || hit(&B_WISH, x, y) || hit(&B_INST, x, y)))
-			toast(_("Disponible al iniciar sesión"));
+	if ((kd & KEY_TOUCH) && hit(&B_SEG, tp->px, tp->py))
+		game_set_sec((int)((tp->px - B_SEG.x) / (B_SEG.w / SEC_COUNT)));
+	static const int ids[] = {BT_CART, BT_WISH, BT_SHOTS, BT_INST};
+	int b = a ? press_update(kd, kh, ku, tp, ids, 4) : BT_NONE;
+	if (b == BT_SHOTS && a->nshots) {
+		go_scene(SC_SHOTS, 1);
+		S.shot = 0;
+		S.strip = 0;
+		S.shot_anim = 1;
+	} else if (b == BT_CART || b == BT_WISH || b == BT_INST) {
+		toast(_("Disponible al iniciar sesión"));
 	}
 }
 
-static void input_shots(u32 kd)
+static void set_shot(int n, int count)
+{
+	if (n < 0 || n >= count || n == S.shot) return;
+	S.shot_dir = n > S.shot ? 1 : -1;
+	S.shot = n;
+	S.shot_anim = 0;
+}
+
+static void input_shots(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 {
 	InfoEnt *e = info_get(S.app, false);
 	int n = (e && e->done) ? e->info.nshots : 0;
-	touchPosition tp;
-	hidTouchRead(&tp);
-	bool prev = (kd & (KEY_LEFT | KEY_L)) || ((kd & KEY_TOUCH) && tp.px < 160 && tp.py > 120 && tp.py < 180);
-	bool next = (kd & (KEY_RIGHT | KEY_R)) || ((kd & KEY_TOUCH) && tp.px >= 160 && tp.py > 120 && tp.py < 180);
-	if (prev && S.shot > 0) S.shot--;
-	if (next && S.shot + 1 < n) S.shot++;
-	if (kd & KEY_B) S.scene = SC_GAME;
+	if (kd & (KEY_LEFT | KEY_L)) set_shot(S.shot - 1, n);
+	if (kd & (KEY_RIGHT | KEY_R)) set_shot(S.shot + 1, n);
+	if (kd & KEY_B) {
+		go_scene(SC_GAME, -1);
+		return;
+	}
+	static const int ids[] = {BT_PREV, BT_NEXT};
+	int b = press_update(kd, kh, ku, tp, ids, 2);
+	if (b == BT_PREV) set_shot(S.shot - 1, n);
+	if (b == BT_NEXT) set_shot(S.shot + 1, n);
+	// La tira: deslizar el dedo pasa de captura; tocar una miniatura la abre
+	static int sx0;
+	static bool on_strip;
+	if (kd & KEY_TOUCH) {
+		sx0 = tp->px;
+		on_strip = tp->py >= STRIP_Y - 6 && tp->py < STRIP_Y + THUMB_H + 12;
+	}
+	if ((ku & KEY_TOUCH) && on_strip) {
+		int dx = touch_x - sx0;
+		if (abs(dx) > 30) set_shot(S.shot + (dx < 0 ? 1 : -1), n);
+		else set_shot(S.shot + (int)floorf((sx0 - BOT_W / 2 + THUMB_STEP / 2.0f) / THUMB_STEP), n);
+		on_strip = false;
+	}
 }
 
 // ============================================================================
@@ -1244,6 +1446,9 @@ int main(int argc, char **argv)
 
 	S.scene = SC_SPLASH;
 	S.tab = TAB_OFFERS;
+	S.tab_x = TAB_OFFERS;
+	S.quit_fade = -1;
+	S.scene_anim = S.sec_anim = S.shot_anim = 1;
 	sprites = C2D_SpriteSheetLoad("romfs:/gfx/sprites.t3x");
 	if (sprites) {
 		for (int i = 0; i < 3; i++)
@@ -1260,7 +1465,9 @@ int main(int argc, char **argv)
 		u64 now = osGetTime();
 		float dt = (now - last) / 1000.0f;
 		last = now;
+		if (dt > 0.1f) dt = 0.1f;   // tras HOME o una pausa larga, sin saltos raros
 		g_time += dt;
+		g_dt = dt;
 		frame_no++;
 		if (S.toast_t > 0) S.toast_t -= dt;
 
@@ -1289,23 +1496,27 @@ int main(int argc, char **argv)
 		}
 		img_update();
 
-		if (S.ask_exit) {
-			if (kd & KEY_A) S.quit = true;
-			if (kd & (KEY_B | KEY_START)) S.ask_exit = false;
-			if (kd & KEY_TOUCH) {
-				if (tp.py >= 124 && tp.py < 160 && tp.px >= 166 && tp.px < 274) S.quit = true;
-				else if (tp.py >= 124 && tp.py < 160 && tp.px >= 46 && tp.px < 154) S.ask_exit = false;
-			}
+		if (S.quit_fade >= 0) {
+			S.quit_fade += dt;
+			if (S.quit_fade > 0.3f) S.quit = true;
+			kd = kh = ku = 0;
+		} else if (S.ask_exit) {
+			static const int ids[] = {BT_EXIT_NO, BT_EXIT_YES};
+			int b = press_update(kd, kh, ku, &tp, ids, 2);
+			if ((kd & KEY_A) || b == BT_EXIT_YES) S.quit_fade = 0;
+			if ((kd & (KEY_B | KEY_START)) || b == BT_EXIT_NO) S.ask_exit = false;
 			kd = kh = ku = 0;
 		} else if (kd & KEY_START) {
 			S.ask_exit = true;
+			S.exit_anim = 0;
+			S.pressed = BT_NONE;
 			kd = kh = ku = 0;
 		}
 
 		switch (S.scene) {
 		case SC_STORE: input_store(kd, kh, ku, &tp); break;
 		case SC_GAME: input_game(kd, kh, ku, &tp); break;
-		case SC_SHOTS: input_shots(kd); break;
+		case SC_SHOTS: input_shots(kd, kh, ku, &tp); break;
 		case SC_SPLASH: splash_update(dt, kd); break;
 		}
 
@@ -1317,7 +1528,16 @@ int main(int argc, char **argv)
 		game_poll(ge && ge->done ? &ge->info : NULL);
 
 		// Desplazamientos suaves
-		if (!S.finger_scrolled) S.scroll = approach(S.scroll, S.scroll_target, 0.3f);
+		if (!S.finger_scrolled) S.scroll = approach(S.scroll, S.scroll_target, 18);
+		S.tab_x = approach(S.tab_x, S.tab, 16);
+		S.sel_y = approach(S.sel_y, S.sel, 24);
+		S.lsel_y = approach(S.lsel_y, S.lsel, 24);
+		S.seg_x = approach(S.seg_x, S.sec, 16);
+		S.strip = approach(S.strip, S.shot, 12);
+		S.exit_anim = approach(S.exit_anim, S.ask_exit ? 1 : 0, S.ask_exit ? 7 : 16);
+		S.sec_anim = clampf(S.sec_anim + dt / 0.22f, 0, 1);
+		S.scene_anim = clampf(S.scene_anim + dt / 0.28f, 0, 1);
+		S.shot_anim = clampf(S.shot_anim + dt / 0.30f, 0, 1);
 		{
 			RowList *l = game_list();
 			float rh = 22, vis = SCR_H - 4 - 42;
@@ -1325,38 +1545,51 @@ int main(int argc, char **argv)
 				float y = S.lsel * rh, t = S.lscroll;
 				if (y < t) t = y;
 				if (y + rh > t + vis) t = y + rh - vis;
-				S.lscroll = approach(S.lscroll, t, 0.3f);
+				S.lscroll = approach(S.lscroll, t, 18);
 			}
 			float card = 20 + 3 * 12 + 6 + 5, rvis = SCR_H - 20 - 52;
 			float ry = S.rsel * card, rt = S.rscroll;
 			if (ry < rt) rt = ry;
 			if (ry + card > rt + rvis) rt = ry + card - rvis;
-			S.rscroll = approach(S.rscroll, rt, 0.3f);
+			S.rscroll = approach(S.rscroll, rt, 18);
 		}
 
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 		ui_begin_frame();
 		C2D_TargetClear(top, COL_BG);
 		C2D_SceneBegin(top);
+		// Al cambiar de escena el contenido entra deslizándose y aparece desde el fondo
+		float ce = ease_out_cubic(S.scene_anim);
+		C2D_ViewReset();
+		C2D_ViewTranslate(S.scene_dir * (1 - ce) * 26, 0);
 		switch (S.scene) {
 		case SC_STORE: draw_store_top(); break;
 		case SC_GAME: draw_game_top(); break;
 		case SC_SHOTS: draw_shots_top(); break;
 		case SC_SPLASH: draw_splash_top(); break;
 		}
+		C2D_ViewReset();
+		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
+		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
+		if (S.scene == SC_STORE || S.scene == SC_GAME) draw_status(NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
-		if (S.ask_exit) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, 0x80));
+		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
+		if (S.quit_fade >= 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(S.quit_fade / 0.3f, 0, 1))));
 
 		C2D_TargetClear(bot, COL_BG);
 		C2D_SceneBegin(bot);
+		C2D_ViewTranslate(S.scene_dir * (1 - ce) * 26, 0);
 		switch (S.scene) {
 		case SC_STORE: draw_store_bottom(); break;
 		case SC_GAME: draw_game_bottom(); break;
 		case SC_SHOTS: draw_shots_bottom(); break;
 		case SC_SPLASH: draw_splash_bottom(); break;
 		}
+		C2D_ViewReset();
+		if (ce < 1) ui_rect(0, 0, BOT_W, SCR_H, col_alpha(COL_BG, (1 - ce) * 0.9f));
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		draw_overlays_bottom();
+		if (S.quit_fade >= 0) ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(S.quit_fade / 0.3f, 0, 1))));
 #ifdef DEV_RELAY
 		// Solo en pruebas: tiempo de CPU por frame (ticks de la consola), medio cada 2 s en net.log
 		{

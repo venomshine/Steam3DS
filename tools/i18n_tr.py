@@ -132,7 +132,6 @@ TR = {
     "Steam no tiene juegos parecidos para este": ("Steam has no similar games for this one", "似たゲームは見つかりませんでした"),
 
     # Capturas
-    "Captura %d de %d": ("Screenshot %d of %d", "スクリーンショット %d / %d"),
     "No se pudo cargar la captura": ("Couldn't load the screenshot", "スクリーンショットを読み込めませんでした"),
     "‹ Anterior": ("‹ Previous", "‹ 前へ"),
     "Siguiente ›": ("Next ›", "次へ ›"),
@@ -143,4 +142,5 @@ TR = {
     # Salir
     "¿Salir de Steam3DS?": ("Exit Steam3DS?", "Steam3DSを終了しますか？"),
     "Cancelar": ("Cancel", "キャンセル"),
+    "Volverás al menú HOME.": ("You'll go back to the HOME Menu.", "HOMEメニューに戻ります。"),
 }

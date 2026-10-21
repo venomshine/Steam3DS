@@ -63,7 +63,7 @@ void ui_scissor_off(void);
 typedef enum {
 	IC_CART, IC_HEART, IC_PC, IC_IMAGE, IC_SEARCH, IC_USER, IC_USERS, IC_TROPHY, IC_CARD,
 	IC_CLOUD, IC_HOME, IC_PAD, IC_THUMB_UP, IC_THUMB_DOWN, IC_WRENCH, IC_COIN, IC_SWORDS,
-	IC_PHONE, IC_WIFI, IC_LOCK,
+	IC_PHONE, IC_WIFI, IC_LOCK, IC_POWER,
 } Icon;
 void ui_icon(Icon ic, float x, float y, float s, u32 col);
 
@@ -76,3 +76,15 @@ void ui_qr(const char *text, float x, float y, float size);
 
 extern C2D_Font g_font;
 extern float g_time;           // segundos desde el arranque (animaciones)
+extern float g_dt;             // duración del último frame
+
+// Animación
+float ease_out_cubic(float t);
+float ease_out_back(float t);
+float clampf(float v, float lo, float hi);
+float approach(float v, float target, float speed);   // suavizado exponencial (por segundo)
+u32 col_alpha(u32 c, float a);
+u32 col_lerp(u32 a, u32 b, float t);
+
+// Glifo del sistema para un botón ("A", "B", "X", "Y", "L", "R", "+" = cruceta); NULL si no hay
+const char *ui_button_glyph(const char *key);

@@ -8,6 +8,7 @@ shot v02_inicio_sel
 press R
 wait 300
 press DOWN
+press DOWN
 wait 250
 shot v03_ofertas
 press A

@@ -1,5 +1,4 @@
 #include "ui.h"
-#include "fx.h"
 #include "qrcodegen.h"
 
 #include <math.h>
@@ -537,27 +536,18 @@ void ui_price_box(float x, float y, float w, float h, const char *orig, const ch
 	}
 }
 
-// Cargando: un aro tenue con dos arcos que giran a distinta velocidad y una cola que se apaga
-static void arc(float cx, float cy, float r, float a0, float len, float th, u32 col, bool fade)
-{
-	const int N = 14;
-	for (int i = 0; i < N; i++) {
-		float b0 = a0 + len * i / N, b1 = a0 + len * (i + 1) / N;
-		u32 c = fade ? col_alpha(col, (float)(i + 1) / N) : col;
-		C2D_DrawLine(cx + cosf(b0) * r, cy + sinf(b0) * r, c, cx + cosf(b1) * r, cy + sinf(b1) * r, c, th, 0.5f);
-	}
-}
-
+// Cargando: doce rayitas que se van apagando en círculo (como el indicador de iOS)
 void ui_spinner(float cx, float cy, float r, u32 col)
 {
-	float th = r > 7 ? 2.0f : 1.5f;
-	arc(cx, cy, r, 0, 2 * M_PI, 1, col_alpha(col, 0.15f), false);
-	float a = g_time * 5.0f;
-	arc(cx, cy, r, a, 2.2f, th, col, true);
-	float hx = cx + cosf(a + 2.2f) * r, hy = cy + sinf(a + 2.2f) * r;
-	ui_circle(hx, hy, th * 1.1f, COL_WHITE);
-	ui_circle(hx, hy, th * 2.6f, col_alpha(col, 0.25f));
-	arc(cx, cy, r * 0.55f, -g_time * 3.2f, 1.6f, 1, col_alpha(col, 0.6f), true);
+	int head = (int)(g_time * 12) % 12;
+	float th = r > 7 ? 2.0f : 1.6f;
+	for (int i = 0; i < 12; i++) {
+		float a = i * (float)M_PI / 6 - (float)M_PI / 2;
+		int age = (head - i + 12) % 12;
+		float k = 1 - age / 12.0f;
+		u32 c = col_alpha(col, 0.18f + 0.82f * k * k);
+		C2D_DrawLine(cx + cosf(a) * r * 0.48f, cy + sinf(a) * r * 0.48f, c, cx + cosf(a) * r, cy + sinf(a) * r, c, th, 0.5f);
+	}
 }
 
 void ui_battery(float x, float y, int pct, bool charging)
@@ -585,10 +575,9 @@ void ui_qr(const char *text, float x, float y, float size)
 	float m = floorf(size / (n + 4));
 	float total = m * (n + 4);
 	float ox = floorf(x + (size - total) / 2), oy = floorf(y + (size - total) / 2);
-	// Marco de escáner: halo, esquinas de HUD y una línea de luz que lo recorre de arriba abajo
-	fx_glow(ox, oy, total, total, 2, COL_ACC, 6);
-	fx_brackets(ox - 6, oy - 6, total + 12, total + 12, 14, COL_ACC);
-	ui_rect(ox, oy, total, total, COL_WHITE);
+	// Tarjeta blanca redondeada con sombra suave
+	ui_rrect(ox - 4, oy - 2, total + 8, total + 8, 12, C2D_Color32(0, 0, 0, 0x40));
+	ui_rrect(ox - 4, oy - 4, total + 8, total + 8, 12, COL_WHITE);
 	u32 black = C2D_Color32(0, 0, 0, 0xff);
 	for (int j = 0; j < n; j++) {
 		int i = 0;
@@ -600,9 +589,6 @@ void ui_qr(const char *text, float x, float y, float size)
 			i = k;
 		}
 	}
-	float sy = oy + total * (0.5f + 0.5f * sinf(g_time * 1.6f));
-	ui_rect(ox - 4, sy - 3, total + 8, 6, col_alpha(COL_ACC, 0.12f));
-	ui_rect(ox - 4, sy - 0.5f, total + 8, 1, col_alpha(COL_ACC, 0.75f));
 }
 
 // ----------------------------------------------------------------------------

@@ -445,20 +445,18 @@ void auth_update(void)
 	for (int i = 0; i < MAX_WEB; i++) {
 		if (!xfer_req[i]) continue;
 		xfer_any = true;
-		if (xfer_req[i]->state < REQ_DONE) {
-			xfer_busy = true;
-			continue;
-		}
-		if (xfer_req[i]->login_cookie) {
-			memcpy(web[i].host, xfer_host[i], sizeof web[i].host);
-			snprintf(web[i].cookie, sizeof web[i].cookie, "%s", xfer_req[i]->login_cookie);
-		} else {
-			netlog("sesion: %s sin cookie (%s)", xfer_host[i], xfer_req[i]->err[0] ? xfer_req[i]->err : "sin Set-Cookie");
-		}
+		if (xfer_req[i]->state < REQ_DONE) xfer_busy = true;
 	}
 	if (xfer_any && !xfer_busy) {
 		for (int i = 0; i < MAX_WEB; i++) {
-			if (xfer_req[i]) net_release(xfer_req[i]);
+			if (!xfer_req[i]) continue;
+			if (xfer_req[i]->login_cookie) {
+				memcpy(web[i].host, xfer_host[i], sizeof web[i].host);
+				snprintf(web[i].cookie, sizeof web[i].cookie, "%s", xfer_req[i]->login_cookie);
+			} else {
+				netlog("sesion: %s sin cookie (%s)", xfer_host[i], xfer_req[i]->err[0] ? xfer_req[i]->err : "sin Set-Cookie");
+			}
+			net_release(xfer_req[i]);
 			xfer_req[i] = NULL;
 		}
 		transfers_done(now);

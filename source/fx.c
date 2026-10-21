@@ -213,7 +213,11 @@ void fx_button(float x, float y, float w, float h, float r, const FxButton *b)
 		ui_vgrad(x + in, y + 1, w - 2 * in, h * 0.5f, col_alpha(COL_WHITE, 0.06f * a), col_alpha(COL_WHITE, 0));
 		fx_rim(x, y, w, h, r, a, false);
 	}
-	if (b->focus && a >= 1) fx_rim(x, y, w, h, r, 1, true);
+	if (b->focus && a >= 1) {
+		// Elegido con la cruceta: un poco más claro y con el reflejo de color en el borde
+		ui_rrect(x, y, w, h, r, col_alpha(COL_WHITE, 0.10f));
+		fx_rim(x, y, w, h, r, 1, true);
+	}
 }
 
 void fx_select(float x, float y, float w, float h, float r, float alpha)

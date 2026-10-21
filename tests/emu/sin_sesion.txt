@@ -1,0 +1,31 @@
+# Sin sesión: ficha (Y = comprar en el móvil), menú, QR de inicio
+wait 900
+press R
+wait 360
+press DOWN
+press DOWN
+wait 250
+press A
+wait 450
+shot n01_ficha_sin_sesion
+press Y
+wait 40
+shot n02_qr_movil
+press Y
+wait 20
+touch 160 89
+wait 30
+shot n03_toque_sin_sesion
+press B
+wait 30
+press START
+wait 30
+shot n04_menu
+press A
+wait 200
+shot n05_qr_sesion
+wait 330
+shot n06_escaneado
+wait 330
+shot n07_dentro
+quit

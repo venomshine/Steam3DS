@@ -5,7 +5,7 @@
 INDIRECT = [
     "Inicio", "Ofertas", "Demos", "Betas",
     "Resumen", "Requisitos", "Opiniones", "Extras", "Similares",
-    "Ficha", "Pestaña", "Salir", "Menú", "Carrito", "Quitar", "Pagar", "Tienda", "Reintentar",
+    "Ficha", "Pestaña", "Salir", "Menú", "Carrito", "Quitar", "Pagar", "Tienda", "Reintentar", "Aceptar", "Elegir", "Abrir",
     "Iniciar sesión con el móvil", "Mi perfil", "Biblioteca", "Lista de deseos", "Cerrar sesión", "Salir de Steam3DS",
     "Abre la app de Steam en el móvil", "Toca el escudo de Steam Guard", "Elige «Escanear un código QR» y apunta aquí", "Elegir", "Abrir ficha", "Apartado", "Volver", "Comprar en el móvil", "Cambiar", "Abrir", "Borrar",
     "Lo más vendido", "Novedades populares", "Próximamente", "Gratis para jugar",
@@ -92,8 +92,6 @@ TR = {
     "Deseados": ("Wishlist", "ウィッシュリスト"),
     "Capturas (%d)": ("Screenshots (%d)", "スクリーンショット (%d)"),
     "Instalar en mi PC": ("Install on my PC", "PCにインストール"),
-    "Inicia sesión para usar el carrito, deseados e instalar": (
-        "Sign in to use the cart, wishlist and install", "カート・ウィッシュリスト・インストールはサインイン後に使えます"),
     "Disponible al iniciar sesión": ("Available after signing in", "サインイン後に使えます"),
     "Comprar en el móvil": ("Buy on phone", "スマホで購入"),
     "Escanea el código con la cámara: se abre este juego en la tienda de Steam y lo pagas desde ahí.": (
@@ -154,8 +152,6 @@ TR = {
 
     # Capturas
     "No se pudo cargar la captura": ("Couldn't load the screenshot", "スクリーンショットを読み込めませんでした"),
-    "‹ Anterior": ("‹ Previous", "‹ 前へ"),
-    "Siguiente ›": ("Next ›", "次へ ›"),
 
     # Pantalla de carga
     "hecho por VENOMSHiNE": ("made by VENOMSHiNE", "VENOMSHiNE 作"),
@@ -280,7 +276,6 @@ TR = {
     'Al pagar aceptas el Acuerdo de Suscriptor de Steam. Al ser contenido digital, la descarga puede empezar ya y renuncias al desistimiento de 14 días de la UE; el reembolso de Steam sigue valiendo (14 días y menos de 2 h jugadas).': ("By paying you accept the Steam Subscriber Agreement. As it's digital content, the download can start right away and you waive the EU 14-day withdrawal right; Steam refunds still apply (14 days and under 2 h played).", '支払うとSteam利用規約に同意したことになります。デジタルコンテンツのためすぐにダウンロードが始まり、EUの14日間の撤回権は放棄されます。Steamの返金（14日以内・プレイ2時間未満）は引き続き有効です。'),
     'Algo del carrito no se puede comprar en tu país.': ("Something in the cart can't be bought in your country.", 'カート内の一部はお住まいの国で購入できません。'),
     'CVV (3 o 4 números, detrás de la tarjeta)': ('CVV (3 or 4 digits, on the back of the card)', 'CVV（カード裏面の3〜4桁）'),
-    'CVV escrito · toca para cambiarlo': ('CVV entered · tap to change it', 'CVV入力済み · タップで変更'),
     'Cartera de Steam': ('Steam Wallet', 'Steamウォレット'),
     'Compra en camino': ('Purchase on its way', '購入処理中'),
     'Compra enviada para aprobar': ('Purchase sent for approval', '購入の承認を依頼しました'),
@@ -322,7 +317,6 @@ TR = {
     'Steam no abrió la página de pago. Vuelve a iniciar sesión o paga en el móvil.': ("Steam didn't open checkout. Sign in again or pay on your phone.", 'Steamの支払いページが開けませんでした。サインインし直すかスマホで支払ってください。'),
     'Steam no acepta este método para esta compra. Prueba con otro o paga en el móvil.': ("Steam doesn't accept this method for this purchase. Try another or pay on your phone.", 'この購入ではこの支払い方法は使えません。別の方法かスマホで支払ってください。'),
     'Steam no aceptó el pago.': ("Steam didn't accept the payment.", 'Steamが支払いを受け付けませんでした。'),
-    'Steam pide el CVV · toca para escribirlo': ('Steam asks for the CVV · tap to enter it', 'CVVが必要です · タップして入力'),
     'Tarjeta': ('Card', 'カード'),
     'Tienes otra compra a medias en Steam. Termínala o cancélala en el móvil y vuelve a probar.': ('You have another purchase in progress on Steam. Finish or cancel it on your phone and try again.', 'Steamで別の購入が進行中です。スマホで完了またはキャンセルしてから再試行してください。'),
     'Total': ('Total', '合計'),
@@ -337,4 +331,12 @@ TR = {
     'Tienda': ('Store', 'ストア'),
     'Reintentar': ('Retry', '再試行'),
     "A: ir a tu biblioteca": ("A: go to your library", "A：ライブラリへ"),
+    "No está a la venta": ("Not for sale", "販売されていません"),
+    "CVV escrito · cambiarlo": ("CVV entered · change it", "CVV入力済み · 変更"),
+    "Steam pide el CVV · escribirlo": ("Steam asks for the CVV · enter it", "CVVが必要です · 入力"),
+    "Anterior": ("Previous", "前へ"),
+    "Siguiente": ("Next", "次へ"),
+    "Inicia sesión (START) para el carrito, deseados e instalar": ("Sign in (START) for the cart, wishlist and installing", "カート・ウィッシュリスト・インストールはサインイン（START）"),
+    "Código %d %s": ("Code %d %s", "コード %d %s"),
+    "Conectando tu sesión de Steam…": ("Connecting your Steam session…", "Steamのセッションに接続中…"),
 }

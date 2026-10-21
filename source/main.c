@@ -126,6 +126,8 @@ static struct {
 	bool want_cvv;               // abrir el teclado del CVV (fuera del frame)
 	float pay_hold;              // A mantenido para confirmar (0..1)
 	bool pay_armed;              // hay que soltar A antes de poder mantenerlo
+	int paysel;                  // método elegido con la cruceta
+	int pfocus;                  // botón elegido con la cruceta en el perfil
 } S;
 
 enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
@@ -679,7 +681,8 @@ static void draw_rating(float x, float y, float s, const AppInfo *a)
 		snprintf(tmp, sizeof tmp, "%s", !strcmp(big, "E10") ? "E10+" : big);
 		big = tmp;
 	}
-	float bs = s * (strlen(big) > 2 ? 0.020f : 0.026f);
+	size_t bl = strlen(big);
+	float bs = s * (bl > 3 ? 0.014f : bl > 2 ? 0.018f : 0.026f);
 	ui_text(x + s / 2, y + h * 0.10f, big, bs, fg, AL_CENTER, s - 2);
 	ui_text(x + s / 2, y + h * 0.66f, sys, s * 0.0085f, fg, AL_CENTER, s - 2);
 }
@@ -972,8 +975,9 @@ static void draw_search_bar(void)
 	if (pressed) fx_select(8, y, BOT_W - 16, SEARCH_BAR - 8, 11, 1);
 	else fx_glass(8, y, BOT_W - 16, SEARCH_BAR - 8, 11, 1, 0);
 	ui_icon(IC_SEARCH, 16, y + 5, 12, COL_ACC);
-	if (t->term[0]) ui_text(34, y + 3, t->term, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 60);
-	else ui_text(34, y + 3, _("Buscar en la tienda…"), SZ_SMALL, COL_DIM, AL_LEFT, BOT_W - 60);
+	if (t->term[0]) ui_text(34, y + 3, t->term, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 76);
+	else ui_text(34, y + 3, _("Buscar en la tienda…"), SZ_SMALL, COL_DIM, AL_LEFT, BOT_W - 76);
+	hint_key(BOT_W - 30, y + 2, "Y", true);
 }
 
 // Fila elegida: una cápsula de cristal claro con el reflejo de color en el borde
@@ -1081,6 +1085,9 @@ static void draw_store_bottom(void)
 			static const char *hs[] = {"Y", "Buscar", "A", "Abrir", "L R", "Pestaña"};
 			draw_hints(hs, 3);
 		}
+	} else if (t->list.err[0] && !t->list.req && !t->list.count) {
+		static const char *hh3[] = {"A", "Reintentar", "L R", "Pestaña", "START", "Menú"};
+		draw_hints(hh3, 3);
 	} else {
 		static const char *hh2[] = {"A", "Ficha", "L R", "Pestaña", "START", "Menú"};
 		draw_hints(hh2, 3);
@@ -1561,18 +1568,30 @@ static bool hit(const Box *b, int x, int y)
 	return x >= b->x && x < b->x + b->w && y >= b->y && y < b->y + b->h;
 }
 
-static void draw_button(const Box *b, Icon ic, const char *label, u32 top, u32 bot, u32 fg, float alpha, bool pressed)
+// Botón de cristal con su icono y, si se puede pulsar también con un botón de la consola, la
+// tecla delante (key); focus: elegido con la cruceta (reflejo de color en el borde)
+static void draw_button_k(const Box *b, const char *key, bool focus, Icon ic, const char *label, u32 top, u32 bot, u32 fg, float alpha, bool pressed)
 {
 	// Los botones de color (principales) son cristal teñido; los demás, cristal neutro
 	bool flat = top == bot;
-	FxButton fb = {flat ? 0 : col_lerp(top, bot, 0.5f), alpha, pressed, false};
+	FxButton fb = {flat ? 0 : col_lerp(top, bot, 0.5f), alpha, pressed, focus};
 	fx_button(b->x, b->y, b->w, b->h, b->h / 2, &fb);
-	float tw = ui_text_w(label, SZ_SMALL) + 18;
+	float kw = key ? hint_key(0, 0, key, false) + 5 : 0;
+	float tw = kw + ui_text_w(label, SZ_SMALL) + 18;
+	if (tw > b->w - 16) tw = b->w - 16;
 	float x = b->x + (b->w - tw) / 2;
 	u32 f = col_alpha(fg, alpha < 1 ? 0.5f : 1);
-	float ty = b->y + (b->h - ui_line_h(SZ_SMALL)) / 2 + 1 + (pressed ? 1 : 0);
-	ui_icon(ic, x, b->y + (b->h - 12) / 2 + (pressed ? 1 : 0), 12, f);
-	ui_text(x + 18, ty, label, SZ_SMALL, f, AL_LEFT, b->w - 24);
+	float dy = pressed ? 1 : 0;
+	float ty = b->y + (b->h - ui_line_h(SZ_SMALL)) / 2 + 1 + dy;
+	if (key && alpha >= 1) hint_key(x, b->y + (b->h - 18) / 2 + dy, key, true);
+	x += kw;
+	ui_icon(ic, x, b->y + (b->h - 12) / 2 + dy, 12, f);
+	ui_text(x + 18, ty, label, SZ_SMALL, f, AL_LEFT, b->x + b->w - 8 - (x + 18));
+}
+
+static void draw_button(const Box *b, Icon ic, const char *label, u32 top, u32 bot, u32 fg, float alpha, bool pressed)
+{
+	draw_button_k(b, NULL, false, ic, label, top, bot, fg, alpha, pressed);
 }
 
 // Gratis: el juego lo es, es una demo, o la única forma de tenerlo es una licencia gratuita
@@ -1670,27 +1689,38 @@ static void draw_game_bottom(void)
 		bool free = game_is_free(a, opts, nopt);
 		bool carted = in && !own && shop_in_cart(a->appid, opts, nopt);
 		bool busy_cart = shop_busy_with(free ? SH_FREE : SH_CART_ADD, a->appid);
-		const char *cl = own ? _("Ya lo tienes") : free ? _("Añadir a la biblioteca") : carted ? _("En el carrito · Ver") : _("Añadir al carrito");
+		// Sin forma de comprarlo (aún no ha salido o no se vende aquí): el botón lo dice y se apaga
+		bool soon = in && !own && !free && !carted && opts && nopt == 0;
+		const char *cl = own ? _("Ya lo tienes") : free ? _("Añadir a la biblioteca") : carted ? _("En el carrito · Ver")
+			: soon ? (a->coming_soon ? _("Próximamente") : _("No está a la venta")) : _("Añadir al carrito");
 		if (busy_cart) cl = free ? _("Añadiendo a tu biblioteca…") : _("Añadiendo al carrito…");
-		if (carted) draw_button(&B_CART, IC_CART, cl, C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_CART);
-		else draw_button(&B_CART, IC_CART, cl, C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), C2D_Color32(0xd2, 0xef, 0xa9, 0xff),
-			in && !own ? 1 : 0.45f, S.pressed == BT_CART);
+		if (!in) draw_button_k(&B_CART, "Y", false, IC_PHONE, _("Comprar en el móvil"), C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff),
+			COL_WHITE, 1, S.pressed == BT_CART);
+		else if (carted) draw_button_k(&B_CART, "Y", false, IC_CART, cl, C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_CART);
+		else draw_button_k(&B_CART, in && !own && !soon ? "Y" : NULL, false, IC_CART, cl, C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), C2D_Color32(0xd2, 0xef, 0xa9, 0xff),
+			in && !own && !soon ? 1 : 0.45f, S.pressed == BT_CART);
 		bool busy_wish = shop_busy_with(wished ? SH_WISH_REMOVE : SH_WISH_ADD, a->appid);
-		if (wished) draw_button(&B_WISH, IC_HEART, busy_wish ? _("Quitando…") : _("En deseados"), C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_WISH);
-		else draw_button(&B_WISH, IC_HEART, busy_wish ? _("Añadiendo…") : _("Deseados"), COL_BTN2, COL_BTN2, COL_ACC, in && !own ? 1 : 0.45f, S.pressed == BT_WISH);
+		if (wished) draw_button_k(&B_WISH, own ? NULL : "SELECT", false, IC_HEART, busy_wish ? _("Quitando…") : _("En deseados"), C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_WISH);
+		else draw_button_k(&B_WISH, in && !own ? "SELECT" : NULL, false, IC_HEART, busy_wish ? _("Añadiendo…") : _("Deseados"), COL_BTN2, COL_BTN2, COL_ACC, in && !own ? 1 : 0.45f, S.pressed == BT_WISH);
 		char shots[40];
 		snprintf(shots, sizeof shots, _("Capturas (%d)"), a->nshots);
-		draw_button(&B_SHOTS, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, a->nshots ? 1 : 0.45f, S.pressed == BT_SHOTS);
+		draw_button_k(&B_SHOTS, a->nshots ? "X" : NULL, false, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, a->nshots ? 1 : 0.45f, S.pressed == BT_SHOTS);
 		draw_button(&B_INST, IC_PC, _("Instalar en mi PC"), C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, own ? 1 : 0.4f, S.pressed == BT_INST);
-		if (!in) ui_text(BOT_W / 2, 172, _("Inicia sesión para usar el carrito, deseados e instalar"), SZ_TINY, COL_DIM, AL_CENTER, 300);
+		if (!in) ui_text(BOT_W / 2, 172, _("Inicia sesión (START) para el carrito, deseados e instalar"), SZ_TINY, COL_DIM, AL_CENTER, 300);
 		else if (!own) ui_text(BOT_W / 2, 172, _("Instalar se activa cuando el juego es tuyo"), SZ_TINY, COL_DIM, AL_CENTER, 300);
 	}
 
-	if (S.sec >= SEC_EXTRAS) {
+	if (S.show_qr) {
+		static const char *h[] = {"B", "Volver"};
+		draw_hints(h, 1);
+	} else if (S.sec >= SEC_EXTRAS) {
 		static const char *h[] = {"↑↓", "Elegir", "A", "Abrir ficha", "L R", "Apartado", "B", "Volver"};
 		draw_hints(h, 4);
+	} else if (!auth_logged()) {
+		static const char *h[] = {"L R", "Apartado", "Y", "Comprar en el móvil", "B", "Volver"};
+		draw_hints(h, 3);
 	} else {
-		static const char *h[] = {"L R", "Apartado", "B", "Volver", "X", "Comprar en el móvil"};
+		static const char *h[] = {"L R", "Apartado", "B", "Volver", "START", "Menú"};
 		draw_hints(h, 3);
 	}
 	if (a) draw_pick(a);
@@ -1731,17 +1761,19 @@ static void draw_shots_top(void)
 static const Box B_PREV = {12, 156, 140, 34};
 static const Box B_NEXT = {168, 156, 140, 34};
 
-static void draw_round_button(const Box *b, const char *label, bool enabled, bool pressed)
+static void draw_round_button(const Box *b, const char *key, const char *label, bool enabled, bool pressed)
 {
-	float in = pressed ? 2 : 0;
-	u32 bg = pressed ? col_lerp(COL_BTN2, COL_WHITE, 0.15f) : COL_BTN2;
-	ui_rrect(b->x + in, b->y + in, b->w - 2 * in, b->h - 2 * in, (b->h - 2 * in) / 2, col_alpha(bg, enabled ? 1 : 0.45f));
-	ui_text(b->x + b->w / 2, b->y + (b->h - ui_line_h(SZ_BODY)) / 2 + 1, label, SZ_BODY, col_alpha(COL_ACC, enabled ? 1 : 0.4f), AL_CENTER, b->w - 12);
+	FxButton fb = {0, enabled ? 1 : 0.45f, pressed, false};
+	fx_button(b->x, b->y, b->w, b->h, b->h / 2, &fb);
+	float kw = hint_key(0, 0, key, false) + 5;
+	float tw = kw + ui_text_w(label, SZ_BODY);
+	float x = b->x + (b->w - tw) / 2, dy = pressed ? 1 : 0;
+	if (enabled) hint_key(x, b->y + (b->h - 18) / 2 + dy, key, true);
+	ui_text(x + kw, b->y + (b->h - ui_line_h(SZ_BODY)) / 2 + 1 + dy, label, SZ_BODY, col_alpha(COL_WHITE, enabled ? 1 : 0.4f), AL_LEFT, 0);
 }
 
 static void draw_shots_bottom(void)
 {
-	ui_vgrad(0, 0, BOT_W, SCR_H, C2D_Color32(0x1e, 0x2d, 0x3e, 0xff), C2D_Color32(0x14, 0x19, 0x21, 0xff));
 	InfoEnt *e = info_get(S.app, false);
 	if (e && e->done) {
 		const AppInfo *a = &e->info;
@@ -1763,14 +1795,14 @@ static void draw_shots_bottom(void)
 			float sc = 1 + 0.14f * on;
 			float w = THUMB_W * sc, hh = THUMB_H * sc;
 			float x0 = cx - w / 2, y0 = STRIP_Y + (THUMB_H * 1.14f - hh) / 2;
-			if (i == S.shot) ui_rrect(x0 - 3, y0 - 3, w + 6, hh + 6, 4, col_alpha(COL_ACC, on));
+			if (i == S.shot) fx_select(x0 - 4, y0 - 4, w + 8, hh + 8, 6, on);
 			ui_rect(x0, y0, w, hh, C2D_Color32(0x0b, 0x10, 0x16, 0xff));
 			const Pic *p = img_get(a->shots[i], 150);
 			if (p) img_draw_fit_a(p, x0, y0, w, hh, 0.45f + 0.55f * on);
 			else ui_spinner(cx, y0 + hh / 2, 5, COL_DIM);
 		}
-		draw_round_button(&B_PREV, _("‹ Anterior"), S.shot > 0, S.pressed == BT_PREV);
-		draw_round_button(&B_NEXT, _("Siguiente ›"), S.shot + 1 < a->nshots, S.pressed == BT_NEXT);
+		draw_round_button(&B_PREV, "L", _("Anterior"), S.shot > 0, S.pressed == BT_PREV);
+		draw_round_button(&B_NEXT, "R", _("Siguiente"), S.shot + 1 < a->nshots, S.pressed == BT_NEXT);
 	}
 	static const char *hh[] = {"← →", "Cambiar", "B", "Volver"};
 	draw_hints(hh, 2);
@@ -1815,6 +1847,9 @@ static void draw_exit_dialog(void)
 	C2D_ViewRestore(&view);
 }
 
+static int menu_items(int *out);
+static float menu_y(int n);
+
 static void draw_overlays_bottom(void)
 {
 	if (S.toast_t > 0) {
@@ -1823,11 +1858,21 @@ static void draw_overlays_bottom(void)
 		float a = clampf(S.toast_t / 0.3f, 0, 1) * in;
 		float pad = S.toast_ic >= 0 ? 44 : 28;
 		float w = ui_text_w(S.toast, SZ_SMALL) + pad;
-		if (w > 300) w = 300;
-		float x = (BOT_W - w) / 2, y = 190 + (1 - in) * 16;
-		fx_panel(x, y, w, 26, 13, a);
-		if (S.toast_ic >= 0) ui_icon((Icon)S.toast_ic, x + 12, y + 7, 12, col_alpha(COL_ACC, a));
-		ui_text(x + pad - 14, y + 5, S.toast, SZ_SMALL, col_alpha(COL_WHITE, a), AL_LEFT, w - pad);
+		// Los avisos largos van en dos líneas en vez de cortarse
+		bool two = w > 300;
+		if (two) w = 300;
+		float th = two ? 40 : 26;
+		float base = two ? 176 : 190;
+		// Con el menú de START o el de ediciones abiertos, el aviso sube por encima del panel
+		if (S.menu_anim > 0.01f) {
+			int items[8];
+			base = menu_y(menu_items(items)) - th - 6;
+		}
+		float x = (BOT_W - w) / 2, y = base + (1 - in) * 16;
+		fx_panel(x, y, w, th, 13, a);
+		if (S.toast_ic >= 0) ui_icon((Icon)S.toast_ic, x + 12, y + (th - 12) / 2, 12, col_alpha(COL_ACC, a));
+		if (two) ui_text_wrap(x + pad - 14, y + 6, w - pad, S.toast, SZ_SMALL, col_alpha(COL_WHITE, a), 2, 14);
+		else ui_text(x + pad - 14, y + 5, S.toast, SZ_SMALL, col_alpha(COL_WHITE, a), AL_LEFT, w - pad);
 	}
 	if (S.exit_anim > 0.01f) draw_exit_dialog();
 }
@@ -1846,7 +1891,10 @@ enum { MI_LOGIN, MI_PROFILE, MI_LIBRARY, MI_WISHLIST, MI_CART, MI_LOGOUT, MI_EXI
 static int menu_items(int *out)
 {
 	int n = 0;
-	if (!auth_logged()) {
+	if (auth_info()->state == AUTH_STARTING) {
+		// Hay sesión guardada pero aún no conecta (sin red): no se ofrece iniciar otra
+		out[n++] = MI_LOGOUT;
+	} else if (!auth_logged()) {
 		out[n++] = MI_LOGIN;
 	} else {
 		out[n++] = MI_PROFILE;
@@ -1961,12 +2009,12 @@ static void draw_profile_bottom(void)
 	else snprintf(lib, sizeof lib, "%s", _("Biblioteca"));
 	if (w->wish_loaded) snprintf(wish, sizeof wish, _("Lista de deseos (%d)"), w->nwish);
 	else snprintf(wish, sizeof wish, "%s", _("Lista de deseos"));
-	draw_button(&B_PLIB, IC_PAD, lib, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PLIB);
-	draw_button(&B_PWISH, IC_HEART, wish, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PWISH);
+	draw_button_k(&B_PLIB, NULL, S.pfocus == 0, IC_PAD, lib, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PLIB);
+	draw_button_k(&B_PWISH, NULL, S.pfocus == 1, IC_HEART, wish, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PWISH);
 	u32 red = C2D_Color32(0x6a, 0x26, 0x22, 0xff);
-	draw_button(&B_PLOGOUT, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
-	static const char *hh[] = {"B", "Volver", "START", "Menú"};
-	draw_hints(hh, 2);
+	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 2, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
+	static const char *hh[] = {"↑↓", "Elegir", "A", "Abrir", "B", "Volver"};
+	draw_hints(hh, 3);
 }
 
 static int press_update(u32 kd, u32 kh, u32 ku, touchPosition *tp, const int *ids, int n);
@@ -1990,6 +2038,10 @@ static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	}
 	static const int ids[] = {BT_PLIB, BT_PWISH, BT_PLOGOUT};
 	int b = press_update(kd, kh, ku, tp, ids, 3);
+	// Con la cruceta se elige uno de los tres botones y A lo pulsa
+	if (key_repeat(kd, kh, KEY_DOWN)) S.pfocus = (S.pfocus + 1) % 3;
+	if (key_repeat(kd, kh, KEY_UP)) S.pfocus = (S.pfocus + 2) % 3;
+	if (kd & KEY_A) b = ids[S.pfocus];
 	if (b == BT_PLIB) open_account_list(TAB_LIBRARY);
 	if (b == BT_PWISH) open_account_list(TAB_WISHLIST);
 	if (b == BT_PLOGOUT) {
@@ -2012,6 +2064,7 @@ static void menu_choose(int item)
 		}
 		break;
 	case MI_PROFILE:
+		S.pfocus = 0;
 		go_scene(SC_PROFILE, 1);
 		if (!tabs[TAB_LIBRARY].started) tab_more(TAB_LIBRARY);
 		if (!tabs[TAB_WISHLIST].started) tab_more(TAB_WISHLIST);
@@ -2053,6 +2106,10 @@ static void draw_menu(void)
 		if (ai->level) snprintf(lv, sizeof lv, _("Nivel %d"), ai->level);
 		else snprintf(lv, sizeof lv, "%s", ai->account);
 		ui_text(hx + 34, hy + 14, lv, SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
+	} else if (ai->state == AUTH_STARTING) {
+		ui_icon(IC_USER, hx + 3, hy + 4, 18, col_alpha(COL_DIM, a));
+		ui_text(hx + 34, hy, ai->account[0] ? ai->account : APP_NAME, SZ_BODY, col_alpha(COL_WHITE, a), AL_LEFT, 200);
+		ui_text(hx + 34, hy + 14, _("Conectando tu sesión de Steam…"), SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
 	} else {
 		ui_icon(IC_USER, hx + 3, hy + 4, 18, col_alpha(COL_DIM, a));
 		ui_text(hx + 34, hy, APP_NAME, SZ_BODY, col_alpha(COL_WHITE, a), AL_LEFT, 200);
@@ -2682,6 +2739,7 @@ static void pay_events(void)
 		S.pay_hold = 0;
 		S.pay_armed = false;
 	}
+	if (p->state == PAY_CHOOSE) S.paysel = p->wallet ? 0 : p->card ? 1 : 2;
 	last = p->state;
 }
 
@@ -2794,14 +2852,14 @@ static void draw_pay_bottom(void)
 	case PAY_CHOOSE: {
 		ui_text(BOT_W / 2, 28, _("¿Cómo quieres pagar?"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 		bool pw = S.pressed == BT_PAYW, pc = S.pressed == BT_PAYC;
-		draw_button(&B_PAYW, IC_COIN, _("Cartera de Steam"), C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), COL_WHITE, p->wallet ? 1 : 0.4f, pw);
+		draw_button_k(&B_PAYW, NULL, S.paysel == 0, IC_COIN, _("Cartera de Steam"), C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), COL_WHITE, p->wallet ? 1 : 0.4f, pw);
 		snprintf(t, sizeof t, _("Saldo: %s"), p->wallet_fmt[0] ? p->wallet_fmt : "–");
 		ui_text(B_PAYW.x + B_PAYW.w - 10, B_PAYW.y + 10, t, SZ_SMALL, col_alpha(COL_WHITE, p->wallet ? 1 : 0.5f), AL_RIGHT, 0);
 		if (p->card && p->card_last4[0]) snprintf(t, sizeof t, _("%s terminada en %s"), card_name(p->card_type), p->card_last4);
 		else if (p->card) snprintf(t, sizeof t, "%s", card_name(p->card_type));
 		else snprintf(t, sizeof t, "%s", _("Sin tarjeta guardada"));
-		draw_button(&B_PAYC, IC_CARD, t, C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, p->card ? 1 : 0.4f, pc);
-		draw_button(&B_PAYQ, IC_PHONE, _("Pagar en el móvil (QR)"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PAYQ);
+		draw_button_k(&B_PAYC, NULL, S.paysel == 1, IC_CARD, t, C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, p->card ? 1 : 0.4f, pc);
+		draw_button_k(&B_PAYQ, "X", S.paysel == 2, IC_PHONE, _("Pagar en el móvil (QR)"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PAYQ);
 		ui_text_wrap(16, 160, BOT_W - 32, _("Solo se usa lo que ya tienes en Steam. Para añadir o cambiar una tarjeta, usa la app oficial."), SZ_TINY, COL_DIM, 3, 11);
 		break;
 	}
@@ -2815,8 +2873,8 @@ static void draw_pay_bottom(void)
 			break;
 		}
 		if (p->need_cvv) {
-			snprintf(t, sizeof t, "%s", p->cvv_set ? _("CVV escrito · toca para cambiarlo") : _("Steam pide el CVV · toca para escribirlo"));
-			draw_button(&B_CVV, IC_LOCK, t, COL_BTN2, COL_BTN2, p->cvv_set ? COL_LIME : COL_ACC, 1, S.pressed == BT_CVV);
+			snprintf(t, sizeof t, "%s", p->cvv_set ? _("CVV escrito · cambiarlo") : _("Steam pide el CVV · escribirlo"));
+			draw_button_k(&B_CVV, "Y", false, IC_LOCK, t, COL_BTN2, COL_BTN2, p->cvv_set ? COL_LIME : COL_ACC, 1, S.pressed == BT_CVV);
 		}
 		bool ready = !p->need_cvv || p->cvv_set;
 		// El botón se llena mientras mantienes A (o el dedo): así no se paga por un toque sin querer
@@ -2857,11 +2915,12 @@ static void draw_pay_bottom(void)
 		break;
 	}
 	case PAY_FAILED:
+		fx_glass(14, 30, BOT_W - 28, 160, 18, 1, 0);
 		ui_icon(IC_CART, BOT_W / 2 - 12, 40, 24, C2D_Color32(0xff, 0x8a, 0x7a, 0xff));
 		ui_text(BOT_W / 2, 74, _("No se pudo pagar"), SZ_LARGE, COL_WHITE, AL_CENTER, 0);
 		ui_text_wrap(20, 98, BOT_W - 40, pay_err_text(p), SZ_SMALL, COL_TXT, 5, 14);
 		if (p->detail || p->err[0]) {
-			snprintf(t, sizeof t, "%d %s", p->detail, p->err);
+			snprintf(t, sizeof t, _("Código %d %s"), p->detail, p->err);
 			ui_text(BOT_W / 2, 176, t, SZ_TINY, COL_DIM, AL_CENTER, 300);
 		}
 		break;
@@ -2876,6 +2935,9 @@ static void draw_pay_bottom(void)
 		draw_hints(h, 2);
 	} else if (p->state == PAY_FAILED && !p->maybe_paid) {
 		static const char *h[] = {"A", "Reintentar", "X", "Pagar en el móvil", "B", "Volver"};
+		draw_hints(h, 3);
+	} else if (p->state == PAY_CHOOSE) {
+		static const char *h[] = {"↑↓", "Elegir", "A", "Aceptar", "B", "Volver"};
 		draw_hints(h, 3);
 	} else if (!pay_busy() && p->state != PAY_LOADING && p->state != PAY_PREPARING) {
 		static const char *h[] = {"B", "Volver"};
@@ -2917,6 +2979,9 @@ static void input_pay(u32 kd, u32 kh, u32 ku, touchPosition *tp, float dt)
 	if (p->state == PAY_CHOOSE) {
 		static const int ids[] = {BT_PAYW, BT_PAYC, BT_PAYQ};
 		int b = press_update(kd, kh, ku, tp, ids, 3);
+		if (key_repeat(kd, kh, KEY_DOWN)) S.paysel = (S.paysel + 1) % 3;
+		if (key_repeat(kd, kh, KEY_UP)) S.paysel = (S.paysel + 2) % 3;
+		if (kd & KEY_A) b = ids[S.paysel];
 		if (b == BT_PAYW) { if (p->wallet) pay_choose(PM_WALLET); else toast(_("No tienes saldo en la cartera")); }
 		if (b == BT_PAYC) { if (p->card) pay_choose(PM_CARD); else toast(_("Guarda una tarjeta desde la app de Steam")); }
 		if (b == BT_PAYQ || (kd & KEY_X)) S.pay_qr = true;
@@ -3066,11 +3131,26 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		input_pick(a, kd, kh, tp);
 		return;
 	}
+	if (S.show_qr) {
+		// El QR para comprar en el móvil tapa la ficha: solo se cierra
+		if (kd & (KEY_B | KEY_Y)) S.show_qr = false;
+		return;
+	}
 	if (kd & KEY_B) { game_back(); return; }
 	if ((kd & KEY_A) && e && e->failed) { info_retry(e); return; }
 	if (kd & (KEY_L | KEY_LEFT)) game_set_sec(S.sec - 1);
 	if (kd & (KEY_R | KEY_RIGHT)) game_set_sec(S.sec + 1);
-	if ((kd & KEY_X) && a) S.show_qr = !S.show_qr;
+	// Botones de la consola para lo que hay en la pantalla táctil (la tecla va dibujada en cada botón)
+	int key_b = BT_NONE;
+	if (a) {
+		if (kd & KEY_Y) key_b = auth_logged() ? BT_CART : -1;
+		if (kd & KEY_X) key_b = BT_SHOTS;
+		if ((kd & KEY_SELECT) && auth_logged()) key_b = BT_WISH;
+	}
+	if (key_b == -1) {
+		S.show_qr = true;   // sin sesión, Y lleva a comprar en el móvil
+		return;
+	}
 
 	RowList *l = game_list();
 	if (l) {
@@ -3088,12 +3168,15 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		game_set_sec((int)((tp->px - B_SEG.x) / (B_SEG.w / SEC_COUNT)));
 	static const int ids[] = {BT_CART, BT_WISH, BT_SHOTS, BT_INST};
 	int b = a ? press_update(kd, kh, ku, tp, ids, 4) : BT_NONE;
+	if (key_b) b = key_b;
 	if (b == BT_SHOTS && a->nshots) {
 		go_scene(SC_SHOTS, 1);
 		S.shot = 0;
 		S.strip = 0;
 		S.shot_anim = 1;
-	} else if ((b == BT_CART || b == BT_WISH || b == BT_INST) && !auth_logged()) {
+	} else if (b == BT_CART && !auth_logged()) {
+		S.show_qr = true;   // sin sesión, el botón verde lleva a comprar en el móvil
+	} else if ((b == BT_WISH || b == BT_INST) && !auth_logged()) {
 		toast(_("Disponible al iniciar sesión"));
 	} else if (b == BT_CART) {
 		game_cart_button(a);
@@ -3451,6 +3534,9 @@ int main(int argc, char **argv)
 			S.rscroll = approach(S.rscroll, rt, 18);
 		}
 
+#ifdef DEV_RELAY
+		u64 tick_upd = svcGetSystemTick();
+#endif
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 		ui_begin_frame();
 		C2D_TargetClear(top, COL_BG);
@@ -3478,9 +3564,12 @@ int main(int argc, char **argv)
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
 		if (S.quit_fade >= 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(S.quit_fade / 0.3f, 0, 1))));
 
+#ifdef DEV_RELAY
+		u64 tick_top = svcGetSystemTick();
+#endif
 		C2D_TargetClear(bot, COL_BG);
 		C2D_SceneBegin(bot);
-		if (S.scene != SC_SPLASH && S.scene != SC_SHOTS) fx_backdrop(GFX_BOTTOM, BOT_W, SCR_H);
+		if (S.scene != SC_SPLASH) fx_backdrop(GFX_BOTTOM, BOT_W, SCR_H);
 		C2D_ViewTranslate(S.scene_dir * (1 - ce) * 26, 0);
 		switch (S.scene) {
 		case SC_STORE: draw_store_bottom(); break;
@@ -3509,7 +3598,14 @@ int main(int argc, char **argv)
 			static double acc, worst;
 			static int n;
 			static u64 last_log;
-			double ms = (svcGetSystemTick() - tick0) / (double)SYSCLOCK_ARM11 * 1000.0;
+			u64 tick_end = svcGetSystemTick();
+			double ms = (tick_end - tick0) / (double)SYSCLOCK_ARM11 * 1000.0;
+			// Un frame lento: en qué parte se fue el tiempo
+			if (ms > 40) {
+				double k = 1000.0 / SYSCLOCK_ARM11;
+				netlog("lento: %.1fms escena=%d pago=%d actualizar=%.1f arriba=%.1f abajo=%.1f", ms, S.scene, pay_info()->state,
+					(tick_upd - tick0) * k, (tick_top - tick_upd) * k, (tick_end - tick_top) * k);
+			}
 			acc += ms;
 			if (ms > worst) worst = ms;
 			n++;

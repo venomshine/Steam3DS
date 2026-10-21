@@ -176,3 +176,27 @@ Req *steam_post_service(const char *iface_method, cJSON *input, const char *toke
 bool steam_parse_cart(const char *json, CartInfo *c);           // respuesta con «cart»
 Req *steam_req_cart_names(const CartInfo *c);
 void steam_parse_cart_names(const char *json, CartInfo *c);     // nombres, precios y juego de cada línea
+
+// ---------------------------------------------------------------------------- Pago (fase 4b)
+
+// Lo que la página de pago de Steam (checkout) dice de ti. Solo se lee: los métodos de pago
+// se cambian en la app oficial o en la web.
+typedef struct {
+	bool ok;                    // la página es la del pago (no la de iniciar sesión)
+	char sessionid[32];         // g_sessionID de la página
+	bool wallet;                // ofrece pagar con la cartera
+	bool card;                  // hay una tarjeta guardada
+	char card_type[16];         // visa, mastercard…
+	char card_gid[32];          // id de la tarjeta guardada (gidPaymentID)
+	char card_last4[8];         // los cuatro últimos números
+	char country[4];            // país de facturación
+} CheckoutPage;
+bool steam_parse_checkout_page(const char *html, CheckoutPage *out);
+
+typedef struct {
+	bool has_wallet;
+	long long balance;          // céntimos
+	char formatted[24];
+	char country[4];
+} WalletInfo;
+bool steam_parse_wallet(const char *json, WalletInfo *w);

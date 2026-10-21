@@ -865,3 +865,86 @@ void steam_parse_cart_names(const char *json, CartInfo *c)
 	}
 	cJSON_Delete(root);
 }
+
+// ----------------------------------------------------------------------------
+// Pago: la página del checkout es HTML; se buscan los elementos por su id
+
+// El valor de un atributo dentro de la etiqueta que tiene id="<id>"
+static bool html_attr(const char *html, const char *id, const char *attr, char *out, size_t n)
+{
+	char key[48];
+	snprintf(key, sizeof key, "id=\"%s\"", id);
+	const char *p = strstr(html, key);
+	if (!p) return false;
+	const char *start = p, *end = strchr(p, '>');
+	while (start > html && *start != '<') start--;
+	if (!end) return false;
+	char a[24];
+	snprintf(a, sizeof a, " %s=\"", attr);
+	for (const char *q = start; q < end; q++) {
+		if (strncmp(q, a, strlen(a))) continue;
+		q += strlen(a);
+		const char *e = memchr(q, '"', end - q);
+		if (!e) return false;
+		size_t len = e - q;
+		if (len >= n) len = n - 1;
+		memcpy(out, q, len);
+		out[len] = 0;
+		return true;
+	}
+	return false;
+}
+
+bool steam_parse_checkout_page(const char *html, CheckoutPage *o)
+{
+	memset(o, 0, sizeof *o);
+	if (!html || !strstr(html, "id=\"payment_method\"")) return false;
+	o->ok = true;
+	const char *s = strstr(html, "g_sessionID = \"");
+	if (s) {
+		s += 15;
+		size_t n = strcspn(s, "\"");
+		if (n < sizeof o->sessionid) memcpy(o->sessionid, s, n);
+	}
+	// Las opciones del desplegable de Steam son <a id="metodo"> dentro de payment_method_droplist
+	const char *dl = strstr(html, "id=\"payment_method_droplist\"");
+	if (dl) {
+		const char *end = strstr(dl, "</ul>");
+		const char *w = strstr(dl, "id=\"steamaccount\"");
+		o->wallet = w && (!end || w < end);
+	}
+	char v[48] = "";
+	if (html_attr(html, "stored_card_id", "value", v, sizeof v) && v[0] && strcmp(v, "0") && strcmp(v, "-1")) {
+		snprintf(o->card_gid, sizeof o->card_gid, "%.*s", (int)sizeof o->card_gid - 1, v);
+		html_attr(html, "stored_payment_method", "value", o->card_type, sizeof o->card_type);
+		char num[48] = "";
+		html_attr(html, "stored_card_number", "value", num, sizeof num);
+		// Solo se guardan los cuatro últimos dígitos, venga como venga («************4821», «4821»…)
+		int nd = 0;
+		char digits[8];
+		for (int i = (int)strlen(num) - 1; i >= 0 && nd < 4; i--)
+			if (num[i] >= '0' && num[i] <= '9') digits[nd++] = num[i];
+		for (int i = 0; i < nd; i++) o->card_last4[i] = digits[nd - 1 - i];
+		o->card = o->card_type[0] != 0;
+	}
+	char c[8] = "";
+	if (html_attr(html, "billing_country", "value", c, sizeof c) && strlen(c) == 2) snprintf(o->country, sizeof o->country, "%s", c);
+	return true;
+}
+
+bool steam_parse_wallet(const char *json, WalletInfo *w)
+{
+	memset(w, 0, sizeof *w);
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *r = cJSON_GetObjectItemCaseSensitive(root, "response");
+	if (!r) {
+		cJSON_Delete(root);
+		return false;
+	}
+	w->has_wallet = jbool(r, "has_wallet");
+	w->balance = (long long)jnum(r, "balance", 0);
+	copy(w->formatted, sizeof w->formatted, jstr(r, "formatted_balance"));
+	copy(w->country, sizeof w->country, jstr(r, "wallet_country_code"));
+	cJSON_Delete(root);
+	return true;
+}

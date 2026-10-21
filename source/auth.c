@@ -531,3 +531,5 @@ bool auth_web_cookies(const char *host, char *out, size_t sz)
 	}
 	return false;
 }
+
+const char *auth_sessionid(void) { return sessionid; }

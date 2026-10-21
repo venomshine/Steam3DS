@@ -7,6 +7,7 @@
 #include <strings.h>
 
 #include "app.h"
+#include "cJSON.h"
 #include "auth.h"
 #include "i18n.h"
 #include "img.h"
@@ -130,6 +131,19 @@ typedef struct {
 } Tab;
 static Tab tabs[TAB_ALL];
 #define CUR (&tabs[S.tab])
+
+// Amigos y el juego abierto (con sesión)
+static struct {
+	u32 appid;
+	Req *req, *names;
+	bool done;
+	int owns, in_game, wish;
+	u64 ids[3];             // los primeros (jugando ahora, si no, los que lo tienen)
+	int nids;
+	char name[3][40];
+	int nnames;
+	bool playing;           // ids[0] lo está jugando ahora
+} FR;
 
 static InfoEnt cache[CACHE];
 static u64 frame_no;
@@ -963,6 +977,130 @@ static void store_select(int sel, int dir)
 // ============================================================================
 // Ficha
 
+
+// ---------------------------------------------------------------------------- Tu cuenta y la ficha
+
+static const StoreRow *owned_row(u32 appid)
+{
+	Tab *t = &tabs[TAB_LIBRARY];
+	for (int i = 0; i < t->list.count; i++)
+		if (t->list.rows[i].appid == appid) return &t->list.rows[i];
+	return NULL;
+}
+
+static bool in_wishlist(u32 appid)
+{
+	Tab *t = &tabs[TAB_WISHLIST];
+	for (int i = 0; i < t->nwish; i++)
+		if (t->wish[i] == appid) return true;
+	return false;
+}
+
+static void friends_reset(void)
+{
+	if (FR.req) net_release(FR.req);
+	if (FR.names) net_release(FR.names);
+	memset(&FR, 0, sizeof FR);
+}
+
+static void friends_request(u32 appid)
+{
+	friends_reset();
+	if (!auth_logged()) return;
+	FR.appid = appid;
+	char url[1300];
+	snprintf(url, sizeof url, "https://api.steampowered.com/IPlayerService/GetFriendsGameplayInfo/v1/?access_token=%s&appid=%lu",
+		auth_token(), (unsigned long)appid);
+	FR.req = net_get(url, LANE_API);
+}
+
+static void friends_poll(void)
+{
+	if (FR.req && FR.req->state >= REQ_DONE) {
+		cJSON *root = FR.req->state == REQ_DONE ? cJSON_Parse(FR.req->data) : NULL;
+		const cJSON *r = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+		const cJSON *ig = r ? cJSON_GetObjectItemCaseSensitive(r, "in_game") : NULL;
+		const cJSON *ow = r ? cJSON_GetObjectItemCaseSensitive(r, "owns") : NULL;
+		const cJSON *wl = r ? cJSON_GetObjectItemCaseSensitive(r, "in_wishlist") : NULL;
+		FR.in_game = cJSON_GetArraySize(ig);
+		FR.owns = cJSON_GetArraySize(ow);
+		FR.wish = cJSON_GetArraySize(wl);
+		// Primero quien lo está jugando ahora; luego quien lo tiene; si nadie, quien lo desea
+		const cJSON *lists[] = {ig, ow, wl}, *f;
+		for (int k = 0; k < 3; k++) {
+			cJSON_ArrayForEach(f, lists[k]) {
+				const cJSON *sid = cJSON_GetObjectItemCaseSensitive(f, "steamid");
+				u64 id = cJSON_IsString(sid) ? strtoull(sid->valuestring, NULL, 10) : 0;
+				bool dup = false;
+				for (int i = 0; i < FR.nids; i++) dup |= FR.ids[i] == id;
+				if (id && !dup && FR.nids < 3) FR.ids[FR.nids++] = id;
+			}
+			if (k == 0 && FR.nids) FR.playing = true;
+			if (k == 1 && FR.nids) break;
+		}
+		if (!r) netlog("amigos: sin datos (%s)", FR.req->err[0] ? FR.req->err : "json");
+		cJSON_Delete(root);
+		net_release(FR.req);
+		FR.req = NULL;
+		FR.done = true;
+		if (FR.nids && auth_logged()) {
+			char ids[96] = "", url[1500];
+			for (int i = 0; i < FR.nids; i++) {
+				char one[32];
+				snprintf(one, sizeof one, "%s%%22%llu%%22", i ? "%2C" : "", (unsigned long long)FR.ids[i]);
+				strcat(ids, one);
+			}
+			snprintf(url, sizeof url, "https://api.steampowered.com/IPlayerService/GetPlayerLinkDetails/v1/?access_token=%s&input_json=%%7B%%22steamids%%22%%3A%%5B%s%%5D%%7D",
+				auth_token(), ids);
+			FR.names = net_get(url, LANE_API);
+		}
+	}
+	if (FR.names && FR.names->state >= REQ_DONE) {
+		cJSON *root = FR.names->state == REQ_DONE ? cJSON_Parse(FR.names->data) : NULL;
+		const cJSON *r = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+		const cJSON *acc, *accounts = r ? cJSON_GetObjectItemCaseSensitive(r, "accounts") : NULL;
+		// Los nombres, en el mismo orden que los pedimos
+		for (int i = 0; i < FR.nids; i++) {
+			cJSON_ArrayForEach(acc, accounts) {
+				const cJSON *pd = cJSON_GetObjectItemCaseSensitive(acc, "public_data");
+				const cJSON *sid = pd ? cJSON_GetObjectItemCaseSensitive(pd, "steamid") : NULL;
+				const cJSON *nm = pd ? cJSON_GetObjectItemCaseSensitive(pd, "persona_name") : NULL;
+				if (cJSON_IsString(sid) && cJSON_IsString(nm) && strtoull(sid->valuestring, NULL, 10) == FR.ids[i])
+					snprintf(FR.name[FR.nnames++], 40, "%s", nm->valuestring);
+			}
+		}
+		cJSON_Delete(root);
+		net_release(FR.names);
+		FR.names = NULL;
+	}
+}
+
+// «3 amigos lo tienen: Kenji, Lucía y 1 más» / «Kenji lo está jugando ahora»
+static bool friends_text(char *out, size_t n)
+{
+	if (!FR.done || FR.appid != S.app || (!FR.owns && !FR.in_game && !FR.wish)) return false;
+	char names[128] = "";
+	int shown = FR.nnames < 2 ? FR.nnames : 2;
+	for (int i = 0; i < shown; i++) {
+		if (i) strcat(names, ", ");
+		strncat(names, FR.name[i], sizeof names - strlen(names) - 1);
+	}
+	if (FR.in_game && FR.nnames && FR.playing) {
+		if (FR.in_game == 1) snprintf(out, n, _("%s lo está jugando ahora"), FR.name[0]);
+		else snprintf(out, n, _("%s y %d amigos más lo están jugando"), FR.name[0], FR.in_game - 1);
+	} else if (FR.owns) {
+		int rest = FR.owns - shown;
+		if (FR.owns == 1 && shown) snprintf(out, n, _("%s lo tiene"), names);
+		else if (rest > 0 && shown) snprintf(out, n, _("%d amigos lo tienen: %s y %d más"), FR.owns, names, rest);
+		else if (shown) snprintf(out, n, _("%d amigos lo tienen: %s"), FR.owns, names);
+		else snprintf(out, n, _("%d amigos lo tienen"), FR.owns);
+	} else {
+		if (FR.wish == 1 && shown) snprintf(out, n, _("%s lo tiene en su lista de deseos"), names);
+		else snprintf(out, n, _("%d amigos lo tienen en su lista de deseos"), FR.wish);
+	}
+	return true;
+}
+
 static void open_game(u32 appid, bool push)
 {
 	if (push && S.scene == SC_GAME && S.depth < 8) {
@@ -992,6 +1130,7 @@ static void open_game(u32 appid, bool push)
 	S.sec_anim = 1;
 	InfoEnt *e = info_get(appid, true);
 	if (e && e->failed) info_retry(e);
+	friends_request(appid);
 }
 
 static void game_back(void)
@@ -1021,6 +1160,7 @@ static void reviews_more(void)
 
 static void game_poll(const AppInfo *a)
 {
+	friends_poll();
 	if (S.rreq && S.rreq->state >= REQ_DONE) {
 		if (S.rreq->state == REQ_DONE) {
 			int n = steam_parse_reviews(S.rreq->data, S.reviews + S.nreviews, MAX_REVIEWS - S.nreviews, S.rcursor, sizeof S.rcursor);
@@ -1094,7 +1234,15 @@ static void draw_summary_top(const AppInfo *a)
 
 	char t[112];
 	snprintf(t, sizeof t, "%s%s%s", a->release, a->release[0] && a->developer[0] ? " · " : "", a->developer);
-	ui_text(TOP_W - 12, SCR_H - 18, t, SZ_SMALL, COL_DIM, AL_RIGHT, TOP_W - 24);
+	char fr[160];
+	if (friends_text(fr, sizeof fr)) {
+		// Con amigos: la línea de amigos a la izquierda y la fecha a la derecha
+		ui_icon(IC_USERS, 12, SCR_H - 17, 12, FR.playing ? COL_LIME : COL_ACC);
+		float fw = ui_text(28, SCR_H - 18, fr, SZ_SMALL, FR.playing ? COL_LIME : COL_TXT, AL_LEFT, 230);
+		ui_text(TOP_W - 12, SCR_H - 18, t, SZ_SMALL, COL_DIM, AL_RIGHT, TOP_W - 52 - fw);
+	} else {
+		ui_text(TOP_W - 12, SCR_H - 18, t, SZ_SMALL, COL_DIM, AL_RIGHT, TOP_W - 24);
+	}
 }
 
 static float draw_req_col(float x, float y, float w, const char *title, const ReqLine *l, int n)
@@ -1305,14 +1453,23 @@ static void draw_game_bottom(void)
 	}
 
 	if (a) {
-		ui_text(12, 36, a->is_free ? _("Jugar") : _("Comprar"), SZ_SMALL, COL_DIM, AL_LEFT, 0);
-		ui_text(12, 50, a->name, SZ_BODY, COL_WHITE, AL_LEFT, a->disc ? 160 : 190);
+		const StoreRow *own = auth_logged() ? owned_row(a->appid) : NULL;
+		bool wished = auth_logged() && in_wishlist(a->appid);
+		ui_text(12, 36, own ? _("Ya es tuyo") : a->is_free ? _("Jugar") : _("Comprar"), SZ_SMALL, own ? COL_LIME : COL_DIM, AL_LEFT, 0);
+		ui_text(12, 50, a->name, SZ_BODY, COL_WHITE, AL_LEFT, a->disc && !own ? 160 : 190);
 		StoreRow pr = {0};
 		pr.disc = a->disc;
 		snprintf(pr.price, sizeof pr.price, "%s", a->price);
 		snprintf(pr.orig, sizeof pr.orig, "%s", a->orig);
 		pr.free = a->is_free;
-		if (a->disc > 0) {
+		if (own) {
+			char hrs[48];
+			if (own->minutes >= 60) snprintf(hrs, sizeof hrs, _("En tu biblioteca · %d h"), (own->minutes + 30) / 60);
+			else snprintf(hrs, sizeof hrs, "%s", _("En tu biblioteca"));
+			float w = ui_text_w(hrs, SZ_SMALL) + 16;
+			ui_rect(308 - w, 36, w, 32, C2D_Color32(0x2d, 0x5a, 0x1e, 0xff));
+			ui_text(308 - 8, 45, hrs, SZ_SMALL, COL_LIME, AL_RIGHT, 0);
+		} else if (a->disc > 0) {
 			ui_badge_disc(308 - 64 - 52, 36, 52, 32, a->disc, SZ_LARGE);
 			ui_price_box(308 - 64, 36, 64, 32, a->orig, a->price, SZ_SMALL, SZ_BODY + 0.05f);
 		} else {
@@ -1321,15 +1478,19 @@ static void draw_game_bottom(void)
 			ui_rect(308 - w, 36, w, 32, COL_SHADE);
 			ui_text(308 - 8, 44, p, SZ_BODY + 0.05f, a->is_free ? COL_LIME : COL_TXT, AL_RIGHT, 0);
 		}
-		// Sin sesión: carrito, deseados e instalar se ven apagados
-		draw_button(&B_CART, IC_CART, a->is_free ? _("Añadir a la biblioteca") : _("Añadir al carrito"),
+		// Sin sesión, carrito, deseados e instalar se ven apagados. Con sesión se ve lo tuyo;
+		// las acciones (añadir, instalar) llegan con la fase 4
+		bool in = auth_logged();
+		draw_button(&B_CART, IC_CART, own ? _("Ya lo tienes") : a->is_free ? _("Añadir a la biblioteca") : _("Añadir al carrito"),
 			C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), C2D_Color32(0xd2, 0xef, 0xa9, 0xff), 0.45f, S.pressed == BT_CART);
-		draw_button(&B_WISH, IC_HEART, _("Deseados"), COL_BTN2, COL_BTN2, COL_ACC, 0.45f, S.pressed == BT_WISH);
+		if (wished) draw_button(&B_WISH, IC_HEART, _("En deseados"), C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_WISH);
+		else draw_button(&B_WISH, IC_HEART, _("Deseados"), COL_BTN2, COL_BTN2, COL_ACC, 0.45f, S.pressed == BT_WISH);
 		char shots[40];
 		snprintf(shots, sizeof shots, _("Capturas (%d)"), a->nshots);
 		draw_button(&B_SHOTS, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, a->nshots ? 1 : 0.45f, S.pressed == BT_SHOTS);
-		draw_button(&B_INST, IC_PC, _("Instalar en mi PC"), C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, 0.4f, S.pressed == BT_INST);
-		ui_text(BOT_W / 2, 172, _("Inicia sesión para usar el carrito, deseados e instalar"), SZ_TINY, COL_DIM, AL_CENTER, 300);
+		draw_button(&B_INST, IC_PC, _("Instalar en mi PC"), C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, own ? 1 : 0.4f, S.pressed == BT_INST);
+		if (!in) ui_text(BOT_W / 2, 172, _("Inicia sesión para usar el carrito, deseados e instalar"), SZ_TINY, COL_DIM, AL_CENTER, 300);
+		else if (!own) ui_text(BOT_W / 2, 172, _("Instalar se activa cuando el juego es tuyo"), SZ_TINY, COL_DIM, AL_CENTER, 300);
 	}
 
 	if (S.sec >= SEC_EXTRAS) {
@@ -1620,6 +1781,7 @@ static void do_logout(void)
 {
 	auth_logout();
 	account_lists_clear();
+	friends_reset();
 	toast(_("Sesión cerrada"));
 }
 
@@ -2291,7 +2453,8 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		S.strip = 0;
 		S.shot_anim = 1;
 	} else if (b == BT_CART || b == BT_WISH || b == BT_INST) {
-		toast(_("Disponible al iniciar sesión"));
+		if (!auth_logged()) toast(_("Disponible al iniciar sesión"));
+		else toast(_("Llega en la próxima actualización"));
 	}
 }
 
@@ -2510,8 +2673,15 @@ int main(int argc, char **argv)
 		case SC_PROFILE: input_profile(kd, kh, ku, &tp); break;
 		}
 		auth_update();
+		// Con sesión, la biblioteca y los deseados se cargan en segundo plano (para «ya es tuyo» y
+		// «en deseados» en las fichas); se espera a que la tienda sepa el país y el idioma
+		if (auth_logged() && S.ctx_ready) {
+			if (!tabs[TAB_LIBRARY].started) tab_more(TAB_LIBRARY);
+			if (!tabs[TAB_WISHLIST].started) tab_more(TAB_WISHLIST);
+		}
 		// Avisos de la sesión: entró desde la sesión guardada, o Steam ya no la acepta
 		if (auth_info()->state != S.last_auth) {
+			if (auth_info()->state == AUTH_IN && S.scene == SC_GAME) friends_request(S.app);
 			if (S.last_auth == AUTH_STARTING && auth_info()->state == AUTH_OUT && !strcmp(auth_info()->err, "expired"))
 			{
 				toast(_("Tu sesión de Steam caducó: vuelve a iniciarla"));
@@ -2631,6 +2801,7 @@ int main(int argc, char **argv)
 
 	netlog("salir");
 	if (S.country_req) net_release(S.country_req);
+	friends_reset();
 	account_lists_clear();
 	for (int i = 0; i < TAB_COUNT; i++) {
 		rowlist_free(&tabs[i].list);

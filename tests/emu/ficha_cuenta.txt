@@ -1,0 +1,19 @@
+# La ficha con sesión: un juego tuyo (Cyberpunk, en Ofertas) y uno de tus deseados
+wait 800
+press R
+wait 360
+press A
+wait 400
+shot f01_tuyo
+press B
+wait 30
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+wait 200
+press A
+wait 400
+shot f02_otro
+quit

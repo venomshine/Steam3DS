@@ -206,6 +206,23 @@ TR = {
     "Biblioteca (%d)": ("Library (%d)", "ライブラリ (%d)"),
     "Lista de deseos (%d)": ("Wishlist (%d)", "ウィッシュリスト (%d)"),
 
+    # Amigos y lo tuyo en la ficha
+    "%s lo está jugando ahora": ("%s is playing it now", "%s がプレイ中"),
+    "%s y %d amigos más lo están jugando": ("%s and %d more friends are playing it", "%s とほか %d 人のフレンドがプレイ中"),
+    "%s lo tiene": ("%s owns it", "%s が所有"),
+    "%d amigos lo tienen: %s y %d más": ("%d friends own it: %s and %d more", "%d 人のフレンドが所有：%s ほか %d 人"),
+    "%d amigos lo tienen: %s": ("%d friends own it: %s", "%d 人のフレンドが所有：%s"),
+    "%d amigos lo tienen": ("%d friends own it", "%d 人のフレンドが所有"),
+    "%s lo tiene en su lista de deseos": ("%s has it on their wishlist", "%s のウィッシュリストにあります"),
+    "%d amigos lo tienen en su lista de deseos": ("%d friends have it on their wishlist", "%d 人のフレンドのウィッシュリストにあります"),
+    "Ya es tuyo": ("It's yours", "所有済み"),
+    "En tu biblioteca · %d h": ("In your library · %d h", "ライブラリにあります · %d 時間"),
+    "En tu biblioteca": ("In your library", "ライブラリにあります"),
+    "Ya lo tienes": ("You own it", "所有済み"),
+    "En deseados": ("On wishlist", "ウィッシュリスト済み"),
+    "Instalar se activa cuando el juego es tuyo": ("Install turns on once the game is yours", "インストールはゲームを所有すると使えます"),
+    "Llega en la próxima actualización": ("Coming in the next update", "次のアップデートで追加されます"),
+
     # Salir
     "¿Salir de Steam3DS?": ("Exit Steam3DS?", "Steam3DSを終了しますか？"),
     "Cancelar": ("Cancel", "キャンセル"),

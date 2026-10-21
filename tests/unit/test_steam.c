@@ -81,6 +81,18 @@ int main(void) {
 	CHECK(steam_parse_rows(slurp("data/search.json"), &sr, false));
 	printf("búsqueda: %d, %s tipo=%d\n", sr.count, sr.count ? sr.rows[0].name : "", sr.count ? sr.rows[0].type : -1);
 	CHECK(sr.count > 0);
+	// Biblioteca: ordenada por la última vez que jugaste
+	RowList ow = {0};
+	CHECK(steam_parse_owned(slurp("data/owned.json"), &ow));
+	printf("biblioteca: %d, primero %s (%d min)\n", ow.count, ow.rows[0].name, ow.rows[0].minutes);
+	CHECK(ow.count == 3 && ow.rows[0].appid == 730 && ow.rows[1].appid == 1091500 && ow.rows[2].appid == 570);
+	// Deseados: por prioridad, y la 0 («sin ordenar») al final
+	u32 *ids;
+	int nw = steam_parse_wishlist(slurp("data/wishlist.json"), &ids);
+	printf("deseados: %d (%u %u %u %u)\n", nw, ids[0], ids[1], ids[2], ids[3]);
+	CHECK(nw == 4 && ids[0] == 2138330 && ids[1] == 1174180 && ids[2] == 1716740 && ids[3] == 668580);
+	CHECK(steam_parse_wishlist("{\"response\":{}}", &ids) == 0);
+	CHECK(steam_parse_wishlist("basura", &ids) == -1);
 	steam_req_appdetails(10);
 	CHECK(!strcmp(last_url, "https://store.steampowered.com/api/appdetails?appids=10&cc=ES&l=spanish"));
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);

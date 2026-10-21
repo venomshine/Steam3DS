@@ -18,6 +18,8 @@ typedef struct {
 	bool header;            // fila de título de apartado (Inicio), no es un juego
 	bool coming_soon;
 	bool early;             // sigue en acceso anticipado (dato de Steam, no la etiqueta de los usuarios)
+	int minutes;            // biblioteca: minutos jugados
+	u32 last_played;        // biblioteca: última vez (hora Unix)
 } StoreRow;
 
 typedef struct {
@@ -125,6 +127,12 @@ Req *steam_req_morelike(u32 appid);
 
 // País según Steam (cabecera steamCountry)
 Req *steam_req_country(void);
+
+// Con sesión (token de acceso)
+Req *steam_req_owned(u64 steamid, const char *token);
+bool steam_parse_owned(const char *json, RowList *list);     // ordenada por la última vez que jugaste
+Req *steam_req_wishlist(u64 steamid, const char *token);
+int steam_parse_wishlist(const char *json, u32 **ids);       // appids por prioridad (malloc); -1 si falla
 
 void appinfo_free(AppInfo *a);
 void rowlist_free(RowList *l);

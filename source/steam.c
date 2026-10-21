@@ -588,6 +588,107 @@ int steam_parse_reviews(const char *json, Review *out, int max, char *cursor, si
 	return n;
 }
 
+// ----------------------------------------------------------------------------
+// Con sesión
+
+Req *steam_req_owned(u64 steamid, const char *token)
+{
+	char url[1400];
+	snprintf(url, sizeof url,
+		"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?access_token=%s&steamid=%llu"
+		"&include_appinfo=1&include_played_free_games=1&skip_unvetted_apps=0&language=%s",
+		token, (unsigned long long)steamid, g_lang);
+	return net_get(url, LANE_API);
+}
+
+static int cmp_last_played(const void *a, const void *b)
+{
+	const StoreRow *x = a, *y = b;
+	if (x->last_played != y->last_played) return x->last_played < y->last_played ? 1 : -1;
+	return y->minutes - x->minutes;
+}
+
+bool steam_parse_owned(const char *json, RowList *l)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		snprintf(l->err, sizeof l->err, "respuesta no válida");
+		cJSON_Delete(root);
+		return false;
+	}
+	l->count = 0;
+	const cJSON *g;
+	cJSON_ArrayForEach(g, cJSON_GetObjectItemCaseSensitive(resp, "games")) {
+		if (l->count == l->cap) {
+			int cap = l->cap ? l->cap * 2 : 64;
+			StoreRow *r = realloc(l->rows, cap * sizeof(StoreRow));
+			if (!r) break;
+			l->rows = r;
+			l->cap = cap;
+		}
+		StoreRow *row = &l->rows[l->count];
+		memset(row, 0, sizeof *row);
+		row->appid = (u32)jnum(g, "appid", 0);
+		copy_utf8(row->name, sizeof row->name, jstr(g, "name"));
+		row->minutes = (int)jnum(g, "playtime_forever", 0);
+		row->last_played = (u32)jnum(g, "rtime_last_played", 0);
+		if (row->appid && row->name[0]) l->count++;
+	}
+	qsort(l->rows, l->count, sizeof(StoreRow), cmp_last_played);
+	l->total = l->count;
+	l->end = true;
+	l->err[0] = 0;
+	cJSON_Delete(root);
+	return true;
+}
+
+Req *steam_req_wishlist(u64 steamid, const char *token)
+{
+	char url[1400];
+	snprintf(url, sizeof url, "https://api.steampowered.com/IWishlistService/GetWishlist/v1/?access_token=%s&steamid=%llu",
+		token, (unsigned long long)steamid);
+	return net_get(url, LANE_API);
+}
+
+typedef struct { u32 appid; int prio; } WishItem;
+
+static int cmp_prio(const void *a, const void *b)
+{
+	return ((const WishItem *)a)->prio - ((const WishItem *)b)->prio;
+}
+
+int steam_parse_wishlist(const char *json, u32 **ids)
+{
+	*ids = NULL;
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	const cJSON *items = cJSON_GetObjectItemCaseSensitive(resp, "items");
+	int n = cJSON_GetArraySize(items), k = 0;
+	WishItem *w = n ? malloc(n * sizeof(WishItem)) : NULL;
+	const cJSON *it;
+	cJSON_ArrayForEach(it, items) {
+		if (!w) break;
+		w[k].appid = (u32)jnum(it, "appid", 0);
+		// La prioridad 0 es «sin ordenar»: al final, como en Steam
+		int p = (int)jnum(it, "priority", 0);
+		w[k].prio = p > 0 ? p : 1 << 20;
+		if (w[k].appid) k++;
+	}
+	if (k) qsort(w, k, sizeof(WishItem), cmp_prio);
+	if (k) {
+		*ids = malloc(k * sizeof(u32));
+		for (int i = 0; *ids && i < k; i++) (*ids)[i] = w[i].appid;
+	}
+	free(w);
+	cJSON_Delete(root);
+	return k;
+}
+
 void appinfo_free(AppInfo *a)
 {
 	free(a->desc);

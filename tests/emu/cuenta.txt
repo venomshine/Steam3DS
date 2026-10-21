@@ -1,0 +1,32 @@
+# Perfil, biblioteca y deseados (con sesión guardada; relé con RELAY_FAKE_LOGIN=1)
+wait 700
+press START
+wait 30
+press A
+wait 300
+shot c01_perfil
+touch 160 119
+wait 300
+shot c02_biblioteca
+press DOWN
+press DOWN
+wait 200
+shot c03_biblioteca_sel
+press B
+wait 40
+press START
+wait 30
+press DOWN
+press DOWN
+press A
+wait 400
+shot c04_deseados
+press A
+wait 300
+shot c05_ficha_desde_deseados
+press B
+wait 30
+press B
+wait 30
+shot c06_vuelta_tienda
+quit

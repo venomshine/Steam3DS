@@ -188,6 +188,24 @@ TR = {
         "サインインは公式Steamアプリで承認します。セッションはSDカードに保存され、メニュー（START）またはSteamの「承認済みデバイス」からいつでも終了できます。"),
     "Tu sesión de Steam caducó: vuelve a iniciarla": ("Your Steam session expired: sign in again", "Steamのセッションが切れました。もう一度サインインしてください"),
 
+    # Perfil, biblioteca y deseados
+    "Has jugado %d h": ("You've played %d h", "%d 時間プレイ済み"),
+    "Aún no lo has jugado": ("You haven't played it yet", "まだプレイしていません"),
+    "Deseado %d de %d": ("Wishlisted %d of %d", "ウィッシュリスト %d / %d"),
+    "Biblioteca · %d juegos": ("Library · %d games", "ライブラリ · %d 本"),
+    "Lista de deseos · %d": ("Wishlist · %d", "ウィッシュリスト · %d"),
+    "Tu lista de deseos está vacía": ("Your wishlist is empty", "ウィッシュリストは空です"),
+    "Añade juegos desde su ficha con el botón Deseados": ("Add games from their page with the Wishlist button", "ゲームのページのウィッシュリストボタンで追加できます"),
+    "No hay juegos en tu biblioteca": ("There are no games in your library", "ライブラリにゲームがありません"),
+    "Nivel de Steam": ("Steam level", "Steamレベル"),
+    "Cargando tu biblioteca…": ("Loading your library…", "ライブラリを読み込み中…"),
+    "%d juegos · %ld h jugadas": ("%d games · %ld h played", "%d 本 · %ld 時間プレイ"),
+    "LO MÁS JUGADO": ("MOST PLAYED", "よくプレイしたゲーム"),
+    "Tu cuenta de Steam": ("Your Steam account", "あなたのSteamアカウント"),
+    "Desde aquí ves lo tuyo; la tienda funciona igual": ("Your own stuff is here; the store works the same", "ここで自分の情報を確認できます"),
+    "Biblioteca (%d)": ("Library (%d)", "ライブラリ (%d)"),
+    "Lista de deseos (%d)": ("Wishlist (%d)", "ウィッシュリスト (%d)"),
+
     # Salir
     "¿Salir de Steam3DS?": ("Exit Steam3DS?", "Steam3DSを終了しますか？"),
     "Cancelar": ("Cancel", "キャンセル"),

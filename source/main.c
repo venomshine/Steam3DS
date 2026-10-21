@@ -18,8 +18,10 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
+// Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
+enum { TAB_LIBRARY = TAB_COUNT, TAB_WISHLIST, TAB_ALL };
 enum { SEC_SUMMARY, SEC_REQS, SEC_REVIEWS, SEC_EXTRAS, SEC_SIMILAR, SEC_COUNT };
 
 #define ROW_H      29
@@ -28,6 +30,9 @@ enum { SEC_SUMMARY, SEC_REQS, SEC_REVIEWS, SEC_EXTRAS, SEC_SIMILAR, SEC_COUNT };
 #define PAGE       30
 #define MAX_REVIEWS 48
 #define CACHE      6
+
+// Zona táctil de un botón
+typedef struct { float x, y, w, h; } Box;
 
 // Fichas descargadas (para la vista previa de la lista y para volver atrás sin esperar)
 typedef struct {
@@ -100,11 +105,13 @@ static struct {
 	float start_hold;            // START mantenido: a los 2 s pregunta si sales
 	bool start_armed;
 	Scene login_back;            // a dónde se vuelve al acabar de iniciar sesión
+	int prev_tab;                // pestaña de la tienda a la que vuelven Biblioteca y Deseados
 	float login_done;            // segundos desde que entró (para el saludo)
 	AuthState last_auth;
 } S;
 
-enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH };
+enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
+	BT_PLIB, BT_PWISH, BT_PLOGOUT };
 
 // Pestañas de la tienda
 #define HOME_PARTS 4
@@ -117,8 +124,11 @@ typedef struct {
 	u64 fail_at, sel_changed;
 	RowList part[HOME_PARTS];    // Inicio: los apartados se piden a la vez y se juntan
 	char term[64];               // Buscar: lo que se buscó
+	u32 *wish;                   // Deseados: appids por prioridad, que se piden de 50 en 50
+	int nwish, wish_next;
+	bool wish_loaded;
 } Tab;
-static Tab tabs[TAB_COUNT];
+static Tab tabs[TAB_ALL];
 #define CUR (&tabs[S.tab])
 
 static InfoEnt cache[CACHE];
@@ -247,7 +257,7 @@ static const char *home_title[HOME_PARTS] = {"Lo más vendido", "Novedades popul
 
 static bool tab_paged(int t)
 {
-	return t == TAB_OFFERS || t == TAB_DEMOS || t == TAB_BETAS;
+	return t == TAB_OFFERS || t == TAB_DEMOS || t == TAB_BETAS || t == TAB_WISHLIST;
 }
 
 // Espera lo que toque tras un error antes de volver a pedir
@@ -270,6 +280,19 @@ static void tab_more(int ti)
 				t->part[i].err[0] = 0;
 				t->part[i].req = steam_req_query(home_q[i], 0, 10);
 			}
+	} else if (ti == TAB_LIBRARY) {
+		if (!auth_logged() || t->list.count) return;
+		t->list.req = steam_req_owned(auth_info()->steamid, auth_token());
+	} else if (ti == TAB_WISHLIST) {
+		if (!auth_logged()) return;
+		if (!t->wish_loaded) {
+			t->list.req = steam_req_wishlist(auth_info()->steamid, auth_token());
+		} else if (t->wish_next < t->nwish) {
+			int n = t->nwish - t->wish_next;
+			if (n > 50) n = 50;
+			t->list.req = steam_req_items(t->wish + t->wish_next, n);
+			t->wish_next += n;
+		}
 	} else if (tab_paged(ti)) {
 		if (t->list.end) return;
 		static const StoreQuery q[TAB_COUNT] = {[TAB_OFFERS] = Q_OFFERS, [TAB_DEMOS] = Q_DEMOS, [TAB_BETAS] = Q_EARLY};
@@ -288,6 +311,51 @@ static void add_row(RowList *l, const StoreRow *r)
 		l->cap = cap;
 	}
 	l->rows[l->count++] = *r;
+}
+
+static void owned_poll(Tab *t)
+{
+	Req *r = t->list.req;
+	if (!r || r->state < REQ_DONE) return;
+	if (r->state == REQ_DONE) steam_parse_owned(r->data, &t->list);
+	else snprintf(t->list.err, sizeof t->list.err, "%s", r->err);
+	net_release(r);
+	t->list.req = NULL;
+	t->sel_changed = osGetTime();
+}
+
+static void wish_poll(Tab *t)
+{
+	Req *r = t->list.req;
+	if (!r || r->state < REQ_DONE) return;
+	if (!t->wish_loaded) {
+		int n = r->state == REQ_DONE ? steam_parse_wishlist(r->data, &t->wish) : -1;
+		if (n < 0) snprintf(t->list.err, sizeof t->list.err, "%s", r->state == REQ_DONE ? "json" : r->err);
+		net_release(r);
+		t->list.req = NULL;
+		if (n < 0) return;
+		t->wish_loaded = true;
+		t->nwish = n;
+		t->wish_next = 0;
+		t->list.total = n;
+		t->list.end = n == 0;
+		tab_more(TAB_WISHLIST);
+		return;
+	}
+	list_poll(&t->list, true);
+	// Los nombres y precios llegan de 50 en 50: el total es el de la lista de deseos
+	t->list.total = t->nwish;
+	t->list.end = t->wish_next >= t->nwish;
+}
+
+static void account_lists_clear(void)
+{
+	for (int ti = TAB_LIBRARY; ti < TAB_ALL; ti++) {
+		Tab *t = &tabs[ti];
+		rowlist_free(&t->list);
+		free(t->wish);
+		memset(t, 0, sizeof *t);
+	}
 }
 
 // Inicio: cuando llegan los cuatro apartados se juntan en una lista con títulos
@@ -616,6 +684,14 @@ static void footer_text(char *out, size_t n)
 	case TAB_OFFERS: snprintf(out, n, _("Oferta %d de %d"), t->sel + 1, t->list.total); break;
 	case TAB_DEMOS: snprintf(out, n, _("Demo %d de %d"), t->sel + 1, t->list.total); break;
 	case TAB_BETAS: snprintf(out, n, "%s", _("Acceso anticipado")); break;   // el total de Steam cuenta también los que ya salieron
+	case TAB_LIBRARY: {
+		const StoreRow *r = cur_row();
+		if (r && r->minutes) snprintf(out, n, _("Has jugado %d h"), (r->minutes + 30) / 60);
+		else if (r) snprintf(out, n, "%s", _("Aún no lo has jugado"));
+		else out[0] = 0;
+		break;
+	}
+	case TAB_WISHLIST: snprintf(out, n, _("Deseado %d de %d"), t->sel + 1, t->list.total); break;
 	default:
 		if (t->term[0]) snprintf(out, n, _("%d resultados para «%s»"), t->list.count, t->term);
 		else out[0] = 0;
@@ -697,6 +773,12 @@ static void draw_store_top(void)
 			ui_text(TOP_W / 2, 116, human_err(t->list.err), SZ_BODY, COL_TXT, AL_CENTER, 380);
 			ui_text(TOP_W / 2, 136, tt, SZ_SMALL, COL_ACC, AL_CENTER, 0);
 			ui_text(TOP_W / 2, 200, t->list.err, SZ_TINY, COL_DIM, AL_CENTER, 380);
+		} else if (S.tab == TAB_WISHLIST && t->wish_loaded && !t->nwish) {
+			ui_icon(IC_HEART, TOP_W / 2 - 14, 80, 28, COL_ACC);
+			ui_text(TOP_W / 2, 120, _("Tu lista de deseos está vacía"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
+			ui_text(TOP_W / 2, 144, _("Añade juegos desde su ficha con el botón Deseados"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		} else if (S.tab == TAB_LIBRARY && !t->list.req && !t->list.count) {
+			ui_text(TOP_W / 2, 120, _("No hay juegos en tu biblioteca"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
 		} else if (S.tab == TAB_SEARCH && !t->list.req) {
 			char tt[112];
 			snprintf(tt, sizeof tt, _("No hay resultados para «%s»"), t->term);
@@ -734,6 +816,22 @@ static void draw_tabs(void)
 	}
 }
 
+static const Box B_BACKBAR = {0, 0, BOT_W, LIST_Y};
+
+static void draw_account_bar(void)
+{
+	ui_rect(0, 0, BOT_W, LIST_Y, COL_BAR);
+	if (S.pressed == BT_BACKBAR) ui_rect(0, 0, BOT_W, LIST_Y, COL_PANEL);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	Tab *t = CUR;
+	char title[64];
+	if (S.tab == TAB_LIBRARY) snprintf(title, sizeof title, _("Biblioteca · %d juegos"), t->list.count);
+	else snprintf(title, sizeof title, _("Lista de deseos · %d"), t->list.total);
+	ui_icon(S.tab == TAB_LIBRARY ? IC_PAD : IC_HEART, 28, 6, 12, COL_ACC);
+	ui_text(46, 5, title, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
+	ui_rect(0, LIST_Y - 1, BOT_W, 1, COL_LINE);
+}
+
 static void draw_search_bar(void)
 {
 	Tab *t = CUR;
@@ -749,7 +847,8 @@ static void draw_store_bottom(void)
 {
 	Tab *t = CUR;
 	ui_rect(0, 0, BOT_W, SCR_H, COL_BG);
-	draw_tabs();
+	if (S.tab >= TAB_COUNT) draw_account_bar();
+	else draw_tabs();
 	if (S.tab == TAB_SEARCH) draw_search_bar();
 	float top = list_top(), lh = list_h();
 	ui_scissor(GFX_BOTTOM, 0, top, BOT_W, lh);
@@ -777,7 +876,7 @@ static void draw_store_bottom(void)
 			ui_text(28, y + 7, r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 40);
 			continue;
 		}
-		float pw = r->disc > 0 ? 36 + 50 : 56;
+		float pw = S.tab == TAB_LIBRARY ? 46 : r->disc > 0 ? 36 + 50 : 56;
 		float nx = 8;
 		if (r->type == 1 || r->type == 4) {
 			// Etiqueta pequeña para demos y DLC (en Buscar salen mezclados)
@@ -788,7 +887,13 @@ static void draw_store_bottom(void)
 			nx += tw + 5;
 		}
 		ui_text(nx, y + 7, r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 10 - nx - pw);
-		if (r->coming_soon && !r->price[0]) {
+		if (S.tab == TAB_LIBRARY) {
+			char hrs[24];
+			if (r->minutes >= 60) snprintf(hrs, sizeof hrs, "%d h", (r->minutes + 30) / 60);
+			else if (r->minutes) snprintf(hrs, sizeof hrs, "%d min", r->minutes);
+			else snprintf(hrs, sizeof hrs, "–");
+			ui_text(BOT_W - 10, y + 8, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+		} else if (r->coming_soon && !r->price[0]) {
 			ui_text(BOT_W - 10, y + 8, _("Próximamente"), SZ_TINY, COL_DIM, AL_RIGHT, 0);
 		} else {
 			draw_price_right(BOT_W - 6, y + 2, ROW_H - 5, r, 36, 50);
@@ -798,6 +903,8 @@ static void draw_store_bottom(void)
 	if (t->list.req && end_y < SCR_H) ui_spinner(BOT_W / 2, end_y + 14, 6, COL_DIM);
 	if (S.tab == TAB_SEARCH && !t->term[0] && !t->list.count)
 		ui_text(BOT_W / 2, top + 30, _("Aún no has buscado nada"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+	if (S.tab == TAB_WISHLIST && t->wish_loaded && !t->nwish)
+		ui_text(BOT_W / 2, top + 30, _("Tu lista de deseos está vacía"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 	ui_scissor_off();
 	// Barra de scroll
 	float total = t->list.count * ROW_H;
@@ -807,7 +914,10 @@ static void draw_store_bottom(void)
 		float y = top + (lh - hh) * (t->scroll / (total - lh));
 		ui_rect(BOT_W - 2, y, 2, hh, C2D_Color32(0x3d, 0x5a, 0x73, 0xff));
 	}
-	if (S.tab == TAB_SEARCH) {
+	if (S.tab >= TAB_COUNT) {
+		static const char *ha[] = {"A", "Ficha", "B", "Volver", "START", "Menú"};
+		draw_hints(ha, 3);
+	} else if (S.tab == TAB_SEARCH) {
 		if (t->term[0]) {
 			static const char *hs[] = {"Y", "Buscar", "A", "Ficha", "B", "Borrar", "L R", "Pestaña"};
 			draw_hints(hs, 4);
@@ -1149,7 +1259,6 @@ static void draw_game_top(void)
 }
 
 // Botones de la ficha (también se usan para el toque)
-typedef struct { float x, y, w, h; } Box;
 static const Box B_SEG = {12, 6, 296, 22};
 static const Box B_CART = {12, 76, 296, 26};
 static const Box B_WISH = {12, 108, 145, 26};
@@ -1411,15 +1520,145 @@ static void open_login(void)
 	if (auth_info()->state != AUTH_QR) auth_begin_qr();
 }
 
+
+static void open_account_list(int ti)
+{
+	if (S.tab < TAB_COUNT) S.prev_tab = S.tab;
+	S.tab = ti;
+	go_scene(SC_STORE, 1);
+	Tab *t = CUR;
+	if (!t->started) tab_more(ti);
+	t->sel_changed = osGetTime();
+}
+
+// ---------------------------------------------------------------------------- Perfil
+
+static const Box B_PLIB = {12, 104, 296, 30};
+static const Box B_PWISH = {12, 140, 296, 30};
+static const Box B_PLOGOUT = {12, 176, 296, 30};
+
+static void draw_profile_top(void)
+{
+	const AuthInfo *ai = auth_info();
+	ui_vgrad(0, 18, TOP_W, 90, C2D_Color32(0x2a, 0x47, 0x5e, 0xff), COL_BG);
+	// Avatar con marco y el nivel en un círculo, como en Steam
+	const Pic *p = ai->avatar[0] ? img_get(ai->avatar, 64) : NULL;
+	ui_rect(16, 34, 76, 76, COL_ACC);
+	if (p) img_draw_cover(p, 18, 36, 72, 72, 0.5f);
+	else ui_rect(18, 36, 72, 72, COL_PANEL);
+	ui_text(108, 38, ai->persona[0] ? ai->persona : ai->account, SZ_TITLE, COL_WHITE, AL_LEFT, TOP_W - 120);
+	if (ai->level) {
+		ui_circle(122, 82, 12, C2D_Color32(0x9b, 0x9b, 0x9b, 0xff));
+		ui_circle(122, 82, 10, COL_BG);
+		char lv[8];
+		snprintf(lv, sizeof lv, "%d", ai->level);
+		ui_text(122, 76, lv, SZ_SMALL, COL_WHITE, AL_CENTER, 0);
+		ui_text(140, 76, _("Nivel de Steam"), SZ_SMALL, COL_DIM, AL_LEFT, 0);
+	}
+	ui_text(108, 96, ai->account, SZ_TINY, COL_DIM, AL_LEFT, TOP_W - 120);
+
+	Tab *lib = &tabs[TAB_LIBRARY];
+	if (!lib->list.count) {
+		if (lib->list.req) draw_net_wait(TOP_W / 2, 170, _("Cargando tu biblioteca…"));
+		else if (lib->list.err[0]) ui_text(TOP_W / 2, 160, human_err(lib->list.err), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		return;
+	}
+	// Juegos, horas y lo más jugado
+	long total = 0;
+	int top3[3] = {-1, -1, -1};
+	for (int i = 0; i < lib->list.count; i++) {
+		int m = lib->list.rows[i].minutes;
+		total += m;
+		for (int k = 0; k < 3; k++) {
+			if (top3[k] < 0 || m > lib->list.rows[top3[k]].minutes) {
+				for (int j = 2; j > k; j--) top3[j] = top3[j - 1];
+				top3[k] = i;
+				break;
+			}
+		}
+	}
+	char st[64];
+	snprintf(st, sizeof st, _("%d juegos · %ld h jugadas"), lib->list.count, (total + 30) / 60);
+	ui_text(16, 122, st, SZ_BODY, COL_TXT, AL_LEFT, 380);
+	ui_text(16, 144, _("LO MÁS JUGADO"), SZ_TINY, COL_ACC, AL_LEFT, 0);
+	int maxm = top3[0] >= 0 ? lib->list.rows[top3[0]].minutes : 1;
+	for (int k = 0; k < 3; k++) {
+		if (top3[k] < 0 || !lib->list.rows[top3[k]].minutes) break;
+		const StoreRow *r = &lib->list.rows[top3[k]];
+		float y = 160 + k * 24;
+		char hrs[16];
+		snprintf(hrs, sizeof hrs, "%d h", (r->minutes + 30) / 60);
+		ui_text(16, y, r->name, SZ_SMALL, COL_WHITE, AL_LEFT, 250);
+		ui_text(TOP_W - 16, y, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+		ui_rect(16, y + 15, TOP_W - 32, 3, COL_PANEL);
+		ui_rect(16, y + 15, (TOP_W - 32) * r->minutes / (float)(maxm ? maxm : 1), 3, COL_ACC);
+	}
+}
+
+static void draw_profile_bottom(void)
+{
+	ui_rect(0, 0, BOT_W, SCR_H, COL_BG);
+	ui_text(BOT_W / 2, 30, _("Tu cuenta de Steam"), SZ_LARGE, COL_WHITE, AL_CENTER, 300);
+	ui_text(BOT_W / 2, 54, _("Desde aquí ves lo tuyo; la tienda funciona igual"), SZ_SMALL, COL_DIM, AL_CENTER, 300);
+	char lib[48], wish[48];
+	Tab *l = &tabs[TAB_LIBRARY], *w = &tabs[TAB_WISHLIST];
+	if (l->list.count) snprintf(lib, sizeof lib, _("Biblioteca (%d)"), l->list.count);
+	else snprintf(lib, sizeof lib, "%s", _("Biblioteca"));
+	if (w->wish_loaded) snprintf(wish, sizeof wish, _("Lista de deseos (%d)"), w->nwish);
+	else snprintf(wish, sizeof wish, "%s", _("Lista de deseos"));
+	draw_button(&B_PLIB, IC_PAD, lib, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PLIB);
+	draw_button(&B_PWISH, IC_HEART, wish, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PWISH);
+	u32 red = C2D_Color32(0x6a, 0x26, 0x22, 0xff);
+	draw_button(&B_PLOGOUT, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
+	static const char *hh[] = {"B", "Volver", "START", "Menú"};
+	draw_hints(hh, 2);
+}
+
+static int press_update(u32 kd, u32 kh, u32 ku, touchPosition *tp, const int *ids, int n);
+
+static void do_logout(void)
+{
+	auth_logout();
+	account_lists_clear();
+	toast(_("Sesión cerrada"));
+}
+
+static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
+{
+	if (kd & KEY_B) {
+		go_scene(SC_STORE, -1);
+		return;
+	}
+	static const int ids[] = {BT_PLIB, BT_PWISH, BT_PLOGOUT};
+	int b = press_update(kd, kh, ku, tp, ids, 3);
+	if (b == BT_PLIB) open_account_list(TAB_LIBRARY);
+	if (b == BT_PWISH) open_account_list(TAB_WISHLIST);
+	if (b == BT_PLOGOUT) {
+		do_logout();
+		go_scene(SC_STORE, -1);
+	}
+}
+
 static void menu_choose(int item)
 {
 	S.menu_open = false;
 	switch (item) {
 	case MI_LOGIN: open_login(); break;
 	case MI_LOGOUT:
-		auth_logout();
-		toast(_("Sesión cerrada"));
+		do_logout();
+		if (S.tab >= TAB_COUNT || S.scene == SC_PROFILE) {
+			S.tab = S.tab >= TAB_COUNT ? S.prev_tab : S.tab;
+			S.tab_x = S.tab;
+			go_scene(SC_STORE, -1);
+		}
 		break;
+	case MI_PROFILE:
+		go_scene(SC_PROFILE, 1);
+		if (!tabs[TAB_LIBRARY].started) tab_more(TAB_LIBRARY);
+		if (!tabs[TAB_WISHLIST].started) tab_more(TAB_WISHLIST);
+		break;
+	case MI_LIBRARY: open_account_list(TAB_LIBRARY); break;
+	case MI_WISHLIST: open_account_list(TAB_WISHLIST); break;
 	case MI_EXIT:
 		S.ask_exit = true;
 		S.exit_anim = 0;
@@ -1863,10 +2102,25 @@ static void store_activate(void)
 	}
 }
 
+static void close_account_list(void)
+{
+	S.tab = S.prev_tab;
+	S.tab_x = S.prev_tab;
+	go_scene(SC_STORE, -1);
+}
+
 static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 {
-	if (kd & KEY_L) tab_switch((S.tab + TAB_COUNT - 1) % TAB_COUNT);
-	if (kd & KEY_R) tab_switch((S.tab + 1) % TAB_COUNT);
+	if (S.tab >= TAB_COUNT) {
+		static const int ids[] = {BT_BACKBAR};
+		if ((kd & KEY_B) || press_update(kd, kh, ku, tp, ids, 1) == BT_BACKBAR) {
+			close_account_list();
+			return;
+		}
+	} else {
+		if (kd & KEY_L) tab_switch((S.tab + TAB_COUNT - 1) % TAB_COUNT);
+		if (kd & KEY_R) tab_switch((S.tab + 1) % TAB_COUNT);
+	}
 	Tab *t = CUR;
 	if (key_repeat(kd, kh, KEY_DOWN)) store_select(t->sel + 1, 1);
 	if (key_repeat(kd, kh, KEY_UP)) store_select(t->sel - 1, -1);
@@ -1909,7 +2163,7 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	if (ku & KEY_TOUCH) {
 		if (S.touch_moved < 8) {
 			int x = S.touch_x0, y = S.touch_y0;
-			if (y < LIST_Y) {
+			if (y < LIST_Y && S.tab < TAB_COUNT) {
 				int nt = (int)(x / (BOT_W / 4.6f));
 				tab_switch(nt >= TAB_COUNT ? TAB_SEARCH : nt);
 			} else if (S.dragging) {
@@ -1974,6 +2228,10 @@ static const Box *button_box(int id)
 	case BT_EXIT_NO: return &B_EXIT_NO;
 	case BT_EXIT_YES: return &B_EXIT_YES;
 	case BT_SEARCH: return &B_SEARCHBAR;
+	case BT_BACKBAR: return &B_BACKBAR;
+	case BT_PLIB: return &B_PLIB;
+	case BT_PWISH: return &B_PWISH;
+	case BT_PLOGOUT: return &B_PLOGOUT;
 	}
 	return NULL;
 }
@@ -2159,9 +2417,11 @@ int main(int argc, char **argv)
 		hidTouchRead(&tp);
 
 		poll_country();
-		for (int ti = 0; ti < TAB_COUNT; ti++) {
+		for (int ti = 0; ti < TAB_ALL; ti++) {
 			Tab *t = &tabs[ti];
 			if (ti == TAB_HOME) home_poll();
+			else if (ti == TAB_LIBRARY) owned_poll(t);
+			else if (ti == TAB_WISHLIST) wish_poll(t);
 			else list_poll(&t->list, tab_paged(ti));
 			if (ti == TAB_BETAS) {
 				// La etiqueta «Acceso anticipado» la ponen los usuarios y se queda en juegos que ya
@@ -2179,8 +2439,8 @@ int main(int argc, char **argv)
 				} else if (!t->list.count && t->started) {
 					tab_more(ti);   // espera sola lo que toque
 				} else if (ti == TAB_SEARCH && t->term[0] && tab_can_retry(t)) {
-					char term[64];
-					snprintf(term, sizeof term, "%s", t->term);
+					char term[sizeof t->term];
+					memcpy(term, t->term, sizeof term);
 					search_start(term);
 				}
 			} else {
@@ -2247,12 +2507,16 @@ int main(int argc, char **argv)
 		case SC_SHOTS: input_shots(kd, kh, ku, &tp); break;
 		case SC_SPLASH: splash_update(dt, kd); break;
 		case SC_LOGIN: input_login(kd, dt); break;
+		case SC_PROFILE: input_profile(kd, kh, ku, &tp); break;
 		}
 		auth_update();
 		// Avisos de la sesión: entró desde la sesión guardada, o Steam ya no la acepta
 		if (auth_info()->state != S.last_auth) {
 			if (S.last_auth == AUTH_STARTING && auth_info()->state == AUTH_OUT && !strcmp(auth_info()->err, "expired"))
+			{
 				toast(_("Tu sesión de Steam caducó: vuelve a iniciarla"));
+				account_lists_clear();
+			}
 			S.last_auth = auth_info()->state;
 		}
 
@@ -2305,11 +2569,12 @@ int main(int argc, char **argv)
 		case SC_SHOTS: draw_shots_top(); break;
 		case SC_SPLASH: draw_splash_top(); break;
 		case SC_LOGIN: draw_login_top(); break;
+		case SC_PROFILE: draw_profile_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -2324,6 +2589,7 @@ int main(int argc, char **argv)
 		case SC_SHOTS: draw_shots_bottom(); break;
 		case SC_SPLASH: draw_splash_bottom(); break;
 		case SC_LOGIN: draw_login_bottom(); break;
+		case SC_PROFILE: draw_profile_bottom(); break;
 		}
 		C2D_ViewReset();
 		if (ce < 1) ui_rect(0, 0, BOT_W, SCR_H, col_alpha(COL_BG, (1 - ce) * 0.9f));
@@ -2365,6 +2631,7 @@ int main(int argc, char **argv)
 
 	netlog("salir");
 	if (S.country_req) net_release(S.country_req);
+	account_lists_clear();
 	for (int i = 0; i < TAB_COUNT; i++) {
 		rowlist_free(&tabs[i].list);
 		for (int k = 0; k < HOME_PARTS; k++) rowlist_free(&tabs[i].part[k]);

@@ -1,0 +1,57 @@
+# Fase 2: tienda sin cuenta (Ofertas + Ficha). Con el relé: RELAY_COUNTRY=ES python3 tests/dev_relay.py
+wait 240
+shot 00_arranque
+wait 600
+shot 01_ofertas
+press DOWN
+press DOWN
+press DOWN
+wait 300
+shot 02_ofertas_sel
+press A
+wait 360
+shot 03_resumen
+press R
+wait 30
+shot 04_requisitos
+press R
+wait 300
+shot 05_opiniones
+press DOWN
+press DOWN
+wait 30
+shot 06_opiniones_bajar
+press R
+wait 300
+shot 07_extras
+press R
+wait 300
+shot 08_similares
+press DOWN
+press A
+wait 360
+shot 09_similar_abierto
+press B
+wait 60
+shot 10_volver
+touch 235 121
+wait 300
+shot 11_capturas
+press RIGHT
+wait 240
+shot 12_capturas2
+press B
+press X
+wait 30
+shot 13_qr
+press B
+press B
+wait 30
+drag 160 200 160 60 20
+wait 30
+shot 14_lista_arrastrada
+press START
+wait 20
+shot 15_salir
+press B
+quit

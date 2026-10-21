@@ -1,0 +1,455 @@
+#include "net.h"
+#include "app.h"
+
+#include <curl/curl.h>
+#include <jpeglib.h>
+#include <setjmp.h>
+#include <malloc.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <time.h>
+#include <sys/stat.h>
+
+#define SOC_BUFSIZE  0x100000
+#define MAX_BODY     (4 * 1024 * 1024)
+
+typedef struct {
+	Req *head, *tail;
+	LightLock lock;
+	LightEvent wake;
+	Thread thread;
+	CURL *curl;
+	NetLane lane;
+} Lane;
+
+static Lane lanes[LANE_COUNT];
+static volatile bool quitting;
+static u32 *soc_buf;
+static volatile bool soc_ready;
+static LightLock soc_lock;
+static LightLock log_lock;
+static LightLock ref_lock;
+static volatile const char *status_text = "";
+
+// ----------------------------------------------------------------------------
+// Registro en la SD
+
+void netlog(const char *fmt, ...)
+{
+	LightLock_Lock(&log_lock);
+	FILE *f = fopen(APP_DIR "/net.log", "a");
+	if (f) {
+		time_t t = time(NULL);
+		struct tm *tm = gmtime(&t);
+		fprintf(f, "%02d:%02d:%02d ", tm->tm_hour, tm->tm_min, tm->tm_sec);
+		va_list ap;
+		va_start(ap, fmt);
+		vfprintf(f, fmt, ap);
+		va_end(ap);
+		fputc('\n', f);
+		fclose(f);
+	}
+	LightLock_Unlock(&log_lock);
+}
+
+static void log_rotate(void)
+{
+	struct stat st;
+	if (stat(APP_DIR "/net.log", &st) == 0 && st.st_size > 256 * 1024) {
+		remove(APP_DIR "/net.old.log");
+		rename(APP_DIR "/net.log", APP_DIR "/net.old.log");
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Wi-Fi y soc:U (pueden no estar listos al arrancar: se reintenta solo)
+
+static bool soc_try_init(void)
+{
+	LightLock_Lock(&soc_lock);
+	if (!soc_ready) {
+		if (!soc_buf) soc_buf = (u32 *)memalign(0x1000, SOC_BUFSIZE);
+		Result rc = soc_buf ? socInit(soc_buf, SOC_BUFSIZE) : -1;
+		if (R_SUCCEEDED(rc)) {
+			soc_ready = true;
+			netlog("soc: listo");
+		} else {
+			netlog("soc: socInit fallo %08lX", rc);
+			socExit();
+		}
+	}
+	LightLock_Unlock(&soc_lock);
+	return soc_ready;
+}
+
+bool net_wifi_ok(void)
+{
+	return soc_ready && gethostid() != 0;
+}
+
+const char *net_status_text(void)
+{
+	return (const char *)status_text;
+}
+
+// Espera a que haya red. Devuelve false si se canceló la petición o la app sale.
+static bool wait_network(Req *r)
+{
+	int tries = 0;
+	for (;;) {
+		if (quitting || r->cancel) return false;
+		if (soc_ready || soc_try_init()) {
+			if (gethostid() != 0) {
+				status_text = "";
+				return true;
+			}
+			u32 st = 0;
+			ACU_GetStatus(&st);
+			status_text = (st == 3) ? "wifi_noip" : "wifi_off";
+		} else {
+			status_text = "soc";
+		}
+		if ((tries++ % 5) == 0) netlog("red: esperando (%s)", status_text);
+		svcSleepThread(1000000000LL);
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Peticiones
+
+static void req_free(Req *r)
+{
+	free(r->url);
+	free(r->data);
+	free(r->pixels);
+	free(r);
+}
+
+void net_release(Req *r)
+{
+	if (!r) return;
+	r->cancel = true;
+	LightLock_Lock(&ref_lock);
+	int left = --r->refs;
+	LightLock_Unlock(&ref_lock);
+	if (left == 0) req_free(r);
+}
+
+static void lane_push(Lane *l, Req *r)
+{
+	LightLock_Lock(&l->lock);
+	r->next = NULL;
+	if (l->tail) l->tail->next = r; else l->head = r;
+	l->tail = r;
+	LightLock_Unlock(&l->lock);
+	LightEvent_Signal(&l->wake);
+}
+
+static Req *lane_pop(Lane *l)
+{
+	LightLock_Lock(&l->lock);
+	Req *r = l->head;
+	if (r) {
+		l->head = r->next;
+		if (!l->head) l->tail = NULL;
+	}
+	LightLock_Unlock(&l->lock);
+	return r;
+}
+
+static Req *req_new(const char *url, NetLane lane)
+{
+	Req *r = calloc(1, sizeof(Req));
+	if (!r) return NULL;
+#ifdef DEV_RELAY
+	// Solo en builds de prueba: https://host/ruta -> http://127.0.0.1:8099/host/ruta
+	if (strncmp(url, "https://", 8) == 0) {
+		size_t n = strlen(url) + 32;
+		r->url = malloc(n);
+		snprintf(r->url, n, "http://127.0.0.1:8099/%s", url + 8);
+	} else
+#endif
+	r->url = strdup(url);
+	r->lane = lane;
+	r->refs = 2;   // quien la pide + el hilo de red
+	return r;
+}
+
+Req *net_get(const char *url, NetLane lane)
+{
+	Req *r = req_new(url, lane);
+	if (r) lane_push(&lanes[lane], r);
+	return r;
+}
+
+Req *net_get_jpeg(const char *url, int max_w)
+{
+	Req *r = req_new(url, LANE_IMG);
+	if (!r) return NULL;
+	r->jpeg = true;
+	r->jpeg_max_w = max_w;
+	lane_push(&lanes[LANE_IMG], r);
+	return r;
+}
+
+Req *net_head(const char *url)
+{
+	Req *r = req_new(url, LANE_API);
+	if (!r) return NULL;
+	r->head = true;
+	lane_push(&lanes[LANE_API], r);
+	return r;
+}
+
+static size_t on_body(char *p, size_t sz, size_t n, void *ud)
+{
+	Req *r = ud;
+	size_t add = sz * n;
+	if (r->len + add + 1 > r->cap) {
+		size_t cap = r->cap ? r->cap : 16384;
+		while (cap < r->len + add + 1) cap *= 2;
+		if (cap > MAX_BODY) return 0;
+		char *d = realloc(r->data, cap);
+		if (!d) return 0;
+		r->data = d;
+		r->cap = cap;
+	}
+	memcpy(r->data + r->len, p, add);
+	r->len += add;
+	r->data[r->len] = 0;
+	return add;
+}
+
+static size_t on_header(char *p, size_t sz, size_t n, void *ud)
+{
+	Req *r = ud;
+	size_t len = sz * n;
+	static const char key[] = "set-cookie: steamCountry=";
+	if (len > sizeof(key) + 2 && strncasecmp(p, key, sizeof(key) - 1) == 0) {
+		const char *c = p + sizeof(key) - 1;
+		if (c[0] >= 'A' && c[0] <= 'Z' && c[1] >= 'A' && c[1] <= 'Z') {
+			r->country[0] = c[0];
+			r->country[1] = c[1];
+			r->country[2] = 0;
+		}
+	}
+	return len;
+}
+
+static int on_progress(void *ud, curl_off_t dt, curl_off_t dn, curl_off_t ut, curl_off_t un)
+{
+	Req *r = ud;
+	return (r->cancel || quitting) ? 1 : 0;
+}
+
+// ----------------------------------------------------------------------------
+// JPEG (libjpeg-turbo, con escalado al decodificar: mucho más rápido)
+
+struct jerr { struct jpeg_error_mgr mgr; jmp_buf jb; };
+
+static void jerr_exit(j_common_ptr c)
+{
+	longjmp(((struct jerr *)c->err)->jb, 1);
+}
+
+static bool decode_jpeg(Req *r)
+{
+	struct jpeg_decompress_struct ci;
+	struct jerr je;
+	u8 *out = NULL;
+	ci.err = jpeg_std_error(&je.mgr);
+	je.mgr.error_exit = jerr_exit;
+	if (setjmp(je.jb)) {
+		jpeg_destroy_decompress(&ci);
+		free(out);
+		return false;
+	}
+	jpeg_create_decompress(&ci);
+	jpeg_mem_src(&ci, (const u8 *)r->data, r->len);
+	jpeg_read_header(&ci, TRUE);
+	ci.out_color_space = JCS_RGB;
+	ci.scale_num = 1;
+	ci.scale_denom = 1;
+	while (ci.scale_denom < 8 && (int)(ci.image_width / (ci.scale_denom * 2)) >= r->jpeg_max_w)
+		ci.scale_denom *= 2;
+	jpeg_start_decompress(&ci);
+	int w = ci.output_width, h = ci.output_height;
+	out = malloc((size_t)w * h * 3);
+	if (!out) longjmp(je.jb, 1);
+	while (ci.output_scanline < ci.output_height) {
+		u8 *row = out + (size_t)ci.output_scanline * w * 3;
+		jpeg_read_scanlines(&ci, &row, 1);
+	}
+	jpeg_finish_decompress(&ci);
+	jpeg_destroy_decompress(&ci);
+	r->pixels = out;
+	r->w = w;
+	r->h = h;
+	return true;
+}
+
+// ----------------------------------------------------------------------------
+
+static void run_req(Lane *l, Req *r)
+{
+	if (!wait_network(r)) {
+		snprintf(r->err, sizeof r->err, "cancelada");
+		r->state = REQ_FAILED;
+		return;
+	}
+	r->state = REQ_RUNNING;
+	CURL *c = l->curl;
+	curl_easy_reset(c);
+	curl_easy_setopt(c, CURLOPT_URL, r->url);
+	curl_easy_setopt(c, CURLOPT_USERAGENT, APP_USER_AGENT);
+	curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+	curl_easy_setopt(c, CURLOPT_MAXREDIRS, 5L);
+	curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
+	curl_easy_setopt(c, CURLOPT_CAINFO, "romfs:/certs/cacert.pem");
+	curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
+	curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
+	curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 1L);
+	curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 20L);
+	curl_easy_setopt(c, CURLOPT_MAXAGE_CONN, 30L);
+	curl_easy_setopt(c, CURLOPT_TCP_KEEPALIVE, 1L);
+	curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 32768L);
+	curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, on_body);
+	curl_easy_setopt(c, CURLOPT_WRITEDATA, r);
+	curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, on_header);
+	curl_easy_setopt(c, CURLOPT_HEADERDATA, r);
+	curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+	curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, on_progress);
+	curl_easy_setopt(c, CURLOPT_XFERINFODATA, r);
+	if (r->head) curl_easy_setopt(c, CURLOPT_NOBODY, 1L);
+
+	u64 t0 = osGetTime();
+	CURLcode rc = curl_easy_perform(c);
+	curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &r->http);
+	double tdns = 0, ttcp = 0, ttls = 0, tfirst = 0;
+	curl_easy_getinfo(c, CURLINFO_NAMELOOKUP_TIME, &tdns);
+	curl_easy_getinfo(c, CURLINFO_CONNECT_TIME, &ttcp);
+	curl_easy_getinfo(c, CURLINFO_APPCONNECT_TIME, &ttls);
+	curl_easy_getinfo(c, CURLINFO_STARTTRANSFER_TIME, &tfirst);
+
+	if (rc != CURLE_OK) {
+		snprintf(r->err, sizeof r->err, "curl=%d %s", rc, curl_easy_strerror(rc));
+	} else if (r->http < 200 || r->http >= 300) {
+		snprintf(r->err, sizeof r->err, "HTTP %ld", r->http);
+	} else if (r->jpeg && !decode_jpeg(r)) {
+		snprintf(r->err, sizeof r->err, "imagen no válida");
+	}
+
+	// La URL del registro, sin la consulta (puede ser larga)
+	char shown[96];
+	snprintf(shown, sizeof shown, "%s", r->url);
+	char *q = strchr(shown, '?');
+	if (q) *q = 0;
+	netlog("%s %s -> %ld %luB dns=%.2f tcp=%.2f tls=%.2f 1er=%.2f total=%.2fs%s%s",
+		r->head ? "HEAD" : "GET", shown, r->http, (unsigned long)r->len,
+		tdns, ttcp, ttls, tfirst, (osGetTime() - t0) / 1000.0,
+		r->err[0] ? " ERROR " : "", r->err);
+
+	// Las imágenes ya decodificadas no necesitan el JPEG
+	if (r->jpeg && r->pixels) {
+		free(r->data);
+		r->data = NULL;
+		r->len = r->cap = 0;
+	}
+	r->state = r->err[0] ? REQ_FAILED : REQ_DONE;
+}
+
+static void lane_main(void *arg)
+{
+	Lane *l = arg;
+	l->curl = curl_easy_init();
+	while (!quitting) {
+		Req *r = lane_pop(l);
+		if (!r) {
+			LightEvent_WaitTimeout(&l->wake, 500000000LL);
+			continue;
+		}
+		if (r->cancel) {
+			r->state = REQ_FAILED;
+		} else {
+			run_req(l, r);
+		}
+		net_release(r);
+	}
+	curl_easy_cleanup(l->curl);
+}
+
+static Thread start_thread(ThreadFunc f, void *arg)
+{
+	s32 prio = 0x30;
+	svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+	Thread t = threadCreate(f, arg, 64 * 1024, prio + 1, 2, false);
+	if (!t) {
+		APT_SetAppCpuTimeLimit(30);
+		t = threadCreate(f, arg, 64 * 1024, prio + 1, 1, false);
+	}
+	if (!t) t = threadCreate(f, arg, 64 * 1024, prio + 1, -2, false);
+	return t;
+}
+
+void net_init(void)
+{
+	mkdir("sdmc:/3ds", 0777);
+	mkdir(APP_DIR, 0777);
+	LightLock_Init(&log_lock);
+	LightLock_Init(&soc_lock);
+	LightLock_Init(&ref_lock);
+	log_rotate();
+	netlog("---- %s %s", APP_NAME, APP_VERSION);
+	acInit();
+	soc_try_init();
+	curl_global_init(CURL_GLOBAL_DEFAULT);
+	for (int i = 0; i < LANE_COUNT; i++) {
+		Lane *l = &lanes[i];
+		l->lane = i;
+		LightLock_Init(&l->lock);
+		LightEvent_Init(&l->wake, RESET_ONESHOT);
+		l->thread = start_thread(lane_main, l);
+	}
+}
+
+void net_exit(void)
+{
+	quitting = true;
+	for (int i = 0; i < LANE_COUNT; i++) {
+		LightEvent_Signal(&lanes[i].wake);
+		if (lanes[i].thread) {
+			threadJoin(lanes[i].thread, U64_MAX);
+			threadFree(lanes[i].thread);
+		}
+		Req *r;
+		while ((r = lane_pop(&lanes[i]))) net_release(r);
+	}
+	curl_global_cleanup();
+	if (soc_ready) socExit();
+	acExit();
+}
+
+char *url_escape(const char *s)
+{
+	static const char hex[] = "0123456789ABCDEF";
+	size_t n = strlen(s);
+	char *o = malloc(n * 3 + 1), *p = o;
+	if (!o) return NULL;
+	for (; *s; s++) {
+		unsigned char ch = *s;
+		if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+		    ch == '-' || ch == '_' || ch == '.' || ch == '~') {
+			*p++ = ch;
+		} else {
+			*p++ = '%';
+			*p++ = hex[ch >> 4];
+			*p++ = hex[ch & 15];
+		}
+	}
+	*p = 0;
+	return o;
+}

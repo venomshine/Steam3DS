@@ -14,6 +14,10 @@ typedef struct {
 	bool free;
 	char review[40];        // "Muy positivas"
 	int review_pct;
+	int type;               // 0 juego, 1 demo, 4 DLC… (como lo da Steam)
+	bool header;            // fila de título de apartado (Inicio), no es un juego
+	bool coming_soon;
+	bool early;             // sigue en acceso anticipado (dato de Steam, no la etiqueta de los usuarios)
 } StoreRow;
 
 typedef struct {
@@ -86,7 +90,7 @@ typedef struct {
 
 	u32 dlc[64];
 	int ndlc;
-	bool is_dlc;
+	bool is_dlc, is_demo;
 	u32 fullgame;               // si es un DLC: el juego base que necesita
 	char fullgame_name[96];
 } AppInfo;
@@ -95,8 +99,19 @@ void steam_set_context(const char *lang_steam, const char *country);
 const char *steam_country(void);
 const char *steam_lang(void);
 
-// Ofertas (la misma consulta que la tienda: juegos con descuento por relevancia)
+// Listados de la tienda (IStoreQueryService/Query)
+typedef enum {
+	Q_OFFERS,   // juegos con descuento, por relevancia (como la tienda)
+	Q_TOP,      // lo más vendido
+	Q_NEW,      // novedades populares (últimos 30 días)
+	Q_SOON,     // próximamente
+	Q_F2P,      // gratis para jugar
+	Q_DEMOS,    // demos más populares
+	Q_EARLY,    // acceso anticipado
+} StoreQuery;
+Req *steam_req_query(StoreQuery q, int start, int count);
 Req *steam_req_offers(int start, int count);
+Req *steam_req_search(const char *term);
 bool steam_parse_rows(const char *json, RowList *list, bool append);
 
 // Ficha

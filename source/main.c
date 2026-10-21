@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "app.h"
 #include "i18n.h"
@@ -50,15 +51,12 @@ static struct {
 
 	// Tienda
 	int tab;
-	RowList offers;
-	u64 offers_fail_at;
-	int sel;
-	float scroll, scroll_target;
 	bool dragging;
 	int touch_y0, touch_x0, touch_moved;
 	float drag_scroll0;
-	bool finger_scrolled;
-	u64 sel_changed;
+	bool want_kb;                // abrir el teclado (fuera del frame de dibujo)
+	char recents[8][64];         // búsquedas recientes
+	int nrecents;
 
 	// Ficha
 	u32 app;
@@ -85,7 +83,7 @@ static struct {
 
 	// Animaciones
 	float tab_x;                 // pestaña marcada (se desliza)
-	float sel_y, lsel_y;         // franja de selección de las listas
+	float lsel_y;                // franja de selección de las listas de la ficha
 	float seg_x;                 // apartado marcado en el selector
 	float sec_anim; int sec_dir; // entrada del apartado
 	float scene_anim; int scene_dir;
@@ -95,7 +93,22 @@ static struct {
 	float toast_y;
 } S;
 
-enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES };
+enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH };
+
+// Pestañas de la tienda
+#define HOME_PARTS 4
+typedef struct {
+	RowList list;
+	int sel;
+	float scroll, scroll_target, sel_y;
+	bool finger;                 // la lista la ha movido el dedo
+	bool started;
+	u64 fail_at, sel_changed;
+	RowList part[HOME_PARTS];    // Inicio: los apartados se piden a la vez y se juntan
+	char term[64];               // Buscar: lo que se buscó
+} Tab;
+static Tab tabs[TAB_COUNT];
+#define CUR (&tabs[S.tab])
 
 static InfoEnt cache[CACHE];
 static u64 frame_no;
@@ -218,14 +231,151 @@ static void list_poll(RowList *l, bool append)
 	l->req = NULL;
 }
 
-static void offers_more(void)
+static const StoreQuery home_q[HOME_PARTS] = {Q_TOP, Q_NEW, Q_SOON, Q_F2P};
+static const char *home_title[HOME_PARTS] = {"Lo más vendido", "Novedades populares", "Próximamente", "Gratis para jugar"};
+
+static bool tab_paged(int t)
 {
-	if (S.offers.req || S.offers.end || !S.ctx_ready) return;
-	if (S.offers.err[0]) {
-		if (osGetTime() - S.offers_fail_at < (u64)retry_delay(S.offers.err) * 1000) return;
-		S.offers.err[0] = 0;
+	return t == TAB_OFFERS || t == TAB_DEMOS || t == TAB_BETAS;
+}
+
+// Espera lo que toque tras un error antes de volver a pedir
+static bool tab_can_retry(Tab *t)
+{
+	if (!t->list.err[0]) return true;
+	if (osGetTime() - t->fail_at < (u64)retry_delay(t->list.err) * 1000) return false;
+	t->list.err[0] = 0;
+	return true;
+}
+
+static void tab_more(int ti)
+{
+	Tab *t = &tabs[ti];
+	if (!S.ctx_ready || t->list.req || !tab_can_retry(t)) return;
+	if (ti == TAB_HOME) {
+		if (t->list.count) return;
+		for (int i = 0; i < HOME_PARTS; i++)
+			if (!t->part[i].req && !t->part[i].count) {
+				t->part[i].err[0] = 0;
+				t->part[i].req = steam_req_query(home_q[i], 0, 10);
+			}
+	} else if (tab_paged(ti)) {
+		if (t->list.end) return;
+		static const StoreQuery q[TAB_COUNT] = {[TAB_OFFERS] = Q_OFFERS, [TAB_DEMOS] = Q_DEMOS, [TAB_BETAS] = Q_EARLY};
+		t->list.req = steam_req_query(q[ti], t->list.count, PAGE);
 	}
-	S.offers.req = steam_req_offers(S.offers.count, PAGE);
+	t->started = true;
+}
+
+static void add_row(RowList *l, const StoreRow *r)
+{
+	if (l->count == l->cap) {
+		int cap = l->cap ? l->cap * 2 : 48;
+		StoreRow *n = realloc(l->rows, cap * sizeof(StoreRow));
+		if (!n) return;
+		l->rows = n;
+		l->cap = cap;
+	}
+	l->rows[l->count++] = *r;
+}
+
+// Inicio: cuando llegan los cuatro apartados se juntan en una lista con títulos
+static void home_poll(void)
+{
+	Tab *t = &tabs[TAB_HOME];
+	bool busy = false, any = false;
+	for (int i = 0; i < HOME_PARTS; i++) {
+		list_poll(&t->part[i], false);
+		if (t->part[i].req) busy = true;
+		if (t->part[i].count) any = true;
+	}
+	if (busy || t->list.count || !t->started) return;
+	if (!any) {
+		// Todo falló: el error del primero, y se reintenta solo
+		for (int i = 0; i < HOME_PARTS; i++)
+			if (t->part[i].err[0] && !t->list.err[0]) snprintf(t->list.err, sizeof t->list.err, "%s", t->part[i].err);
+		return;
+	}
+	for (int i = 0; i < HOME_PARTS; i++) {
+		if (!t->part[i].count) continue;
+		StoreRow hd = {0};
+		hd.header = true;
+		snprintf(hd.name, sizeof hd.name, "%s", _(home_title[i]));
+		add_row(&t->list, &hd);
+		for (int k = 0; k < t->part[i].count; k++) add_row(&t->list, &t->part[i].rows[k]);
+	}
+	t->list.total = t->list.count;
+	t->list.end = true;
+	t->list.err[0] = 0;
+	t->sel = t->list.count > 1 ? 1 : 0;
+	t->sel_y = t->sel;
+	t->sel_changed = osGetTime();
+}
+
+// Buscar: las recientes se guardan en la SD, la última primero
+static void recents_load(void)
+{
+	FILE *f = fopen(APP_DIR "/searches.txt", "r");
+	if (!f) return;
+	char line[64];   // las búsquedas tienen como mucho 60 caracteres (el teclado no deja más)
+	while (S.nrecents < 8 && fgets(line, sizeof line, f)) {
+		line[strcspn(line, "\r\n")] = 0;
+		if (line[0]) snprintf(S.recents[S.nrecents++], 64, "%s", line);
+	}
+	fclose(f);
+}
+
+static void recents_add(const char *term)
+{
+	char keep[8][64];
+	int n = 0;
+	snprintf(keep[n++], 64, "%s", term);
+	for (int i = 0; i < S.nrecents && n < 8; i++)
+		if (strcasecmp(S.recents[i], term)) snprintf(keep[n++], 64, "%s", S.recents[i]);
+	memcpy(S.recents, keep, sizeof keep);
+	S.nrecents = n;
+	FILE *f = fopen(APP_DIR "/searches.tmp", "w");
+	if (!f) return;
+	for (int i = 0; i < n; i++) fprintf(f, "%s\n", S.recents[i]);
+	fclose(f);
+	remove(APP_DIR "/searches.txt");
+	rename(APP_DIR "/searches.tmp", APP_DIR "/searches.txt");
+}
+
+// Sin búsqueda en marcha, la lista de Buscar son las recientes (filas sin appid)
+static void search_show_recents(void)
+{
+	Tab *t = &tabs[TAB_SEARCH];
+	if (t->list.req) return;
+	t->list.count = 0;
+	t->term[0] = 0;
+	for (int i = 0; i < S.nrecents; i++) {
+		StoreRow r = {0};
+		snprintf(r.name, sizeof r.name, "%s", S.recents[i]);
+		add_row(&t->list, &r);
+	}
+	t->list.total = t->list.count;
+	t->list.end = true;
+	t->sel = 0;
+	t->sel_y = 0;
+	t->scroll = t->scroll_target = 0;
+}
+
+static void search_start(const char *term)
+{
+	Tab *t = &tabs[TAB_SEARCH];
+	if (!term[0] || !S.ctx_ready) return;
+	recents_add(term);
+	if (t->list.req) net_release(t->list.req);
+	t->list.req = steam_req_search(term);
+	t->list.count = 0;
+	t->list.err[0] = 0;
+	t->list.end = true;
+	snprintf(t->term, sizeof t->term, "%s", term);
+	t->sel = 0;
+	t->sel_y = 0;
+	t->scroll = t->scroll_target = 0;
+	t->sel_changed = osGetTime();
 }
 
 // ============================================================================
@@ -422,28 +572,48 @@ static const char *tab_name(int t)
 	return _(n[t]);
 }
 
-static void draw_store_top(void)
+#define SEARCH_BAR 30   // alto de la barra de búsqueda (solo en Buscar)
+
+static float list_top(void)
 {
-	if (S.tab != TAB_OFFERS) {
-		ui_text(TOP_W / 2, 100, tab_name(S.tab)[0] ? tab_name(S.tab) : _("Buscar"), SZ_TITLE, COL_WHITE, AL_CENTER, 0);
-		ui_text(TOP_W / 2, 126, _("Esta pestaña llega en la próxima fase"), SZ_BODY, COL_DIM, AL_CENTER, 0);
-		return;
+	return LIST_Y + (S.tab == TAB_SEARCH ? SEARCH_BAR : 0);
+}
+
+static float list_h(void)
+{
+	return SCR_H - 18 - list_top();
+}
+
+static const StoreRow *cur_row(void)
+{
+	Tab *t = CUR;
+	if (t->sel < 0 || t->sel >= t->list.count) return NULL;
+	const StoreRow *r = &t->list.rows[t->sel];
+	return r->header ? NULL : r;
+}
+
+// Lo que pone abajo a la derecha de la vista previa
+static void footer_text(char *out, size_t n)
+{
+	Tab *t = CUR;
+	switch (S.tab) {
+	case TAB_HOME:
+		out[0] = 0;
+		for (int i = t->sel; i >= 0; i--)
+			if (t->list.rows[i].header) { snprintf(out, n, "%s", t->list.rows[i].name); break; }
+		break;
+	case TAB_OFFERS: snprintf(out, n, _("Oferta %d de %d"), t->sel + 1, t->list.total); break;
+	case TAB_DEMOS: snprintf(out, n, _("Demo %d de %d"), t->sel + 1, t->list.total); break;
+	case TAB_BETAS: snprintf(out, n, "%s", _("Acceso anticipado")); break;   // el total de Steam cuenta también los que ya salieron
+	default:
+		if (t->term[0]) snprintf(out, n, _("%d resultados para «%s»"), t->list.count, t->term);
+		else out[0] = 0;
+		break;
 	}
-	if (S.offers.count == 0) {
-		if (S.offers.err[0] && !S.offers.req) {
-			int left = retry_delay(S.offers.err) - (int)((osGetTime() - S.offers_fail_at) / 1000);
-			char t[64];
-			snprintf(t, sizeof t, _("Reintentando en %d s · A para ya"), left < 0 ? 0 : left);
-			ui_text(TOP_W / 2, 92, _("No se pudieron cargar las ofertas"), SZ_LARGE, COL_TXT, AL_CENTER, 0);
-			ui_text(TOP_W / 2, 116, human_err(S.offers.err), SZ_BODY, COL_TXT, AL_CENTER, 380);
-			ui_text(TOP_W / 2, 136, t, SZ_SMALL, COL_ACC, AL_CENTER, 0);
-			ui_text(TOP_W / 2, 200, S.offers.err, SZ_TINY, COL_DIM, AL_CENTER, 380);
-		} else {
-			draw_net_wait(TOP_W / 2, 120, _("Cargando ofertas…"));
-		}
-		return;
-	}
-	const StoreRow *row = &S.offers.rows[S.sel];
+}
+
+static void draw_preview(const StoreRow *row)
+{
 	InfoEnt *e = info_get(row->appid, false);
 	const AppInfo *a = (e && e->done) ? &e->info : NULL;
 
@@ -463,18 +633,16 @@ static void draw_store_top(void)
 		for (int i = 0; i < a->ngenres && i < 2; i++) draw_tag(&tx, y, a->genres[i]);
 		if (a->ngenres) y += 19;
 	}
-	if (row->review[0]) {
+	if (row->review[0] && row->review_pct > 0) {
 		char t[96];
 		float rx = x + ui_text(x, y, _("Reseñas: "), SZ_SMALL, COL_DIM, AL_LEFT, 0);
 		snprintf(t, sizeof t, "%s", row->review);
-		rx += ui_text(rx, y, t, SZ_SMALL, review_col(row->review_pct), AL_LEFT, x + w - rx);
+		ui_text(rx, y, t, SZ_SMALL, review_col(row->review_pct), AL_LEFT, x + w - rx);
 		y += 13;
-		if (row->review_pct > 0) {
-			if (a && a->metacritic) snprintf(t, sizeof t, "%d %% · Metacritic %d", row->review_pct, a->metacritic);
-			else snprintf(t, sizeof t, "%d %%", row->review_pct);
-			ui_text(x, y, t, SZ_SMALL, COL_DIM, AL_LEFT, w);
-			y += 13;
-		}
+		if (a && a->metacritic) snprintf(t, sizeof t, "%d %% · Metacritic %d", row->review_pct, a->metacritic);
+		else snprintf(t, sizeof t, "%d %%", row->review_pct);
+		ui_text(x, y, t, SZ_SMALL, COL_DIM, AL_LEFT, w);
+		y += 13;
 	}
 	if (a && (a->release[0] || a->developer[0])) {
 		char t[112];
@@ -495,13 +663,47 @@ static void draw_store_top(void)
 	} else {
 		ui_spinner(TOP_W / 2, 165, 7, COL_DIM);
 	}
+}
 
-	float fe = clampf((osGetTime() - S.sel_changed) / 160.0f, 0, 1);
+static void draw_store_top(void)
+{
+	Tab *t = CUR;
+	const StoreRow *row = cur_row();
+	if (S.tab == TAB_SEARCH && !t->term[0]) {
+		// Buscar, sin búsqueda: qué se puede hacer
+		ui_icon(IC_SEARCH, TOP_W / 2 - 18, 62, 36, COL_ACC);
+		ui_text(TOP_W / 2, 112, _("Busca juegos, DLC y demos"), SZ_LARGE, COL_WHITE, AL_CENTER, 380);
+		ui_text(TOP_W / 2, 136, _("Toca la barra de abajo o pulsa Y para escribir"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		if (S.nrecents) ui_text(TOP_W / 2, 154, _("Abajo, tus búsquedas recientes"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		return;
+	}
+	if (!row || (row->appid == 0)) {
+		if (t->list.err[0] && !t->list.req) {
+			int left = retry_delay(t->list.err) - (int)((osGetTime() - t->fail_at) / 1000);
+			char tt[64];
+			snprintf(tt, sizeof tt, _("Reintentando en %d s · A para ya"), left < 0 ? 0 : left);
+			ui_text(TOP_W / 2, 92, _("No se pudo cargar esta lista"), SZ_LARGE, COL_TXT, AL_CENTER, 0);
+			ui_text(TOP_W / 2, 116, human_err(t->list.err), SZ_BODY, COL_TXT, AL_CENTER, 380);
+			ui_text(TOP_W / 2, 136, tt, SZ_SMALL, COL_ACC, AL_CENTER, 0);
+			ui_text(TOP_W / 2, 200, t->list.err, SZ_TINY, COL_DIM, AL_CENTER, 380);
+		} else if (S.tab == TAB_SEARCH && !t->list.req) {
+			char tt[112];
+			snprintf(tt, sizeof tt, _("No hay resultados para «%s»"), t->term);
+			ui_text(TOP_W / 2, 110, tt, SZ_LARGE, COL_TXT, AL_CENTER, 380);
+			ui_text(TOP_W / 2, 134, _("Prueba con otras palabras o con el nombre en inglés"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		} else {
+			draw_net_wait(TOP_W / 2, 120, _("Cargando…"));
+		}
+		return;
+	}
+	draw_preview(row);
+
+	float fe = clampf((osGetTime() - t->sel_changed) / 160.0f, 0, 1);
 	if (fe < 1) ui_rect(0, 22, TOP_W, SCR_H - 40, col_alpha(COL_BG, (1 - ease_out_cubic(fe)) * 0.85f));
 
-	char cnt[64];
-	snprintf(cnt, sizeof cnt, _("Oferta %d de %d"), S.sel + 1, S.offers.total);
-	ui_text(TOP_W - 12, SCR_H - 18, cnt, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+	char cnt[112];
+	footer_text(cnt, sizeof cnt);
+	ui_text(TOP_W - 12, SCR_H - 18, cnt, SZ_SMALL, COL_DIM, AL_RIGHT, TOP_W - 24);
 }
 
 static void draw_tabs(void)
@@ -521,59 +723,120 @@ static void draw_tabs(void)
 	}
 }
 
-static void draw_store_bottom(void)
+static void draw_search_bar(void)
 {
-	ui_rect(0, 0, BOT_W, SCR_H, COL_BG);
-	draw_tabs();
-	if (S.tab == TAB_OFFERS) {
-		ui_scissor(GFX_BOTTOM, 0, LIST_Y, BOT_W, LIST_H);
-		int first = (int)(S.scroll / ROW_H);
-		if (S.offers.count) {
-			float hy = LIST_Y + S.sel_y * ROW_H - S.scroll;
-			ui_rect(0, hy, BOT_W, ROW_H, COL_SEL);
-			ui_rect(0, hy, 3, ROW_H, COL_ACC);
-		}
-		for (int i = first; i < S.offers.count && i < first + LIST_H / ROW_H + 2; i++) {
-			const StoreRow *r = &S.offers.rows[i];
-			float y = LIST_Y + i * ROW_H - S.scroll;
-			bool on = i == S.sel;
-			ui_hline(0, y + ROW_H - 1, BOT_W, COL_LINE);
-			float pw = r->disc > 0 ? 36 + 50 : 50;
-			ui_text(8, y + 7, r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 18 - pw);
-			draw_price_right(BOT_W - 6, y + 2, ROW_H - 5, r, 36, 50);
-		}
-		float end_y = LIST_Y + S.offers.count * ROW_H - S.scroll;
-		if (S.offers.req && end_y < SCR_H) ui_spinner(BOT_W / 2, end_y + 14, 6, COL_DIM);
-		ui_scissor_off();
-		// Barra de scroll
-		float total = S.offers.count * ROW_H;
-		if (total > LIST_H) {
-			float h = LIST_H * LIST_H / total;
-			if (h < 12) h = 12;
-			float y = LIST_Y + (LIST_H - h) * (S.scroll / (total - LIST_H));
-			ui_rect(BOT_W - 2, y, 2, h, C2D_Color32(0x3d, 0x5a, 0x73, 0xff));
-		}
-	} else {
-		ui_text(BOT_W / 2, 110, _("Próximamente"), SZ_LARGE, COL_DIM, AL_CENTER, 0);
-	}
-	static const char *h[] = {"A", "Ficha", "L R", "Pestaña", "START", "Salir"};
-	draw_hints(h, 3);
+	Tab *t = CUR;
+	float y = LIST_Y + 4;
+	bool pressed = S.pressed == BT_SEARCH;
+	ui_rrect(8, y, BOT_W - 16, SEARCH_BAR - 8, 11, pressed ? COL_SEL : C2D_Color32(0x31, 0x4a, 0x61, 0xff));
+	ui_icon(IC_SEARCH, 16, y + 5, 12, COL_ACC);
+	if (t->term[0]) ui_text(34, y + 3, t->term, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 60);
+	else ui_text(34, y + 3, _("Buscar en la tienda…"), SZ_SMALL, COL_DIM, AL_LEFT, BOT_W - 60);
 }
 
-static void store_select(int sel)
+static void draw_store_bottom(void)
 {
-	if (S.offers.count == 0) return;
-	if (sel < 0) sel = 0;
-	if (sel >= S.offers.count) sel = S.offers.count - 1;
-	if (sel != S.sel) {
-		S.sel = sel;
-		S.sel_changed = osGetTime();
+	Tab *t = CUR;
+	ui_rect(0, 0, BOT_W, SCR_H, COL_BG);
+	draw_tabs();
+	if (S.tab == TAB_SEARCH) draw_search_bar();
+	float top = list_top(), lh = list_h();
+	ui_scissor(GFX_BOTTOM, 0, top, BOT_W, lh);
+	int first = (int)(t->scroll / ROW_H);
+	if (t->list.count && cur_row()) {
+		float hy = top + t->sel_y * ROW_H - t->scroll;
+		ui_rect(0, hy, BOT_W, ROW_H, COL_SEL);
+		ui_rect(0, hy, 3, ROW_H, COL_ACC);
 	}
-	S.finger_scrolled = false;
-	float y = S.sel * ROW_H;
-	if (y < S.scroll_target) S.scroll_target = y;
-	if (y + ROW_H > S.scroll_target + LIST_H) S.scroll_target = y + ROW_H - LIST_H;
-	if (S.sel >= S.offers.count - 8) offers_more();
+	for (int i = first; i < t->list.count && i < first + lh / ROW_H + 2; i++) {
+		const StoreRow *r = &t->list.rows[i];
+		float y = top + i * ROW_H - t->scroll;
+		if (r->header) {
+			// Título de apartado (Inicio)
+			ui_rect(0, y, BOT_W, ROW_H, C2D_Color32(0x15, 0x20, 0x2c, 0xff));
+			ui_rect(8, y + ROW_H - 7, 18, 2, COL_ACC);
+			ui_text(8, y + 7, r->name, SZ_SMALL, COL_ACC, AL_LEFT, BOT_W - 16);
+			continue;
+		}
+		bool on = i == t->sel;
+		ui_hline(0, y + ROW_H - 1, BOT_W, COL_LINE);
+		if (r->appid == 0) {
+			// Búsqueda reciente
+			ui_icon(IC_SEARCH, 10, y + 9, 11, COL_DIM);
+			ui_text(28, y + 7, r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 40);
+			continue;
+		}
+		float pw = r->disc > 0 ? 36 + 50 : 56;
+		float nx = 8;
+		if (r->type == 1 || r->type == 4) {
+			// Etiqueta pequeña para demos y DLC (en Buscar salen mezclados)
+			const char *tag = r->type == 1 ? _("DEMO") : "DLC";
+			float tw = ui_text_w(tag, SZ_TINY) + 8;
+			ui_rect(nx, y + 8, tw, 13, COL_TAG);
+			ui_text(nx + 4, y + 8.5f, tag, SZ_TINY, COL_ACC, AL_LEFT, 0);
+			nx += tw + 5;
+		}
+		ui_text(nx, y + 7, r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 10 - nx - pw);
+		if (r->coming_soon && !r->price[0]) {
+			ui_text(BOT_W - 10, y + 8, _("Próximamente"), SZ_TINY, COL_DIM, AL_RIGHT, 0);
+		} else {
+			draw_price_right(BOT_W - 6, y + 2, ROW_H - 5, r, 36, 50);
+		}
+	}
+	float end_y = top + t->list.count * ROW_H - t->scroll;
+	if (t->list.req && end_y < SCR_H) ui_spinner(BOT_W / 2, end_y + 14, 6, COL_DIM);
+	if (S.tab == TAB_SEARCH && !t->term[0] && !t->list.count)
+		ui_text(BOT_W / 2, top + 30, _("Aún no has buscado nada"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+	ui_scissor_off();
+	// Barra de scroll
+	float total = t->list.count * ROW_H;
+	if (total > lh) {
+		float hh = lh * lh / total;
+		if (hh < 12) hh = 12;
+		float y = top + (lh - hh) * (t->scroll / (total - lh));
+		ui_rect(BOT_W - 2, y, 2, hh, C2D_Color32(0x3d, 0x5a, 0x73, 0xff));
+	}
+	if (S.tab == TAB_SEARCH) {
+		if (t->term[0]) {
+			static const char *hs[] = {"Y", "Buscar", "A", "Ficha", "B", "Borrar", "L R", "Pestaña"};
+			draw_hints(hs, 4);
+		} else {
+			static const char *hs[] = {"Y", "Buscar", "A", "Abrir", "L R", "Pestaña"};
+			draw_hints(hs, 3);
+		}
+	} else {
+		static const char *hh2[] = {"A", "Ficha", "L R", "Pestaña", "START", "Salir"};
+		draw_hints(hh2, 3);
+	}
+}
+
+// Elige una fila de la pestaña actual, saltándose los títulos de apartado
+static void store_select(int sel, int dir)
+{
+	Tab *t = CUR;
+	if (t->list.count == 0) return;
+	if (sel < 0) sel = 0;
+	if (sel >= t->list.count) sel = t->list.count - 1;
+	while (t->list.rows[sel].header) {
+		int n = sel + (dir ? dir : 1);
+		if (n < 0 || n >= t->list.count) {
+			dir = -(dir ? dir : 1);
+			n = sel + dir;
+			if (n < 0 || n >= t->list.count) return;
+		}
+		sel = n;
+	}
+	if (sel != t->sel) {
+		t->sel = sel;
+		t->sel_changed = osGetTime();
+	}
+	t->finger = false;
+	float y = t->sel * ROW_H, lh = list_h();
+	// Si encima hay un título de apartado, que se vea también
+	float ytop = (t->sel > 0 && t->list.rows[t->sel - 1].header) ? y - ROW_H : y;
+	if (ytop < t->scroll_target) t->scroll_target = ytop;
+	if (y + ROW_H > t->scroll_target + lh) t->scroll_target = y + ROW_H - lh;
+	if (tab_paged(S.tab) && t->sel >= t->list.count - 8) tab_more(S.tab);
 }
 
 // ============================================================================
@@ -851,9 +1114,10 @@ static void draw_game_top(void)
 	case SEC_REVIEWS: draw_reviews_top(a); break;
 	case SEC_EXTRAS: {
 		if (a->fullgame) {
-			draw_list_top(_("CONTENIDO NECESARIO"), &S.dlc, "");
+			draw_list_top(a->is_demo ? _("JUEGO COMPLETO") : _("CONTENIDO NECESARIO"), &S.dlc, "");
 			if (S.dlc.count)
-				ui_text_wrap(12, 72, TOP_W - 24, _("Para usar este contenido descargable necesitas tener el juego base en tu biblioteca."),
+				ui_text_wrap(12, 72, TOP_W - 24, a->is_demo ? _("Esta demo es una muestra de este juego.")
+					: _("Para usar este contenido descargable necesitas tener el juego base en tu biblioteca."),
 					SZ_SMALL, COL_DIM, 3, 14);
 			break;
 		}
@@ -1228,7 +1492,7 @@ static void draw_splash_bg(int idx, float w, float h)
 
 static bool splash_ready(void)
 {
-	return S.offers.count > 0 || S.offers.err[0] || net_status_text()[0];
+	return tabs[S.tab].list.count > 0 || tabs[S.tab].list.err[0] || net_status_text()[0];
 }
 
 static void draw_splash_top(void)
@@ -1349,56 +1613,118 @@ static bool key_repeat(u32 down, u32 held, u32 mask)
 	return false;
 }
 
+static const Box B_SEARCHBAR = {8, LIST_Y + 4, BOT_W - 16, SEARCH_BAR - 8};
+static int press_update(u32 kd, u32 kh, u32 ku, touchPosition *tp, const int *ids, int n);
+
+static void tab_switch(int nt)
+{
+	if (nt == S.tab) return;
+	S.tab = nt;
+	Tab *t = CUR;
+	if (nt == TAB_SEARCH) {
+		if (!t->term[0] && !t->list.req) search_show_recents();
+	} else if (!t->started) {
+		tab_more(nt);
+	}
+	t->sel_changed = osGetTime();
+}
+
+// A sobre la fila elegida (o el toque en la que ya estaba elegida)
+static void store_activate(void)
+{
+	Tab *t = CUR;
+	const StoreRow *r = cur_row();
+	if (r && r->appid) open_game(r->appid, false);
+	else if (r && S.tab == TAB_SEARCH) search_start(r->name);       // búsqueda reciente
+	else if (S.tab == TAB_SEARCH && !t->term[0]) S.want_kb = true;
+	else if (S.tab == TAB_SEARCH && t->term[0] && !t->list.req) search_start(t->term);
+	else if (!t->list.req) {
+		// Reintentar ya, sin esperar la cuenta atrás
+		t->fail_at = 0;
+		t->list.end = false;
+		tab_more(S.tab);
+	}
+}
+
 static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 {
-	if (kd & KEY_L) S.tab = (S.tab + TAB_COUNT - 1) % TAB_COUNT;
-	if (kd & KEY_R) S.tab = (S.tab + 1) % TAB_COUNT;
-	if (S.tab != TAB_OFFERS) goto touch;
-	if (key_repeat(kd, kh, KEY_DOWN)) store_select(S.sel + 1);
-	if (key_repeat(kd, kh, KEY_UP)) store_select(S.sel - 1);
-	if (key_repeat(kd, kh, KEY_RIGHT)) store_select(S.sel + 6);
-	if (key_repeat(kd, kh, KEY_LEFT)) store_select(S.sel - 6);
-	if (kd & KEY_A) {
-		if (S.offers.count) open_game(S.offers.rows[S.sel].appid, false);
-		else if (!S.offers.req) { S.offers_fail_at = 0; S.offers.end = false; offers_more(); }
+	if (kd & KEY_L) tab_switch((S.tab + TAB_COUNT - 1) % TAB_COUNT);
+	if (kd & KEY_R) tab_switch((S.tab + 1) % TAB_COUNT);
+	Tab *t = CUR;
+	if (key_repeat(kd, kh, KEY_DOWN)) store_select(t->sel + 1, 1);
+	if (key_repeat(kd, kh, KEY_UP)) store_select(t->sel - 1, -1);
+	if (key_repeat(kd, kh, KEY_RIGHT)) store_select(t->sel + 6, 1);
+	if (key_repeat(kd, kh, KEY_LEFT)) store_select(t->sel - 6, -1);
+	if ((kd & KEY_Y) && S.tab == TAB_SEARCH) S.want_kb = true;
+	if ((kd & KEY_B) && S.tab == TAB_SEARCH && t->term[0]) {
+		// B borra la búsqueda y vuelve a las recientes
+		if (t->list.req) net_release(t->list.req);
+		t->list.req = NULL;
+		t->list.err[0] = 0;
+		search_show_recents();
 	}
-touch:
+	if (kd & KEY_A) store_activate();
+
+	if (S.tab == TAB_SEARCH) {
+		static const int ids[] = {BT_SEARCH};
+		if (press_update(kd, kh, ku, tp, ids, 1) == BT_SEARCH) S.want_kb = true;
+	}
+
+	float top = list_top(), lh = list_h();
 	if (kd & KEY_TOUCH) {
 		S.touch_x0 = tp->px;
 		S.touch_y0 = tp->py;
 		S.touch_moved = 0;
-		S.drag_scroll0 = S.scroll_target;
-		S.dragging = tp->py >= LIST_Y && tp->py < LIST_Y + LIST_H;
+		S.drag_scroll0 = t->scroll_target;
+		S.dragging = tp->py >= top && tp->py < top + lh;
 	} else if ((kh & KEY_TOUCH) && S.dragging) {
 		int dy = tp->py - S.touch_y0;
 		if (abs(dy) > S.touch_moved) S.touch_moved = abs(dy);
 		if (S.touch_moved >= 8) {
-			float max = S.offers.count * ROW_H - LIST_H;
+			float max = t->list.count * ROW_H - lh;
 			if (max < 0) max = 0;
-			S.scroll_target = S.drag_scroll0 - dy;
-			if (S.scroll_target < 0) S.scroll_target = 0;
-			if (S.scroll_target > max) S.scroll_target = max;
-			S.scroll = S.scroll_target;
-			S.finger_scrolled = true;
-			if (S.scroll_target > max - 3 * ROW_H) offers_more();
+			t->scroll_target = clampf(S.drag_scroll0 - dy, 0, max);
+			t->scroll = t->scroll_target;
+			t->finger = true;
+			if (tab_paged(S.tab) && t->scroll_target > max - 3 * ROW_H) tab_more(S.tab);
 		}
 	}
 	if (ku & KEY_TOUCH) {
 		if (S.touch_moved < 8) {
 			int x = S.touch_x0, y = S.touch_y0;
 			if (y < LIST_Y) {
-				int t = (int)(x / (BOT_W / 4.6f));
-				S.tab = t >= TAB_COUNT ? TAB_SEARCH : t;
-			} else if (S.dragging && S.tab == TAB_OFFERS) {
-				int i = (int)((y - LIST_Y + S.scroll) / ROW_H);
-				if (i >= 0 && i < S.offers.count) {
-					if (i == S.sel) open_game(S.offers.rows[i].appid, false);
-					else store_select(i);
+				int nt = (int)(x / (BOT_W / 4.6f));
+				tab_switch(nt >= TAB_COUNT ? TAB_SEARCH : nt);
+			} else if (S.dragging) {
+				int i = (int)((y - top + t->scroll) / ROW_H);
+				if (i >= 0 && i < t->list.count && !t->list.rows[i].header) {
+					if (i == t->sel) store_activate();
+					else store_select(i, 0);
 				}
 			}
 		}
 		S.dragging = false;
 	}
+}
+
+// Teclado del sistema para Buscar (se abre fuera del frame de dibujo)
+static void open_keyboard(void)
+{
+	SwkbdState kb;
+	char buf[64] = "";
+	swkbdInit(&kb, SWKBD_TYPE_NORMAL, 2, 60);
+	swkbdSetHintText(&kb, _("Nombre del juego"));
+	swkbdSetInitialText(&kb, CUR->term);
+	swkbdSetButton(&kb, SWKBD_BUTTON_LEFT, _("Cancelar"), false);
+	swkbdSetButton(&kb, SWKBD_BUTTON_RIGHT, _("Buscar"), true);
+	swkbdSetFeatures(&kb, SWKBD_DARKEN_TOP_SCREEN | SWKBD_ALLOW_HOME | SWKBD_ALLOW_RESET | SWKBD_ALLOW_POWER);
+	swkbdSetValidation(&kb, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
+	if (swkbdInputText(&kb, buf, sizeof buf) != SWKBD_BUTTON_RIGHT) return;
+	char *s = buf;
+	while (*s == ' ') s++;
+	size_t n = strlen(s);
+	while (n > 0 && s[n - 1] == ' ') s[--n] = 0;
+	if (*s) search_start(s);
 }
 
 static RowList *game_list(void)
@@ -1430,6 +1756,7 @@ static const Box *button_box(int id)
 	case BT_NEXT: return &B_NEXT;
 	case BT_EXIT_NO: return &B_EXIT_NO;
 	case BT_EXIT_YES: return &B_EXIT_YES;
+	case BT_SEARCH: return &B_SEARCHBAR;
 	}
 	return NULL;
 }
@@ -1540,7 +1867,7 @@ static void start_store(void)
 	steam_set_context(i18n_steam_lang(cc), cc);
 	S.ctx_ready = true;
 	netlog("tienda: pais=%s idioma=%s", steam_country(), steam_lang());
-	offers_more();
+	tab_more(S.tab);
 }
 
 static void poll_country(void)
@@ -1579,8 +1906,9 @@ int main(int argc, char **argv)
 	net_init();
 
 	S.scene = SC_SPLASH;
-	S.tab = TAB_OFFERS;
-	S.tab_x = TAB_OFFERS;
+	S.tab = TAB_HOME;
+	recents_load();
+	S.tab_x = TAB_HOME;
 	S.quit_fade = -1;
 	S.scene_anim = S.sec_anim = S.shot_anim = 1;
 	sprites = C2D_SpriteSheetLoad("romfs:/gfx/sprites.t3x");
@@ -1612,21 +1940,39 @@ int main(int argc, char **argv)
 		hidTouchRead(&tp);
 
 		poll_country();
-		list_poll(&S.offers, true);
-		if (S.offers.err[0] && !S.offers.req) {
-			if (!S.offers_fail_at) {
-				S.offers_fail_at = now;
-				S.offers.end = false;
-			} else if (S.offers.count == 0) {
-				offers_more();   // espera sola lo que toque
+		for (int ti = 0; ti < TAB_COUNT; ti++) {
+			Tab *t = &tabs[ti];
+			if (ti == TAB_HOME) home_poll();
+			else list_poll(&t->list, tab_paged(ti));
+			if (ti == TAB_BETAS) {
+				// La etiqueta «Acceso anticipado» la ponen los usuarios y se queda en juegos que ya
+				// salieron (PUBG): solo se dejan los que Steam marca como acceso anticipado de verdad
+				int n = 0;
+				for (int k = 0; k < t->list.count; k++)
+					if (t->list.rows[k].early) t->list.rows[n++] = t->list.rows[k];
+				t->list.count = n;
+				if (t->sel >= n) t->sel = n ? n - 1 : 0;
 			}
-		} else {
-			S.offers_fail_at = 0;
+			if (t->list.err[0] && !t->list.req) {
+				if (!t->fail_at) {
+					t->fail_at = now;
+					t->list.end = false;
+				} else if (!t->list.count && t->started) {
+					tab_more(ti);   // espera sola lo que toque
+				} else if (ti == TAB_SEARCH && t->term[0] && tab_can_retry(t)) {
+					char term[64];
+					snprintf(term, sizeof term, "%s", t->term);
+					search_start(term);
+				}
+			} else {
+				t->fail_at = 0;
+			}
 		}
 		info_poll();
 		for (int i = 0; i < CACHE; i++) {
 			InfoEnt *e = &cache[i];
-			bool shown = e->appid == S.app || (S.offers.count && e->appid == S.offers.rows[S.sel].appid);
+			const StoreRow *cr = S.scene == SC_STORE ? cur_row() : NULL;
+			bool shown = e->appid == S.app || (cr && e->appid == cr->appid);
 			if (e->failed && shown && now - e->fail_at > (u64)retry_delay(e->err) * 1000) info_retry(e);
 		}
 		img_update();
@@ -1648,6 +1994,11 @@ int main(int argc, char **argv)
 			kd = kh = ku = 0;
 		}
 
+		if (S.want_kb) {
+			S.want_kb = false;
+			open_keyboard();
+			kd = kh = ku = 0;
+		}
 		switch (S.scene) {
 		case SC_STORE: input_store(kd, kh, ku, &tp); break;
 		case SC_GAME: input_game(kd, kh, ku, &tp); break;
@@ -1656,16 +2007,16 @@ int main(int argc, char **argv)
 		}
 
 		// Vista previa: la ficha del seleccionado, cuando el cursor se queda quieto un momento
-		if (S.scene == SC_STORE && S.tab == TAB_OFFERS && S.offers.count && now - S.sel_changed > 250)
-			info_get(S.offers.rows[S.sel].appid, true);
+		if (S.scene == SC_STORE && cur_row() && cur_row()->appid && now - CUR->sel_changed > 250)
+			info_get(cur_row()->appid, true);
 
 		InfoEnt *ge = S.scene != SC_STORE ? info_get(S.app, false) : NULL;
 		game_poll(ge && ge->done ? &ge->info : NULL);
 
 		// Desplazamientos suaves
-		if (!S.finger_scrolled) S.scroll = approach(S.scroll, S.scroll_target, 18);
+		if (!CUR->finger) CUR->scroll = approach(CUR->scroll, CUR->scroll_target, 18);
+		CUR->sel_y = approach(CUR->sel_y, CUR->sel, 24);
 		S.tab_x = approach(S.tab_x, S.tab, 16);
-		S.sel_y = approach(S.sel_y, S.sel, 24);
 		S.lsel_y = approach(S.lsel_y, S.lsel, 24);
 		S.seg_x = approach(S.seg_x, S.sec, 16);
 		S.strip = approach(S.strip, S.shot, 12);
@@ -1753,7 +2104,10 @@ int main(int argc, char **argv)
 
 	netlog("salir");
 	if (S.country_req) net_release(S.country_req);
-	rowlist_free(&S.offers);
+	for (int i = 0; i < TAB_COUNT; i++) {
+		rowlist_free(&tabs[i].list);
+		for (int k = 0; k < HOME_PARTS; k++) rowlist_free(&tabs[i].part[k]);
+	}
 	rowlist_free(&S.dlc);
 	rowlist_free(&S.similar);
 	if (S.rreq) net_release(S.rreq);

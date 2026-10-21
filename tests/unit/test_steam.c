@@ -68,6 +68,19 @@ int main(void) {
 	steam_req_offers(30, 30);
 	printf("url ofertas: %.140s…\n", last_url);
 	CHECK(strstr(last_url, "IStoreQueryService/Query/v1/?input_json=%7B"));
+	steam_req_query(Q_EARLY, 0, 30);
+	CHECK(strstr(last_url, "493") && strstr(last_url, "sort%22%3A12"));
+	steam_req_query(Q_DEMOS, 0, 30);
+	CHECK(strstr(last_url, "include_demos"));
+	steam_req_query(Q_NEW, 0, 10);
+	CHECK(strstr(last_url, "release_date_type%22%3A1"));
+	steam_req_search("hollow knight");
+	CHECK(strstr(last_url, "SearchSuggestions") && strstr(last_url, "hollow%20knight"));
+	// La búsqueda devuelve filas con tipo (juego/DLC/demo) y si siguen en acceso anticipado
+	RowList sr = {0};
+	CHECK(steam_parse_rows(slurp("data/search.json"), &sr, false));
+	printf("búsqueda: %d, %s tipo=%d\n", sr.count, sr.count ? sr.rows[0].name : "", sr.count ? sr.rows[0].type : -1);
+	CHECK(sr.count > 0);
 	steam_req_appdetails(10);
 	CHECK(!strcmp(last_url, "https://store.steampowered.com/api/appdetails?appids=10&cc=ES&l=spanish"));
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);

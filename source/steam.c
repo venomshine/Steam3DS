@@ -7,6 +7,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <strings.h>
+#include <time.h>
 
 static char g_lang[16] = "spanish";
 static char g_country[4] = "US";
@@ -101,6 +102,11 @@ static void row_from_item(const cJSON *it, StoreRow *row)
 		if (jnum(bp, "final_price_in_cents", -1) == 0) row->free = true;
 	}
 	if (jbool(it, "is_free")) row->free = true;
+	row->type = (int)jnum(it, "type", 0);
+	if (row->type == 1) row->free = true;          // las demos son gratis
+	const cJSON *rel = cJSON_GetObjectItemCaseSensitive(it, "release");
+	if (rel && jbool(rel, "is_coming_soon")) row->coming_soon = true;
+	if (rel && jbool(rel, "is_early_access")) row->early = true;
 	const cJSON *rv = cJSON_GetObjectItemCaseSensitive(it, "reviews");
 	const cJSON *sf = rv ? cJSON_GetObjectItemCaseSensitive(rv, "summary_filtered") : NULL;
 	if (sf) {
@@ -142,23 +148,70 @@ bool steam_parse_rows(const char *json, RowList *list, bool append)
 	return true;
 }
 
-Req *steam_req_offers(int start, int count)
+Req *steam_req_query(StoreQuery kind, int start, int count)
 {
+	static const int sorts[] = {
+		[Q_OFFERS] = 10, [Q_TOP] = 12, [Q_NEW] = 12, [Q_SOON] = 10, [Q_F2P] = 12, [Q_DEMOS] = 13, [Q_EARLY] = 12,
+	};
 	cJSON *in = cJSON_CreateObject();
 	cJSON *q = cJSON_AddObjectToObject(in, "query");
 	cJSON_AddNumberToObject(q, "start", start);
 	cJSON_AddNumberToObject(q, "count", count);
-	cJSON_AddNumberToObject(q, "sort", 10);           // como la tienda: por relevancia
+	cJSON_AddNumberToObject(q, "sort", sorts[kind]);
 	cJSON *f = cJSON_AddObjectToObject(q, "filters");
-	cJSON_AddBoolToObject(f, "released_only", true);
+	if (kind == Q_SOON) cJSON_AddBoolToObject(f, "coming_soon_only", true);
+	else cJSON_AddBoolToObject(f, "released_only", true);
 	cJSON *tf = cJSON_AddObjectToObject(f, "type_filters");
-	cJSON_AddBoolToObject(tf, "include_games", true);
-	cJSON *pf = cJSON_AddObjectToObject(f, "price_filters");
-	cJSON_AddNumberToObject(pf, "min_discount_percent", 1);
+	cJSON_AddBoolToObject(tf, kind == Q_DEMOS ? "include_demos" : "include_games", true);
+	if (kind == Q_OFFERS) {
+		cJSON *pf = cJSON_AddObjectToObject(f, "price_filters");
+		cJSON_AddNumberToObject(pf, "min_discount_percent", 1);
+	} else if (kind == Q_F2P) {
+		cJSON *pf = cJSON_AddObjectToObject(f, "price_filters");
+		cJSON_AddBoolToObject(pf, "only_free_items", true);
+	} else if (kind == Q_NEW) {
+		// release_date_type 1: por fecha de lanzamiento en Steam (probado: 0 y 4 no filtran)
+		time_t now = time(NULL);
+		cJSON *rd = cJSON_AddObjectToObject(f, "release_date_filter");
+		cJSON_AddNumberToObject(rd, "release_date_type", 1);
+		cJSON_AddNumberToObject(rd, "start_date", (double)(now - 30 * 86400));
+		cJSON_AddNumberToObject(rd, "end_date", (double)now);
+	} else if (kind == Q_EARLY) {
+		// Etiqueta 493: Acceso anticipado
+		cJSON *tags = cJSON_AddArrayToObject(f, "tagids_must_match");
+		cJSON *tm = cJSON_CreateObject();
+		cJSON *ids = cJSON_AddArrayToObject(tm, "tagids");
+		cJSON_AddItemToArray(ids, cJSON_CreateNumber(493));
+		cJSON_AddItemToArray(tags, tm);
+	}
 	cJSON_AddItemToObject(in, "context", context());
 	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
 	cJSON_AddBoolToObject(dr, "include_reviews", true);
+	cJSON_AddBoolToObject(dr, "include_release", true);
 	return service_call("IStoreQueryService/Query", in);
+}
+
+Req *steam_req_search(const char *term)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON_AddStringToObject(in, "search_term", term);
+	cJSON_AddNumberToObject(in, "max_results", 30);
+	cJSON_AddBoolToObject(in, "use_spellcheck", true);
+	cJSON_AddItemToObject(in, "context", context());
+	cJSON *f = cJSON_AddObjectToObject(in, "filters");
+	cJSON *tf = cJSON_AddObjectToObject(f, "type_filters");
+	cJSON_AddBoolToObject(tf, "include_games", true);
+	cJSON_AddBoolToObject(tf, "include_dlc", true);
+	cJSON_AddBoolToObject(tf, "include_demos", true);
+	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
+	cJSON_AddBoolToObject(dr, "include_reviews", true);
+	cJSON_AddBoolToObject(dr, "include_release", true);
+	return service_call("IStoreQueryService/SearchSuggestions", in);
+}
+
+Req *steam_req_offers(int start, int count)
+{
+	return steam_req_query(Q_OFFERS, start, count);
 }
 
 Req *steam_req_items(const u32 *ids, int n)
@@ -415,6 +468,7 @@ bool steam_parse_appdetails(const char *json, u32 appid, AppInfo *a)
 
 	const char *type = jstr(d, "type");
 	a->is_dlc = type && !strcmp(type, "dlc");
+	a->is_demo = type && !strcmp(type, "demo");
 	const cJSON *fg = cJSON_GetObjectItemCaseSensitive(d, "fullgame");
 	if (fg) {
 		a->fullgame = (u32)jnum(fg, "appid", 0);

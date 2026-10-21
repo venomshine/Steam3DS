@@ -37,22 +37,59 @@ static volatile const char *status_text = "";
 // ----------------------------------------------------------------------------
 // Registro en la SD
 
-void netlog(const char *fmt, ...)
+// Escribir en la SD tarda decenas de milisegundos: las líneas se guardan en memoria y un hilo
+// aparte las vuelca al archivo, así el registro nunca da tirones en la interfaz
+#define LOG_BUF 16384
+static char log_buf[LOG_BUF];
+static size_t log_len;
+static LightEvent log_wake;
+static Thread log_thread;
+
+static void log_flush(void)
 {
+	static char out[LOG_BUF];
 	LightLock_Lock(&log_lock);
+	size_t n = log_len;
+	memcpy(out, log_buf, n);
+	log_len = 0;
+	LightLock_Unlock(&log_lock);
+	if (!n) return;
 	FILE *f = fopen(APP_DIR "/net.log", "a");
 	if (f) {
-		time_t t = time(NULL);
-		struct tm *tm = gmtime(&t);
-		fprintf(f, "%02d:%02d:%02d ", tm->tm_hour, tm->tm_min, tm->tm_sec);
-		va_list ap;
-		va_start(ap, fmt);
-		vfprintf(f, fmt, ap);
-		va_end(ap);
-		fputc('\n', f);
+		fwrite(out, 1, n, f);
 		fclose(f);
 	}
+}
+
+static void log_main(void *arg)
+{
+	while (!quitting) {
+		LightEvent_WaitTimeout(&log_wake, 700000000LL);
+		log_flush();
+	}
+	log_flush();
+}
+
+void netlog(const char *fmt, ...)
+{
+	char line[320];
+	time_t t = time(NULL);
+	struct tm *tm = gmtime(&t);
+	int n = snprintf(line, sizeof line, "%02d:%02d:%02d ", tm->tm_hour, tm->tm_min, tm->tm_sec);
+	va_list ap;
+	va_start(ap, fmt);
+	n += vsnprintf(line + n, sizeof line - n - 1, fmt, ap);
+	va_end(ap);
+	if (n > (int)sizeof line - 2) n = sizeof line - 2;
+	line[n++] = '\n';
+	LightLock_Lock(&log_lock);
+	if (log_len + n <= LOG_BUF) {
+		memcpy(log_buf + log_len, line, n);
+		log_len += n;
+	}
+	bool full = log_len > LOG_BUF / 2;
 	LightLock_Unlock(&log_lock);
+	if (full) LightEvent_Signal(&log_wake);
 }
 
 static void log_rotate(void)
@@ -470,10 +507,12 @@ void net_init(void)
 	LightLock_Init(&soc_lock);
 	LightLock_Init(&ref_lock);
 	log_rotate();
+	LightEvent_Init(&log_wake, RESET_ONESHOT);
 	netlog("---- %s %s", APP_NAME, APP_VERSION);
 	acInit();
 	soc_try_init();
 	curl_global_init(CURL_GLOBAL_DEFAULT);
+	log_thread = start_thread(log_main, NULL);
 	for (int i = 0; i < LANE_COUNT; i++) {
 		Lane *l = &lanes[i];
 		l->lane = i;
@@ -494,6 +533,13 @@ void net_exit(void)
 		}
 		Req *r;
 		while ((r = lane_pop(&lanes[i]))) net_release(r);
+	}
+	LightEvent_Signal(&log_wake);
+	if (log_thread) {
+		threadJoin(log_thread, U64_MAX);
+		threadFree(log_thread);
+	} else {
+		log_flush();
 	}
 	curl_global_cleanup();
 	if (soc_ready) socExit();

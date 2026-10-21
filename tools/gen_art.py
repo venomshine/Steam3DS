@@ -10,6 +10,8 @@ Salida:
   gfx/wheel.png     128×128 rueda (pantalla de carga, gira)
   gfx/steam.png     128×128 nube de vapor (textura de ruido, para las partículas)
   gfx/glow.png      128×128 resplandor
+  gfx/bg_top.png    400×240 fondo sucio de la pantalla de carga (arriba)
+  gfx/bg_bot.png    320×240 el de abajo
 """
 import math
 import os
@@ -179,6 +181,66 @@ def banner():
     return down(im, (256, 128)).convert("RGB")
 
 
+def grimy_bg(w, h, seed, light=(0.5, 0.42), pipe_cols=(), pipe_rows=()):
+    """Fondo de sala de máquinas: degradado oscuro, manchas de humedad, grano y viñeta sucia.
+    light: dónde da la luz (en fracción de la pantalla), un poco más claro alrededor."""
+    import numpy as np
+    rng = np.random.default_rng(seed)
+
+    def noise(octaves, sz):
+        out = np.zeros((h, w))
+        amp = 1.0
+        for o in octaves:
+            g = rng.random((o + 1, int(o * w / h) + 1))
+            out += amp * np.array(Image.fromarray((g * 255).astype("uint8")).resize((w, h), Image.BICUBIC), float) / 255
+            amp *= 0.55
+        return (out - out.min()) / (out.max() - out.min())
+
+    y, x = np.mgrid[0:h, 0:w].astype(float)
+    t = y / (h - 1)
+    top, bot = np.array([0x22, 0x37, 0x4b]), np.array([0x10, 0x15, 0x1c])
+    base = top[None, None, :] * (1 - t[..., None]) + bot[None, None, :] * t[..., None]
+    # Manchas de humedad y mugre fina
+    stains = noise((3, 6, 12, 24), 0)
+    grime = noise((40, 80), 0)
+    shade = 0.55 + 0.75 * stains * (0.8 + 0.4 * grime)
+    # Churretes que caen desde arriba
+    cols = noise((14,), 0)[0]
+    drip_x = np.clip((cols - 0.62) * 6, 0, 1)
+    drips = drip_x[None, :] * np.clip(1 - t[:, :1] * 1.4, 0, 1) * (0.6 + 0.4 * noise((30,), 0))
+    shade -= 0.25 * drips
+    # Luz de la válvula: centro algo más claro
+    lx, ly = light[0] * w, light[1] * h
+    d = np.hypot((x - lx) / w, (y - ly) / h * 0.8)
+    glow = np.exp(-(d / 0.30) ** 2) * 0.45
+    img = base * shade[..., None] + glow[..., None] * np.array([0x50, 0x9a, 0xd0])[None, None, :]
+    # Tuberías desenfocadas (fuera de foco, detrás de la válvula): dan profundidad y ambiente
+    pipes = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    pd = ImageDraw.Draw(pipes)
+    for px, pw in pipe_cols:
+        X, W = px * w, pw * w
+        pd.rectangle([X, 0, X + W, h], fill=(6, 9, 13, 235))
+        pd.rectangle([X + W * 0.18, 0, X + W * 0.30, h], fill=(70, 100, 125, 120))   # brillo del metal
+        for yy_ in range(int(h * 0.15), h, int(h * 0.38)):                            # abrazaderas
+            pd.rectangle([X - W * 0.12, yy_, X + W * 1.12, yy_ + h * 0.035], fill=(4, 6, 9, 240))
+    for py, ph in pipe_rows:
+        Y, H = py * h, ph * h
+        pd.rectangle([0, Y, w, Y + H], fill=(6, 9, 13, 225))
+        pd.rectangle([0, Y + H * 0.15, w, Y + H * 0.28], fill=(70, 100, 125, 100))
+    pipes = pipes.filter(ImageFilter.GaussianBlur(w * 0.012))
+    pa = np.array(pipes, float)
+    a = pa[..., 3:4] / 255
+    img = img * (1 - a) + pa[..., :3] * a
+    # Viñeta sucia: esquinas oscuras con el borde ahumado e irregular
+    vx, vy = (x / w - 0.5) * 2, (y / h - 0.5) * 2
+    vr = np.sqrt(vx * vx * 0.85 + vy * vy) + (noise((4, 8, 16), 0) - 0.5) * 0.35
+    vign = np.clip(1 - np.clip((vr - 0.45) / 0.7, 0, 1) ** 1.4 * 0.92, 0, 1)
+    img = img * vign[..., None]
+    # Grano de película
+    img += rng.normal(0, 4.0, img.shape)
+    return Image.fromarray(np.clip(img, 0, 255).astype("uint8"), "RGB")
+
+
 if __name__ == "__main__":
     os.makedirs(os.path.join(ROOT, "meta"), exist_ok=True)
     os.makedirs(os.path.join(ROOT, "gfx"), exist_ok=True)
@@ -187,4 +249,6 @@ if __name__ == "__main__":
     down(wheel(128, angle=0), (128, 128)).save(os.path.join(ROOT, "gfx", "wheel.png"))
     steam(128, 2026).save(os.path.join(ROOT, "gfx", "steam.png"))
     glow(128).save(os.path.join(ROOT, "gfx", "glow.png"))
-    print("meta/icon.png meta/banner.png gfx/wheel.png gfx/steam.png gfx/glow.png")
+    grimy_bg(400, 240, 11, pipe_cols=((0.035, 0.07), (0.885, 0.085)), pipe_rows=((0.05, 0.09),)).save(os.path.join(ROOT, "gfx", "bg_top.png"))
+    grimy_bg(320, 240, 12, light=(0.5, -0.4), pipe_cols=((0.02, 0.07), (0.9, 0.08))).save(os.path.join(ROOT, "gfx", "bg_bot.png"))
+    print("meta/icon.png meta/banner.png gfx/wheel.png gfx/steam.png gfx/glow.png gfx/bg_top.png gfx/bg_bot.png")

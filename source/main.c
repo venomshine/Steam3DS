@@ -99,7 +99,8 @@ enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_N
 
 static InfoEnt cache[CACHE];
 static u64 frame_no;
-static C2D_SpriteSheet sprites;
+static C2D_SpriteSheet sprites, splash_bg;
+static int sprites_free_in = -1;   // fotogramas que faltan para liberar los sprites de la carga
 static C2D_TextBuf review_buf;
 static float splash_t, splash_out = -1;
 
@@ -1188,6 +1189,43 @@ static void draw_puff(const Puff *pf, float cx, float cy, float a, bool back)
 		col_alpha(c, al), 0.65f);
 }
 
+// Ambiente de sala de máquinas: neblina oscura que sube por los lados y por abajo,
+// y motas de polvo y humedad que brillan al pasar cerca de la luz de la válvula
+static void draw_ambient(float t, float w, float h, float lx, float ly, float a)
+{
+	for (int i = 0; i < 10; i++) {
+		const float life = 7.0f;
+		float since = t + i * (life / 10);
+		float age = fmodf(since, life), p = age / life;
+		u32 id = i + (u32)(since / life) * 23;
+		bool side = i < 7;
+		float x = side ? ((i & 1) ? w - 22 - hrand(id, 1) * 40 : 22 + hrand(id, 1) * 40) : w * (0.2f + 0.6f * hrand(id, 1));
+		float y = h + 30 - p * (h * 0.75f);
+		x += sinf(age * 0.6f + i) * 10 + ((i & 1) ? -1 : 1) * p * 25;
+		float al = sinf(p * 3.14159f) * 0.24f * a;
+		Puff pf = {x, y, 2.0f + p * 1.6f, hrand(id, 2) * 6.28f + age * 0.08f, al,
+			8 + (int)(p * 12), 1, 1, 0.75f};
+		draw_puff(&pf, 0, 0, 1, true);
+	}
+	for (int i = 0; i < 34; i++) {
+		float sp = 6 + hrand(i, 3) * 10;
+		float x = fmodf(hrand(i, 1) * w + sinf(t * 0.5f + i) * 14 + t * (hrand(i, 4) - 0.5f) * 8 + w, w);
+		float y = fmodf(hrand(i, 2) * h - t * sp + h * 4, h);
+		float d = hypotf(x - lx, (y - ly) * 1.2f);
+		float lit = clampf(1 - d / 150, 0, 1);
+		float tw = 0.6f + 0.4f * sinf(t * (1.5f + hrand(i, 5) * 2) + i);
+		float al = (0.05f + 0.55f * lit * lit) * tw * a;
+		float r = 0.6f + hrand(i, 6) * 1.0f + lit * 0.4f;
+		ui_circle(x, y, r, col_alpha(col_lerp(C2D_Color32(0x8a, 0x9c, 0xb0, 0xff), C2D_Color32(0xd8, 0xf0, 0xff, 0xff), lit), al));
+	}
+}
+
+static void draw_splash_bg(int idx, float w, float h)
+{
+	if (splash_bg) C2D_DrawImageAt(C2D_SpriteSheetGetImage(splash_bg, idx), 0, 0, 0.5f, NULL, 1, 1);
+	else ui_vgrad(0, 0, w, h, C2D_Color32(0x24, 0x3b, 0x50, 0xff), C2D_Color32(0x17, 0x1a, 0x21, 0xff));
+}
+
 static bool splash_ready(void)
 {
 	return S.offers.count > 0 || S.offers.err[0] || net_status_text()[0];
@@ -1196,8 +1234,9 @@ static bool splash_ready(void)
 static void draw_splash_top(void)
 {
 	float t = splash_t;
-	ui_vgrad(0, 0, TOP_W, SCR_H, C2D_Color32(0x24, 0x3b, 0x50, 0xff), C2D_Color32(0x17, 0x1a, 0x21, 0xff));
+	draw_splash_bg(0, TOP_W, SCR_H);
 	float cx = TOP_W / 2, cy = 100;
+	draw_ambient(t, TOP_W, SCR_H, cx, cy, clampf(t / 0.8f, 0, 1));
 	float pop = ease_out_back(clampf(t / 0.55f, 0, 1));
 	const float t0 = 0.62f;      // la válvula se abre
 	float flash = t > t0 ? expf(-(t - t0) * 3.0f) : 0;
@@ -1266,7 +1305,8 @@ static void draw_splash_top(void)
 
 static void draw_splash_bottom(void)
 {
-	ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0x12, 0x15, 0x1b, 0xff));
+	draw_splash_bg(1, BOT_W, SCR_H);
+	draw_ambient(splash_t + 3.1f, BOT_W, SCR_H, BOT_W / 2, -60, clampf(splash_t / 0.8f, 0, 1));
 	float ta = clampf((splash_t - 0.5f) / 0.5f, 0, 1);
 	u8 a8 = (u8)(255 * ta);
 	ui_text(BOT_W / 2, 104, _("hecho por VENOMSHiNE"), SZ_BODY, C2D_Color32(0xc7, 0xd5, 0xe0, a8), AL_CENTER, 0);
@@ -1281,7 +1321,11 @@ static void splash_update(float dt, u32 kd)
 		if ((splash_t > 3.2f && splash_ready()) || splash_t > 6.5f || skip) splash_out = 0;
 	} else {
 		splash_out += dt;
-		if (splash_out > 0.35f) go_scene(SC_STORE, 0);
+		if (splash_out > 0.35f) {
+			go_scene(SC_STORE, 0);
+			// El resto de la app no usa estos sprites: se liberan en cuanto la GPU acabe con ellos
+			sprites_free_in = 2;
+		}
 	}
 }
 
@@ -1540,6 +1584,7 @@ int main(int argc, char **argv)
 	S.quit_fade = -1;
 	S.scene_anim = S.sec_anim = S.shot_anim = 1;
 	sprites = C2D_SpriteSheetLoad("romfs:/gfx/sprites.t3x");
+	splash_bg = C2D_SpriteSheetLoad("romfs:/gfx/splash_bg.t3x");
 	if (sprites) {
 		for (int i = 0; i < 3; i++)
 			C3D_TexSetFilter(C2D_SpriteSheetGetImage(sprites, i).tex, GPU_LINEAR, GPU_LINEAR);
@@ -1699,6 +1744,11 @@ int main(int argc, char **argv)
 		}
 #endif
 		C3D_FrameEnd(0);
+		if (sprites_free_in >= 0 && sprites_free_in-- == 0) {
+			if (sprites) C2D_SpriteSheetFree(sprites);
+			if (splash_bg) C2D_SpriteSheetFree(splash_bg);
+			sprites = splash_bg = NULL;
+		}
 	}
 
 	netlog("salir");
@@ -1714,6 +1764,7 @@ int main(int argc, char **argv)
 		appinfo_free(&cache[i].info);
 	}
 	if (sprites) C2D_SpriteSheetFree(sprites);
+	if (splash_bg) C2D_SpriteSheetFree(splash_bg);
 	C2D_TextBufDelete(review_buf);
 	img_exit();
 	net_exit();

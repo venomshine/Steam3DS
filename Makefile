@@ -103,7 +103,13 @@ $(ROMFS)/gfx/sprites.t3x: gfx/sprites.t3s $(wildcard gfx/*.png) $(wildcard gfx/s
 	@cd gfx && $(DEVKITPRO)/tools/bin/tex3ds -i sprites.t3s -o ../$@
 	@echo built ... $(notdir $@)
 
-$(BUILD): $(ROMFS)/gfx/sprites.t3x
+# Fondos de la pantalla de carga, sin alfa (RGB565: la mitad de memoria)
+$(ROMFS)/gfx/splash_bg.t3x: gfx/splash_bg.t3s gfx/bg_top.png gfx/bg_bot.png
+	@mkdir -p $(ROMFS)/gfx
+	@cd gfx && $(DEVKITPRO)/tools/bin/tex3ds -i splash_bg.t3s -o ../$@
+	@echo built ... $(notdir $@)
+
+$(BUILD): $(ROMFS)/gfx/sprites.t3x $(ROMFS)/gfx/splash_bg.t3x
 	@mkdir -p $@
 
 clean:

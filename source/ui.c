@@ -2,6 +2,7 @@
 #include "qrcodegen.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -219,6 +220,71 @@ int ui_text_wrap(float x, float y, float w, const char *s, float sz, u32 col, in
 		s += used;
 	}
 	return lines;
+}
+
+
+void ui_block_parse(TextBlock *b, C2D_TextBuf buf, const char *s, float sz, float w, int max_lines)
+{
+	if (max_lines > 4) max_lines = 4;
+	b->n = 0;
+	while (s && *s && b->n < max_lines) {
+		size_t len;
+		size_t used = next_line(s, sz, w, &len);
+		char tmp[512];
+		if (b->n == max_lines - 1 && s[used]) {
+			// Última línea: lo que quepa y «…»
+			size_t n = len;
+			float ell = ui_text_w("…", sz);
+			while (n > 0 && text_w_n(s, n, sz) + ell > w) {
+				do n--; while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80);
+			}
+			while (n > 0 && s[n - 1] == ' ') n--;
+			if (n > sizeof tmp - 4) n = sizeof tmp - 4;
+			memcpy(tmp, s, n);
+			memcpy(tmp + n, "…", 4);
+		} else {
+			if (len > sizeof tmp - 1) len = sizeof tmp - 1;
+			memcpy(tmp, s, len);
+			tmp[len] = 0;
+		}
+		C2D_TextFontParse(&b->line[b->n], g_font, buf, tmp);
+		C2D_TextOptimize(&b->line[b->n]);
+		b->n++;
+		s += used;
+	}
+}
+
+void ui_block_draw(const TextBlock *b, float x, float y, float sz, u32 col, float lh)
+{
+	for (int i = 0; i < b->n; i++) C2D_DrawText(&b->line[i], C2D_WithColor, x, y + i * lh, 0.5f, sz, sz, col);
+}
+
+// fontGlyphIndexFromCodePoint recorre la tabla de la fuente para cada carácter que no es ASCII
+// (tildes, eñes, japonés): con mucho texto en pantalla hundía los fps. El enlazador redirige
+// aquí todas las llamadas (-Wl,--wrap=fontGlyphIndexFromCodePoint) y se guarda el resultado,
+// como en Gemi3DS.
+int __real_fontGlyphIndexFromCodePoint(CFNT_s *font, u32 codePoint);
+int __wrap_fontGlyphIndexFromCodePoint(CFNT_s *font, u32 codePoint)
+{
+	if (codePoint < 0x80) return __real_fontGlyphIndexFromCodePoint(font, codePoint);
+	static struct { CFNT_s *f; u32 cp; int gi; } cache[8192];
+	unsigned h = ((codePoint * 2654435761u) ^ (unsigned)(uintptr_t)font) >> 19;
+	for (int i = 0; i < 8; i++) {
+		unsigned k = (h + i) & 8191;
+		if (cache[k].f == font && cache[k].cp == codePoint) return cache[k].gi;
+		if (!cache[k].f) {
+			int gi = __real_fontGlyphIndexFromCodePoint(font, codePoint);
+			cache[k].f = font;
+			cache[k].cp = codePoint;
+			cache[k].gi = gi;
+			return gi;
+		}
+	}
+	int gi = __real_fontGlyphIndexFromCodePoint(font, codePoint);
+	cache[h & 8191].f = font;
+	cache[h & 8191].cp = codePoint;
+	cache[h & 8191].gi = gi;
+	return gi;
 }
 
 // ----------------------------------------------------------------------------

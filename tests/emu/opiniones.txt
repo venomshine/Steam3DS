@@ -1,0 +1,28 @@
+# Mide el coste de la pestaña Opiniones (mirar «perf:» en net.log)
+wait 900
+press DOWN
+press DOWN
+press DOWN
+wait 300
+press A
+wait 360
+press R
+press R
+wait 400
+log bajando
+press DOWN
+wait 30
+press DOWN
+wait 30
+press DOWN
+wait 30
+press DOWN
+wait 30
+press DOWN
+wait 30
+press DOWN
+wait 30
+press DOWN
+wait 200
+shot op
+quit

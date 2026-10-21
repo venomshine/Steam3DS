@@ -509,6 +509,12 @@ int steam_parse_reviews(const char *json, Review *out, int max, char *cursor, si
 		if (!t) continue;
 		char *c = clean_review(t);
 		if (!c || !*c) { free(c); continue; }
+		// En pantalla caben tres líneas: no hace falta guardar reseñas de miles de caracteres
+		if (strlen(c) > 360) {
+			size_t cut = 360;
+			while (cut > 0 && ((unsigned char)c[cut] & 0xC0) == 0x80) cut--;
+			c[cut] = 0;
+		}
 		out[n].text = c;
 		out[n].voted_up = jbool(r, "voted_up");
 		const cJSON *au = cJSON_GetObjectItemCaseSensitive(r, "author");

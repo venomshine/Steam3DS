@@ -67,6 +67,7 @@ static struct {
 	int stack_sec[8], stack_lsel[8];
 	int depth;
 	Review reviews[MAX_REVIEWS];
+	TextBlock rtext[MAX_REVIEWS];   // reseñas ya maquetadas
 	int nreviews;
 	char rcursor[128];
 	Req *rreq;
@@ -85,6 +86,7 @@ static struct {
 static InfoEnt cache[CACHE];
 static u64 frame_no;
 static C2D_SpriteSheet sprites;
+static C2D_TextBuf review_buf;
 static float splash_t, splash_out = -1;
 
 static void toast(const char *msg)
@@ -550,6 +552,7 @@ static void open_game(u32 appid, bool push)
 	for (int i = 0; i < S.nreviews; i++) free(S.reviews[i].text);
 	S.nreviews = 0;
 	S.rcursor[0] = 0;
+	C2D_TextBufClear(review_buf);
 	if (S.rreq) net_release(S.rreq);
 	S.rreq = NULL;
 	S.rend = false;
@@ -589,7 +592,11 @@ static void game_poll(const AppInfo *a)
 		if (S.rreq->state == REQ_DONE) {
 			int n = steam_parse_reviews(S.rreq->data, S.reviews + S.nreviews, MAX_REVIEWS - S.nreviews, S.rcursor, sizeof S.rcursor);
 			if (n <= 0) S.rend = true;
-			else S.nreviews += n;
+			for (int i = 0; i < n; i++) {
+				int k = S.nreviews + i;
+				ui_block_parse(&S.rtext[k], review_buf, S.reviews[k].text, SZ_TINY, TOP_W - 36, 3);
+			}
+			if (n > 0) S.nreviews += n;
 		} else {
 			S.rend = true;
 		}
@@ -717,7 +724,7 @@ static void draw_reviews_top(const AppInfo *a)
 			char hrs[32];
 			snprintf(hrs, sizeof hrs, _("%d h jugadas"), r->hours);
 			ui_text(TOP_W - 18, y + 4, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
-			ui_text_wrap(18, y + 20, TOP_W - 36, r->text, SZ_TINY, COL_TXT, 3, 12);
+			ui_block_draw(&S.rtext[i], 18, y + 20, SZ_TINY, COL_TXT, 12);
 		}
 		y += h + 5;
 	}
@@ -1202,6 +1209,7 @@ int main(int argc, char **argv)
 	}
 	util_init();
 	ui_init();
+	review_buf = C2D_TextBufNew(MAX_REVIEWS * 3 * 90);
 	img_init();
 	net_init();
 
@@ -1217,6 +1225,9 @@ int main(int argc, char **argv)
 
 	u64 last = osGetTime();
 	while (aptMainLoop() && !S.quit) {
+#ifdef DEV_RELAY
+		u64 tick0 = svcGetSystemTick();
+#endif
 		u64 now = osGetTime();
 		float dt = (now - last) / 1000.0f;
 		last = now;
@@ -1317,6 +1328,24 @@ int main(int argc, char **argv)
 		}
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		draw_overlays_bottom();
+#ifdef DEV_RELAY
+		// Solo en pruebas: tiempo de CPU por frame (ticks de la consola), medio cada 2 s en net.log
+		{
+			static double acc, worst;
+			static int n;
+			static u64 last_log;
+			double ms = (svcGetSystemTick() - tick0) / (double)SYSCLOCK_ARM11 * 1000.0;
+			acc += ms;
+			if (ms > worst) worst = ms;
+			n++;
+			if (now - last_log > 2000) {
+				netlog("perf: escena=%d apartado=%d media=%.1fms peor=%.1fms", S.scene, S.sec, acc / n, worst);
+				acc = worst = 0;
+				n = 0;
+				last_log = now;
+			}
+		}
+#endif
 		C3D_FrameEnd(0);
 	}
 
@@ -1333,6 +1362,7 @@ int main(int argc, char **argv)
 		appinfo_free(&cache[i].info);
 	}
 	if (sprites) C2D_SpriteSheetFree(sprites);
+	C2D_TextBufDelete(review_buf);
 	img_exit();
 	net_exit();
 	ui_exit();

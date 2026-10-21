@@ -45,6 +45,11 @@ float ui_text(float x, float y, const char *s, float sz, u32 col, int align, flo
 int ui_text_wrap(float x, float y, float w, const char *s, float sz, u32 col, int max_lines, float line_h);
 int ui_text_lines(const char *s, float sz, float w);
 
+// Texto maquetado una sola vez (para lo que se dibuja en muchos frames, como las reseñas)
+typedef struct { C2D_Text line[4]; int n; } TextBlock;
+void ui_block_parse(TextBlock *b, C2D_TextBuf buf, const char *s, float sz, float w, int max_lines);
+void ui_block_draw(const TextBlock *b, float x, float y, float sz, u32 col, float lh);
+
 // Formas
 void ui_rect(float x, float y, float w, float h, u32 col);
 void ui_vgrad(float x, float y, float w, float h, u32 top, u32 bottom);

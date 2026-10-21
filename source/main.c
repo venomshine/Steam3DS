@@ -7,6 +7,7 @@
 #include <strings.h>
 
 #include "app.h"
+#include "auth.h"
 #include "i18n.h"
 #include "img.h"
 #include "net.h"
@@ -17,7 +18,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 enum { SEC_SUMMARY, SEC_REQS, SEC_REVIEWS, SEC_EXTRAS, SEC_SIMILAR, SEC_COUNT };
 
@@ -91,6 +92,16 @@ static struct {
 	float quit_fade;             // fundido a negro al salir (-1 = no)
 	int pressed;                 // botón táctil hundido (B_*)
 	float toast_y;
+
+	// Menú de START y sesión
+	bool menu_open;
+	float menu_anim;
+	int menu_sel;
+	float start_hold;            // START mantenido: a los 2 s pregunta si sales
+	bool start_armed;
+	Scene login_back;            // a dónde se vuelve al acabar de iniciar sesión
+	float login_done;            // segundos desde que entró (para el saludo)
+	AuthState last_auth;
 } S;
 
 enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH };
@@ -386,7 +397,7 @@ static void draw_status(const char *user)
 	ui_rect(0, 0, TOP_W, 18, COL_BAR);
 	ui_text(8, 2, APP_NAME, SZ_SMALL, COL_ACC, AL_LEFT, 0);
 
-	char clock[48], right[96];
+	char clock[48], right[128];
 	util_clock(clock, sizeof clock);
 	bool chg;
 	int bat = util_battery(&chg);
@@ -805,7 +816,7 @@ static void draw_store_bottom(void)
 			draw_hints(hs, 3);
 		}
 	} else {
-		static const char *hh2[] = {"A", "Ficha", "L R", "Pestaña", "START", "Salir"};
+		static const char *hh2[] = {"A", "Ficha", "L R", "Pestaña", "START", "Menú"};
 		draw_hints(hh2, 3);
 	}
 }
@@ -1362,6 +1373,212 @@ static void draw_overlays_bottom(void)
 }
 
 
+
+// ============================================================================
+// Menú de START e inicio de sesión
+
+static bool key_repeat(u32 down, u32 held, u32 mask);
+
+enum { MI_LOGIN, MI_PROFILE, MI_LIBRARY, MI_WISHLIST, MI_LOGOUT, MI_EXIT };
+#define MENU_ROW 30
+#define MENU_HEAD 44
+
+static int menu_items(int *out)
+{
+	int n = 0;
+	if (!auth_logged()) {
+		out[n++] = MI_LOGIN;
+	} else {
+		out[n++] = MI_PROFILE;
+		out[n++] = MI_LIBRARY;
+		out[n++] = MI_WISHLIST;
+		out[n++] = MI_LOGOUT;
+	}
+	out[n++] = MI_EXIT;
+	return n;
+}
+
+static float menu_y(int n)
+{
+	return SCR_H - 18 - (MENU_HEAD + n * MENU_ROW + 8);
+}
+
+static void open_login(void)
+{
+	S.login_back = S.scene == SC_LOGIN ? SC_STORE : S.scene;
+	S.login_done = 0;
+	go_scene(SC_LOGIN, 1);
+	if (auth_info()->state != AUTH_QR) auth_begin_qr();
+}
+
+static void menu_choose(int item)
+{
+	S.menu_open = false;
+	switch (item) {
+	case MI_LOGIN: open_login(); break;
+	case MI_LOGOUT:
+		auth_logout();
+		toast(_("Sesión cerrada"));
+		break;
+	case MI_EXIT:
+		S.ask_exit = true;
+		S.exit_anim = 0;
+		break;
+	default:
+		toast(_("Llega en la siguiente parte de esta fase"));
+		break;
+	}
+}
+
+static void draw_menu(void)
+{
+	float a = ease_out_cubic(S.menu_anim);
+	if (a <= 0.01f) return;
+	int items[8], n = menu_items(items);
+	ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x90 * a)));
+	float y0 = menu_y(n) + (1 - a) * 60;
+	float hgt = SCR_H - y0;
+	ui_rrect(6, y0, BOT_W - 12, hgt + 10, 10, col_alpha(COL_PANEL, a));
+	ui_rect(BOT_W / 2 - 16, y0 + 5, 32, 3, col_alpha(COL_DIM, a * 0.6f));
+	// Cabecera: tu cuenta (o «sin sesión»)
+	const AuthInfo *ai = auth_info();
+	float hx = 18, hy = y0 + 12;
+	if (auth_logged()) {
+		const Pic *p = ai->avatar[0] ? img_get(ai->avatar, 64) : NULL;
+		ui_rect(hx, hy, 26, 26, col_alpha(COL_BG, a));
+		if (p) img_draw_cover(p, hx, hy, 26, 26, 0.5f);
+		else ui_icon(IC_USER, hx + 5, hy + 5, 16, col_alpha(COL_DIM, a));
+		ui_text(hx + 34, hy, ai->persona, SZ_BODY, col_alpha(COL_WHITE, a), AL_LEFT, 200);
+		char lv[72];
+		if (ai->level) snprintf(lv, sizeof lv, _("Nivel %d"), ai->level);
+		else snprintf(lv, sizeof lv, "%s", ai->account);
+		ui_text(hx + 34, hy + 14, lv, SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
+	} else {
+		ui_icon(IC_USER, hx + 3, hy + 4, 18, col_alpha(COL_DIM, a));
+		ui_text(hx + 34, hy, APP_NAME, SZ_BODY, col_alpha(COL_WHITE, a), AL_LEFT, 200);
+		ui_text(hx + 34, hy + 14, _("Sin iniciar sesión"), SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
+	}
+	static const struct { Icon ic; const char *label; } info[] = {
+		[MI_LOGIN] = {IC_PHONE, "Iniciar sesión con el móvil"},
+		[MI_PROFILE] = {IC_USER, "Mi perfil"},
+		[MI_LIBRARY] = {IC_PAD, "Biblioteca"},
+		[MI_WISHLIST] = {IC_HEART, "Lista de deseos"},
+		[MI_LOGOUT] = {IC_LOCK, "Cerrar sesión"},
+		[MI_EXIT] = {IC_POWER, "Salir de Steam3DS"},
+	};
+	for (int i = 0; i < n; i++) {
+		float y = y0 + MENU_HEAD + i * MENU_ROW;
+		bool on = i == S.menu_sel;
+		if (on) ui_rrect(12, y, BOT_W - 24, MENU_ROW - 2, 5, col_alpha(COL_SEL, a));
+		u32 c = items[i] == MI_EXIT || items[i] == MI_LOGOUT ? C2D_Color32(0xff, 0x8a, 0x7a, 0xff) : COL_ACC;
+		ui_icon(info[items[i]].ic, 22, y + 8, 12, col_alpha(c, a));
+		ui_text(42, y + 6, _(info[items[i]].label), SZ_BODY - 0.02f, col_alpha(on ? COL_WHITE : COL_TXT, a), AL_LEFT, BOT_W - 60);
+	}
+}
+
+static void input_menu(u32 kd, u32 kh, u32 ku, touchPosition *tp)
+{
+	int items[8], n = menu_items(items);
+	if (S.menu_sel >= n) S.menu_sel = n - 1;
+	if (key_repeat(kd, kh, KEY_DOWN)) S.menu_sel = (S.menu_sel + 1) % n;
+	if (key_repeat(kd, kh, KEY_UP)) S.menu_sel = (S.menu_sel + n - 1) % n;
+	if (kd & KEY_B) S.menu_open = false;
+	if (kd & KEY_A) menu_choose(items[S.menu_sel]);
+	if (kd & KEY_TOUCH) {
+		float y0 = menu_y(n);
+		if (tp->py < y0) {
+			S.menu_open = false;   // tocar fuera lo cierra
+		} else {
+			int i = (int)((tp->py - y0 - MENU_HEAD) / MENU_ROW);
+			if (tp->py >= y0 + MENU_HEAD && i >= 0 && i < n) {
+				S.menu_sel = i;
+				menu_choose(items[i]);
+			}
+		}
+	}
+}
+
+static void draw_login_top(void)
+{
+	const AuthInfo *ai = auth_info();
+	if (ai->state == AUTH_IN) {
+		// Dentro: saludo con el avatar
+		float e = ease_out_back(clampf(S.login_done / 0.5f, 0, 1));
+		const Pic *p = ai->avatar[0] ? img_get(ai->avatar, 64) : NULL;
+		float s = 64 * e;
+		ui_rrect(TOP_W / 2 - s / 2 - 3, 60 - 3 + (64 - s) / 2, s + 6, s + 6, 6, COL_ACC);
+		if (p) img_draw_cover(p, TOP_W / 2 - s / 2, 60 + (64 - s) / 2, s, s, 0.5f);
+		else ui_rect(TOP_W / 2 - s / 2, 60 + (64 - s) / 2, s, s, COL_PANEL);
+		char t[96];
+		snprintf(t, sizeof t, _("Hola, %s"), ai->persona[0] ? ai->persona : ai->account);
+		ui_text(TOP_W / 2, 140, t, SZ_TITLE, col_alpha(COL_WHITE, e), AL_CENTER, 380);
+		ui_text(TOP_W / 2, 166, _("Ya tienes tu sesión de Steam en la consola"), SZ_SMALL, col_alpha(COL_DIM, e), AL_CENTER, 380);
+		return;
+	}
+	if (!ai->qr_url[0]) {
+		if (ai->err[0]) {
+			ui_text(TOP_W / 2, 100, _("No se pudo pedir el código a Steam"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
+			ui_text(TOP_W / 2, 124, human_err(ai->err), SZ_BODY, COL_DIM, AL_CENTER, 380);
+			ui_text(TOP_W / 2, 144, _("Se reintenta solo"), SZ_SMALL, COL_ACC, AL_CENTER, 0);
+		} else {
+			draw_net_wait(TOP_W / 2, 120, _("Pidiendo el código a Steam…"));
+		}
+		return;
+	}
+	ui_qr(ai->qr_url, 14, 30, 176);
+	float x = 204, w = TOP_W - 12 - x;
+	ui_text(x, 30, _("Inicia sesión con Steam"), SZ_LARGE, COL_WHITE, AL_LEFT, w);
+	static const char *steps[] = {
+		"Abre la app de Steam en el móvil",
+		"Toca el escudo de Steam Guard",
+		"Elige «Escanear un código QR» y apunta aquí",
+	};
+	float y = 56;
+	for (int i = 0; i < 3; i++) {
+		char num[4];
+		snprintf(num, sizeof num, "%d", i + 1);
+		ui_circle(x + 7, y + 7, 7, COL_SEL);
+		ui_text(x + 7, y + 1, num, SZ_TINY, COL_ACC, AL_CENTER, 0);
+		int nl = ui_text_wrap(x + 20, y, w - 20, _(steps[i]), SZ_SMALL, COL_TXT, 3, 13);
+		y += nl * 13 + 8;
+	}
+	// Estado: esperando, o ya escaneado y falta aprobar
+	float sy = 186;
+	if (ai->qr_scanned) {
+		float bh = 14 + 13 * ui_text_lines(_("Escaneado: apruébalo en el móvil"), SZ_SMALL, w - 20);
+		ui_rrect(x, sy - (bh - 26), w, bh, 5, C2D_Color32(0x2d, 0x5a, 0x1e, 0xff));
+		ui_text_wrap(x + 10, sy - (bh - 26) + 7, w - 20, _("Escaneado: apruébalo en el móvil"), SZ_SMALL, COL_LIME, 2, 13);
+	} else {
+		ui_spinner(x + 10, sy + 12, 5, COL_DIM);
+		ui_text(x + 24, sy + 5, _("Esperando al móvil…"), SZ_SMALL, COL_DIM, AL_LEFT, w - 30);
+	}
+}
+
+static void draw_login_bottom(void)
+{
+	ui_rect(0, 0, BOT_W, SCR_H, COL_BG);
+	ui_icon(IC_LOCK, BOT_W / 2 - 10, 34, 20, COL_ACC);
+	ui_text(BOT_W / 2, 64, _("Tu contraseña nunca pasa por la consola"), SZ_BODY, COL_WHITE, AL_CENTER, 300);
+	ui_text_wrap(24, 88, BOT_W - 48, _("Apruebas la entrada desde la app oficial de Steam. La sesión se guarda en la tarjeta SD; puedes cerrarla cuando quieras desde el menú (START) o desde Steam, en Dispositivos autorizados."),
+		SZ_SMALL, COL_DIM, 6, 14);
+	static const char *hh[] = {"B", "Volver"};
+	draw_hints(hh, 1);
+}
+
+static void input_login(u32 kd, float dt)
+{
+	const AuthInfo *ai = auth_info();
+	if (ai->state == AUTH_IN) {
+		S.login_done += dt;
+		if (S.login_done > 1.8f || (kd & (KEY_A | KEY_B))) go_scene(S.login_back, -1);
+		return;
+	}
+	if (kd & KEY_B) {
+		auth_cancel_qr();
+		go_scene(S.login_back, -1);
+	}
+}
+
 // ============================================================================
 // Pantalla de carga: la rueda de válvula gira, sale vapor y una barra de carga
 
@@ -1904,6 +2121,8 @@ int main(int argc, char **argv)
 	review_buf = C2D_TextBufNew(MAX_REVIEWS * 3 * 90);
 	img_init();
 	net_init();
+	auth_init();
+	S.last_auth = auth_info()->state;
 
 	S.scene = SC_SPLASH;
 	S.tab = TAB_HOME;
@@ -1987,11 +2206,34 @@ int main(int argc, char **argv)
 			if ((kd & KEY_A) || b == BT_EXIT_YES) S.quit_fade = 0;
 			if ((kd & (KEY_B | KEY_START)) || b == BT_EXIT_NO) S.ask_exit = false;
 			kd = kh = ku = 0;
-		} else if (kd & KEY_START) {
-			S.ask_exit = true;
-			S.exit_anim = 0;
-			S.pressed = BT_NONE;
-			kd = kh = ku = 0;
+		} else if (S.scene != SC_SPLASH) {
+			if (kd & KEY_START) {
+				S.start_hold = 0;
+				S.start_armed = true;
+			}
+			if ((kh & KEY_START) && S.start_armed) {
+				S.start_hold += dt;
+				if (S.start_hold >= 2.0f) {
+					S.start_armed = false;
+					S.menu_open = false;
+					S.ask_exit = true;
+					S.exit_anim = 0;
+					S.pressed = BT_NONE;
+				}
+			}
+			if ((ku & KEY_START) && S.start_armed) {
+				// Pulsación corta (al soltar): abre o cierra el menú
+				S.start_armed = false;
+				S.menu_open = !S.menu_open;
+				S.menu_sel = 0;
+			}
+			if (!(kh & KEY_START)) S.start_hold = 0;
+			kd &= ~KEY_START;
+			ku &= ~KEY_START;
+			if (S.menu_open) {
+				input_menu(kd, kh, ku, &tp);
+				kd = kh = ku = 0;
+			}
 		}
 
 		if (S.want_kb) {
@@ -2004,6 +2246,14 @@ int main(int argc, char **argv)
 		case SC_GAME: input_game(kd, kh, ku, &tp); break;
 		case SC_SHOTS: input_shots(kd, kh, ku, &tp); break;
 		case SC_SPLASH: splash_update(dt, kd); break;
+		case SC_LOGIN: input_login(kd, dt); break;
+		}
+		auth_update();
+		// Avisos de la sesión: entró desde la sesión guardada, o Steam ya no la acepta
+		if (auth_info()->state != S.last_auth) {
+			if (S.last_auth == AUTH_STARTING && auth_info()->state == AUTH_OUT && !strcmp(auth_info()->err, "expired"))
+				toast(_("Tu sesión de Steam caducó: vuelve a iniciarla"));
+			S.last_auth = auth_info()->state;
 		}
 
 		// Vista previa: la ficha del seleccionado, cuando el cursor se queda quieto un momento
@@ -2021,6 +2271,7 @@ int main(int argc, char **argv)
 		S.seg_x = approach(S.seg_x, S.sec, 16);
 		S.strip = approach(S.strip, S.shot, 12);
 		S.exit_anim = approach(S.exit_anim, S.ask_exit ? 1 : 0, S.ask_exit ? 7 : 16);
+		S.menu_anim = approach(S.menu_anim, S.menu_open ? 1 : 0, S.menu_open ? 12 : 18);
 		S.sec_anim = clampf(S.sec_anim + dt / 0.22f, 0, 1);
 		S.scene_anim = clampf(S.scene_anim + dt / 0.28f, 0, 1);
 		S.shot_anim = clampf(S.shot_anim + dt / 0.30f, 0, 1);
@@ -2053,11 +2304,13 @@ int main(int argc, char **argv)
 		case SC_GAME: draw_game_top(); break;
 		case SC_SHOTS: draw_shots_top(); break;
 		case SC_SPLASH: draw_splash_top(); break;
+		case SC_LOGIN: draw_login_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME) draw_status(NULL);
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN)
+			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
 		if (S.quit_fade >= 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(S.quit_fade / 0.3f, 0, 1))));
@@ -2070,10 +2323,18 @@ int main(int argc, char **argv)
 		case SC_GAME: draw_game_bottom(); break;
 		case SC_SHOTS: draw_shots_bottom(); break;
 		case SC_SPLASH: draw_splash_bottom(); break;
+		case SC_LOGIN: draw_login_bottom(); break;
 		}
 		C2D_ViewReset();
 		if (ce < 1) ui_rect(0, 0, BOT_W, SCR_H, col_alpha(COL_BG, (1 - ce) * 0.9f));
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
+		draw_menu();
+		// START mantenido: barra que se llena; a los 2 s pregunta si sales
+		if (S.start_hold > 0.25f && S.start_armed) {
+			float f = clampf((S.start_hold - 0.25f) / 1.75f, 0, 1);
+			ui_rect(0, SCR_H - 3, BOT_W, 3, C2D_Color32(0, 0, 0, 0x80));
+			ui_rect(0, SCR_H - 3, BOT_W * f, 3, C2D_Color32(0xe0, 0x4b, 0x3a, 0xff));
+		}
 		draw_overlays_bottom();
 		if (S.quit_fade >= 0) ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(S.quit_fade / 0.3f, 0, 1))));
 #ifdef DEV_RELAY
@@ -2121,6 +2382,7 @@ int main(int argc, char **argv)
 	if (splash_bg) C2D_SpriteSheetFree(splash_bg);
 	C2D_TextBufDelete(review_buf);
 	img_exit();
+	auth_exit();
 	net_exit();
 	ui_exit();
 	util_exit();

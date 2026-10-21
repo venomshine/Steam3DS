@@ -123,6 +123,11 @@ static bool wait_network(Req *r)
 static void req_free(Req *r)
 {
 	free(r->url);
+	if (r->post) {
+		// Puede llevar tokens de la sesión: se borra antes de soltarlo
+		memset(r->post, 0, strlen(r->post));
+		free(r->post);
+	}
 	free(r->data);
 	free(r->pixels);
 	free(r);
@@ -192,6 +197,15 @@ Req *net_get_jpeg(const char *url, int max_w)
 	r->jpeg = true;
 	r->jpeg_max_w = max_w;
 	lane_push(&lanes[LANE_IMG], r);
+	return r;
+}
+
+Req *net_post(const char *url, const char *body)
+{
+	Req *r = req_new(url, LANE_API);
+	if (!r) return NULL;
+	r->post = strdup(body ? body : "");
+	lane_push(&lanes[LANE_API], r);
 	return r;
 }
 
@@ -325,6 +339,10 @@ static void run_req(Lane *l, Req *r)
 	curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, on_progress);
 	curl_easy_setopt(c, CURLOPT_XFERINFODATA, r);
 	if (r->head) curl_easy_setopt(c, CURLOPT_NOBODY, 1L);
+	if (r->post) {
+		curl_easy_setopt(c, CURLOPT_POSTFIELDS, r->post);
+		curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)strlen(r->post));
+	}
 
 	u64 t0 = osGetTime();
 	CURLcode rc = curl_easy_perform(c);
@@ -349,7 +367,7 @@ static void run_req(Lane *l, Req *r)
 	char *q = strchr(shown, '?');
 	if (q) *q = 0;
 	netlog("%s %s -> %ld %luB dns=%.2f tcp=%.2f tls=%.2f 1er=%.2f total=%.2fs%s%s",
-		r->head ? "HEAD" : "GET", shown, r->http, (unsigned long)r->len,
+		r->head ? "HEAD" : r->post ? "POST" : "GET", shown, r->http, (unsigned long)r->len,
 		tdns, ttcp, ttls, tfirst, (osGetTime() - t0) / 1000.0,
 		r->err[0] ? " ERROR " : "", r->err);
 

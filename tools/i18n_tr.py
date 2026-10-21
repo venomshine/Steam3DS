@@ -5,7 +5,9 @@
 INDIRECT = [
     "Inicio", "Ofertas", "Demos", "Betas",
     "Resumen", "Requisitos", "Opiniones", "Extras", "Similares",
-    "Ficha", "Pestaña", "Salir", "Elegir", "Abrir ficha", "Apartado", "Volver", "Comprar en el móvil", "Cambiar", "Abrir", "Borrar",
+    "Ficha", "Pestaña", "Salir", "Menú",
+    "Iniciar sesión con el móvil", "Mi perfil", "Biblioteca", "Lista de deseos", "Cerrar sesión", "Salir de Steam3DS",
+    "Abre la app de Steam en el móvil", "Toca el escudo de Steam Guard", "Elige «Escanear un código QR» y apunta aquí", "Elegir", "Abrir ficha", "Apartado", "Volver", "Comprar en el móvil", "Cambiar", "Abrir", "Borrar",
     "Lo más vendido", "Novedades populares", "Próximamente", "Gratis para jugar",
     "Violencia", "Sangre", "Sexo", "Desnudos", "Lenguaje soez", "Drogas", "Miedo", "Juegos de azar",
     "Discriminación", "Compras en el juego", "Humor adulto",
@@ -157,6 +159,34 @@ TR = {
 
     # Pantalla de carga
     "hecho por VENOMSHiNE": ("made by VENOMSHiNE", "VENOMSHiNE 作"),
+
+    # Menú y sesión
+    "Menú": ("Menu", "メニュー"),
+    "Iniciar sesión con el móvil": ("Sign in with your phone", "スマホでサインイン"),
+    "Mi perfil": ("My profile", "プロフィール"),
+    "Biblioteca": ("Library", "ライブラリ"),
+    "Lista de deseos": ("Wishlist", "ウィッシュリスト"),
+    "Cerrar sesión": ("Sign out", "サインアウト"),
+    "Salir de Steam3DS": ("Exit Steam3DS", "Steam3DSを終了"),
+    "Sesión cerrada": ("Signed out", "サインアウトしました"),
+    "Llega en la siguiente parte de esta fase": ("Coming in the next part of this update", "次のアップデートで追加されます"),
+    "Nivel %d": ("Level %d", "レベル %d"),
+    "Sin iniciar sesión": ("Not signed in", "サインインしていません"),
+    "Hola, %s": ("Hi, %s", "こんにちは、%s"),
+    "Ya tienes tu sesión de Steam en la consola": ("Your Steam session is now on the console", "Steamにサインインしました"),
+    "No se pudo pedir el código a Steam": ("Couldn't get the code from Steam", "Steamからコードを取得できませんでした"),
+    "Pidiendo el código a Steam…": ("Getting the code from Steam…", "Steamからコードを取得中…"),
+    "Inicia sesión con Steam": ("Sign in with Steam", "Steamにサインイン"),
+    "Abre la app de Steam en el móvil": ("Open the Steam app on your phone", "スマホでSteamアプリを開く"),
+    "Toca el escudo de Steam Guard": ("Tap the Steam Guard shield", "Steamガードの盾をタップ"),
+    "Elige «Escanear un código QR» y apunta aquí": ("Choose “Scan a QR code” and point it here", "「QRコードをスキャン」を選んでここに向ける"),
+    "Escaneado: apruébalo en el móvil": ("Scanned: approve it on your phone", "スキャン完了：スマホで承認してください"),
+    "Esperando al móvil…": ("Waiting for your phone…", "スマホを待っています…"),
+    "Tu contraseña nunca pasa por la consola": ("Your password never goes through the console", "パスワードが本体を通ることはありません"),
+    "Apruebas la entrada desde la app oficial de Steam. La sesión se guarda en la tarjeta SD; puedes cerrarla cuando quieras desde el menú (START) o desde Steam, en Dispositivos autorizados.": (
+        "You approve the sign-in from the official Steam app. The session is saved on the SD card; you can end it any time from the menu (START) or in Steam, under Authorized devices.",
+        "サインインは公式Steamアプリで承認します。セッションはSDカードに保存され、メニュー（START）またはSteamの「承認済みデバイス」からいつでも終了できます。"),
+    "Tu sesión de Steam caducó: vuelve a iniciarla": ("Your Steam session expired: sign in again", "Steamのセッションが切れました。もう一度サインインしてください"),
 
     # Salir
     "¿Salir de Steam3DS?": ("Exit Steam3DS?", "Steam3DSを終了しますか？"),

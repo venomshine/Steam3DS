@@ -18,6 +18,7 @@ typedef struct Req {
 	char *url;
 	NetLane lane;
 	bool head;              // solo cabeceras (HEAD)
+	char *post;             // cuerpo de un POST (application/x-www-form-urlencoded); nunca va al registro
 	bool jpeg;              // decodificar como JPEG al terminar
 	int jpeg_max_w;         // ancho máximo de la imagen decodificada
 
@@ -43,6 +44,7 @@ void net_exit(void);
 Req *net_get(const char *url, NetLane lane);
 Req *net_get_jpeg(const char *url, int max_w);
 Req *net_head(const char *url);
+Req *net_post(const char *url, const char *body);
 void net_release(Req *r);
 
 // Estado de la conexión, para mostrar el motivo real en pantalla.

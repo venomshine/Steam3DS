@@ -1,0 +1,28 @@
+# Inicio de sesión con el QR (relé con RELAY_FAKE_LOGIN=1: aprueba al tercer sondeo)
+wait 900
+press START
+wait 30
+shot s01_menu_sin_sesion
+press A
+wait 120
+shot s02_qr
+wait 330
+shot s03_escaneado
+wait 330
+shot s04_dentro
+wait 120
+shot s05_vuelta
+press START
+wait 40
+shot s06_menu_con_sesion
+press B
+wait 20
+hold START
+wait 70
+shot s07_start_mantenido
+wait 70
+release START
+wait 30
+shot s08_salir
+press B
+quit

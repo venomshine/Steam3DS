@@ -16,6 +16,7 @@ static const TrEntry tr_table[] = {
 	{"%s terminada en %s", "%s ending in %s", "%s（末尾 %s）"},
 	{"%s y %d amigos más lo están jugando", "%s and %d more friends are playing it", "%s とほか %d 人のフレンドがプレイ中"},
 	{"1 jugador", "Single-player", "シングルプレイヤー"},
+	{"A: ir a tu biblioteca", "A: go to your library", "A：ライブラリへ"},
 	{"Abajo, tus búsquedas recientes", "Your recent searches are below", "下に最近の検索があります"},
 	{"Abre la app de Steam en el móvil", "Open the Steam app on your phone", "スマホでSteamアプリを開く"},
 	{"Abriendo el pago de Steam…", "Opening Steam checkout…", "Steamの支払いを開いています…"},

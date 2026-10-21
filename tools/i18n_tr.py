@@ -336,4 +336,5 @@ TR = {
     '¿Cómo quieres pagar?': ('How do you want to pay?', '支払い方法を選んでください'),
     'Tienda': ('Store', 'ストア'),
     'Reintentar': ('Retry', '再試行'),
+    "A: ir a tu biblioteca": ("A: go to your library", "A：ライブラリへ"),
 }

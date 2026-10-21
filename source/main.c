@@ -960,7 +960,7 @@ static void draw_overlays_bottom(void)
 // ============================================================================
 // Pantalla de carga: la rueda de válvula gira, sale vapor y una barra de carga
 
-enum { SPR_WHEEL, SPR_PUFF, SPR_GLOW };
+enum { SPR_WHEEL, SPR_STEAM, SPR_GLOW };
 
 static float ease_out_back(float t)
 {
@@ -998,14 +998,34 @@ static void draw_splash_top(void)
 	// Como una válvula que se abre: arranca despacio y coge velocidad
 	float spin = t < 0.8f ? 0.9f * t * t : 0.576f + 1.44f * (t - 0.8f);
 	draw_sprite(SPR_WHEEL, cx, cy, 0.62f * pop, spin, pop);
-	// Vapor: nubes que suben a la derecha, crecen y se desvanecen
-	for (int i = 0; i < 5; i++) {
-		float life = fmodf(t * 0.75f + i * 0.2f, 1.0f);
-		if (t < 0.35f + i * 0.12f) continue;
-		float a = (life < 0.15f ? life / 0.15f : 1 - (life - 0.15f) / 0.85f) * 0.75f;
-		float x = cx + 30 + life * 34 + sinf(i * 2.1f + t) * 4;
-		float y = cy - 34 - life * 58;
-		draw_sprite(SPR_PUFF, x, y, 0.35f + life * 0.65f, 0, a);
+	// Vapor: al abrirse la válvula sale una bocanada hacia los lados y luego un chorro
+	// que sube desde el centro, se ensancha y se deshace. Cada partícula sale de su
+	// índice (sin estado): misma imagen en cada frame, sin coste de memoria.
+	const float t0 = 0.6f;
+	if (t > t0) {
+		for (int i = 0; i < 10; i++) {
+			float age = t - t0 - i * 0.012f;
+			if (age < 0 || age > 1.1f) continue;
+			float p = age / 1.1f, ang = i * 0.628f + 0.3f;
+			float dist = 16 + 70 * (1 - (1 - p) * (1 - p));
+			float a = (p < 0.1f ? p / 0.1f : powf(1 - p, 1.6f)) * 0.42f;
+			draw_sprite(SPR_STEAM, cx + cosf(ang) * dist, cy + sinf(ang) * dist * 0.8f - p * 20, 0.35f + p * 1.3f, ang + age, a);
+		}
+		const int N = 36;
+		const float every = 0.05f, life = N * every;
+		for (int j = 0; j < N; j++) {
+			float since = t - t0 - j * every;
+			if (since < 0) continue;
+			float age = fmodf(since, life);
+			int gen = (int)(since / life);
+			u32 hsh = (u32)(j * 2654435761u) ^ (u32)(gen * 40503u);
+			float rx = ((hsh & 0xff) / 127.5f) - 1, rs = (((hsh >> 8) & 0xff) / 255.0f);
+			float p = age / life;
+			float y = cy - 6 - p * (165 + 45 * rs);
+			float x = cx + rx * 26 * p + sinf(age * 3 + j) * 9 * p + 18 * p * p;
+			float a = (p < 0.10f ? p / 0.10f : powf(1 - p, 1.3f)) * 0.42f;
+			draw_sprite(SPR_STEAM, x, y, 0.30f + p * (2.8f + rs * 1.0f), j * 1.3f + age * (rx > 0 ? 0.7f : -0.7f), a);
+		}
 	}
 	float ta = clampf((t - 0.25f) / 0.4f, 0, 1);
 	u8 a8 = (u8)(255 * ta);
@@ -1038,7 +1058,7 @@ static void splash_update(float dt, u32 kd)
 	splash_t += dt;
 	if (splash_out < 0) {
 		bool skip = splash_t > 0.6f && (kd & (KEY_A | KEY_B | KEY_TOUCH));
-		if ((splash_t > 2.0f && splash_ready()) || splash_t > 6.0f || skip) splash_out = 0;
+		if ((splash_t > 2.6f && splash_ready()) || splash_t > 6.0f || skip) splash_out = 0;
 	} else {
 		splash_out += dt;
 		if (splash_out > 0.35f) S.scene = SC_STORE;

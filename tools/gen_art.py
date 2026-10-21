@@ -8,7 +8,7 @@ Salida:
   meta/icon.png     48×48   icono del menú HOME
   meta/banner.png   256×128 banner del menú HOME
   gfx/wheel.png     128×128 rueda (pantalla de carga, gira)
-  gfx/puff.png      64×64   nube de vapor
+  gfx/steam.png     128×128 nube de vapor (textura de ruido, para las partículas)
   gfx/glow.png      128×128 resplandor
 """
 import math
@@ -81,16 +81,6 @@ def wheel(size, angle=18.0, spokes=5, color_out=LIGHT, color_in=ACC):
     return out
 
 
-def puff(size, alpha=230):
-    """Nube de vapor: tres círculos suaves."""
-    s = size * K
-    im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    for cx, cy, r in ((0.40, 0.58, 0.26), (0.60, 0.50, 0.30), (0.52, 0.36, 0.22)):
-        d.ellipse([(cx - r) * s, (cy - r) * s, (cx + r) * s, (cy + r) * s], fill=(255, 255, 255, alpha))
-    return im.filter(ImageFilter.GaussianBlur(s * 0.03))
-
-
 def glow(size):
     """Resplandor radial con caída suave y tramado en el alfa (sin escalones)."""
     import random
@@ -104,6 +94,41 @@ def glow(size):
             a = (1 - d) ** 1.6 * 255 + rnd.uniform(-0.5, 0.5)
             px[x, y] = (ACC[0], ACC[1], ACC[2], max(0, min(255, int(a))))
     return im
+
+
+def steam(size, seed):
+    """Vapor: ruido fractal dentro de una caída radial suave. Blanco con alfa."""
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    n = np.zeros((size, size))
+    amp, total = 1.0, 0.0
+    for octave in (4, 8, 16, 32):
+        g = rng.random((octave + 1, octave + 1))
+        layer = np.array(Image.fromarray((g * 255).astype("uint8")).resize((size, size), Image.BICUBIC), dtype=float) / 255
+        n += layer * amp
+        total += amp
+        amp *= 0.55
+    n /= total
+    y, x = np.mgrid[0:size, 0:size]
+    c = (size - 1) / 2
+    d = np.clip(np.hypot(x - c, y - c) / c, 0, 1)
+    fall = (1 - d) ** 1.8
+    a = np.clip((n - 0.25) * 1.9, 0, 1) * fall
+    a = a / a.max()
+    a = a + rng.uniform(-0.6, 0.6, a.shape) / 255      # tramado: sin escalones al ampliarla
+    rgba = np.zeros((size, size, 4), dtype="uint8")
+    rgba[..., :3] = 255
+    rgba[..., 3] = np.clip(a * 255, 0, 255).astype("uint8")
+    return Image.fromarray(rgba, "RGBA").filter(ImageFilter.GaussianBlur(1.2))
+
+
+def centered(im, size):
+    """Coloca la forma centrada por su caja real (píxeles visibles), no por el lienzo."""
+    box = im.getchannel("A").point(lambda v: 255 if v > 24 else 0).getbbox()
+    shape = im.crop(box)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    out.alpha_composite(shape, ((size - shape.width) // 2, (size - shape.height) // 2))
+    return out
 
 
 def down(im, size):
@@ -120,12 +145,8 @@ def icon():
     ImageDraw.Draw(mask).rounded_rectangle([1 * K, 1 * K, s - 1 * K, s - 1 * K], radius=9 * K, fill=255)
     im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     im.paste(bg, (0, 0), mask)
-    w = wheel(40)
-    im.alpha_composite(w, (int(2 * K), int(7 * K)))
-    p = puff(20, 215)
-    im.alpha_composite(p, (int(27 * K), int(1 * K)))
-    p2 = down(puff(20, 150), (12 * K, 12 * K))
-    im.alpha_composite(p2, (int(33 * K), int(-2 * K)))
+    # La válvula sola y centrada por su forma real
+    im.alpha_composite(centered(wheel(46), s))
     return down(im, (48, 48))
 
 
@@ -134,10 +155,8 @@ def banner():
     im = vgrad(W, H, (0x24, 0x3b, 0x50), NAVY_BOT)
     g = down(glow(128), (int(150 * K), int(150 * K)))
     im.alpha_composite(g, (int(-12 * K), int(-11 * K)))
-    w = wheel(84)
-    im.alpha_composite(w, (int(12 * K), int(22 * K)))
-    for (x, y, sz, a) in ((66, 6, 34, 200), (88, 0, 22, 140), (100, -4, 14, 90)):
-        im.alpha_composite(down(puff(sz, a), (sz * K, sz * K)), (int(x * K), int(y * K)))
+    w = centered(wheel(96), 100 * K)
+    im.alpha_composite(w, (int(4 * K), int(14 * K)))
     d = ImageDraw.Draw(im)
     x0, maxw = 102 * K, 144 * K
 
@@ -166,6 +185,6 @@ if __name__ == "__main__":
     icon().save(os.path.join(ROOT, "meta", "icon.png"))
     banner().save(os.path.join(ROOT, "meta", "banner.png"))
     down(wheel(128, angle=0), (128, 128)).save(os.path.join(ROOT, "gfx", "wheel.png"))
-    down(puff(64), (64, 64)).save(os.path.join(ROOT, "gfx", "puff.png"))
+    steam(128, 2026).save(os.path.join(ROOT, "gfx", "steam.png"))
     glow(128).save(os.path.join(ROOT, "gfx", "glow.png"))
-    print("meta/icon.png meta/banner.png gfx/wheel.png gfx/puff.png gfx/glow.png")
+    print("meta/icon.png meta/banner.png gfx/wheel.png gfx/steam.png gfx/glow.png")

@@ -122,6 +122,26 @@ int main(void) {
 	steam_post_service("IWishlistService/AddToWishlist", in, "TOKEN");
 	CHECK(!strcmp(last_url, "https://api.steampowered.com/IWishlistService/AddToWishlist/v1/?access_token=TOKEN"));
 	CHECK(!strcmp(last_body, "input_json=%7B%22appid%22%3A570%7D"));
+	// Página de pago: cartera en la lista, tarjeta guardada (solo los 4 últimos) y país
+	CheckoutPage cp;
+	const char *html = "<script>var g_sessionID = \"abc123\";</script><input type=\"hidden\" id=\"payment_method\" value=\"\">"
+		"<ul id=\"payment_method_droplist\"><li><a id=\"steamaccount\" href=\"#\">Cartera</a></li>"
+		"<li><a id=\"storedcreditcard\">Visa</a></li></ul>"
+		"<input type=\"hidden\" name=\"stored_payment_method\" id=\"stored_payment_method\" value=\"visa\">"
+		"<input value=\"776655\" type=\"hidden\" id=\"stored_card_id\">"
+		"<input type=\"hidden\" id=\"stored_card_number\" value=\"************4821\">"
+		"<input type=\"hidden\" id=\"billing_country\" value=\"ES\">";
+	CHECK(steam_parse_checkout_page(html, &cp));
+	printf("pago: sesion %s cartera %d tarjeta %s ...%s gid %s pais %s\n", cp.sessionid, cp.wallet, cp.card_type, cp.card_last4, cp.card_gid, cp.country);
+	CHECK(!strcmp(cp.sessionid, "abc123") && cp.wallet && cp.card && !strcmp(cp.card_type, "visa"));
+	CHECK(!strcmp(cp.card_last4, "4821") && !strcmp(cp.card_gid, "776655") && !strcmp(cp.country, "ES"));
+	// Sin tarjeta guardada ni cartera, y la página de iniciar sesión (no es la de pago)
+	CHECK(steam_parse_checkout_page("<input id=\"payment_method\"><ul id=\"payment_method_droplist\"><li><a id=\"paypal\">P</a></li></ul>"
+		"<input id=\"stored_card_id\" value=\"\">", &cp) && !cp.card && !cp.wallet);
+	CHECK(!steam_parse_checkout_page("<html>Iniciar sesión</html>", &cp));
+	WalletInfo wi;
+	CHECK(steam_parse_wallet("{\"response\":{\"has_wallet\":true,\"balance\":\"3210\",\"formatted_balance\":\"32,10€\",\"wallet_country_code\":\"ES\"}}", &wi));
+	CHECK(wi.has_wallet && wi.balance == 3210 && !strcmp(wi.formatted, "32,10€") && !strcmp(wi.country, "ES"));
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

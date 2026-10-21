@@ -928,7 +928,7 @@ bool steam_parse_checkout_page(const char *html, CheckoutPage *o)
 		o->card = o->card_type[0] != 0;
 	}
 	char c[8] = "";
-	if (html_attr(html, "billing_country", "value", c, sizeof c) && strlen(c) == 2) snprintf(o->country, sizeof o->country, "%s", c);
+	if (html_attr(html, "billing_country", "value", c, sizeof c) && strlen(c) == 2) memcpy(o->country, c, 3);
 	return true;
 }
 

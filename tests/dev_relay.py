@@ -230,6 +230,10 @@ def fake_get(path, q):
     if path.endswith("GetWishlist/v1/"):
         return {"response": {"items": [{"appid": a, "priority": i + 1, "date_added": int(time.time()) - i * 86400 * 7}
                                        for i, a in enumerate(WISH)]}}
+    if path.endswith("GetClientWalletDetails/v1/"):
+        c = WALLET_CENTS[0]
+        return {"response": {"has_wallet": True, "user_country_code": "ES", "wallet_country_code": "ES", "balance": str(c),
+                             "currency_code": 3, "formatted_balance": "%d,%02d€" % (c // 100, c % 100)}}
     if path.endswith("GetFriendsGameplayInfo/v1/"):
         appid = int(q.get("appid", inp.get("appid", 0)) or 0)
         owned = [a for a, *_ in OWNED]
@@ -238,6 +242,105 @@ def fake_get(path, q):
                                  "owns": [{"steamid": str(f), "minutes_played_forever": 300} for f in FRIENDS],
                                  "in_game": [{"steamid": str(FRIENDS[0]), "minutes_played": 20}]}}
         return {"response": {"in_wishlist": [{"steamid": str(FRIENDS[1])}]}}
+    return None
+
+
+# Pago simulado (checkout.steampowered.com): cartera con 32,10 € y una Visa guardada que pide
+# el CVV y la verificación del banco. Nunca se toca el checkout de verdad.
+TRANS = {}
+WALLET_CENTS = [3210]
+FAKE_CVV = "123"
+
+
+def cookies_of(headers):
+    out = {}
+    for part in headers.get("Cookie", "").split(";"):
+        k, _, v = part.strip().partition("=")
+        if k:
+            out[k] = v
+    return out
+
+
+CHECKOUT_PAGE = """<html><body>
+<script>var g_sessionID = "%(sid)s"; var g_bUseAccountCart = true;</script>
+<input type="hidden" id="payment_method" value="">
+<div id="payment_method_droplist_ctn"><ul id="payment_method_droplist">
+<li><a id="steamaccount" href="#">Cartera de Steam</a></li>
+<li><a id="storedcreditcard" href="#">Visa ****4821</a></li>
+<li><a id="paypal" href="#">PayPal</a></li></ul></div>
+<input type="hidden" name="stored_payment_method" id="stored_payment_method" value="visa">
+<input type="hidden" id="stored_card_id" name="stored_card_id" value="776655">
+<input type="hidden" id="stored_card_number" value="************4821">
+<input type="hidden" id="billing_country" value="ES">
+</body></html>"""
+
+
+def cart_cents():
+    return sum(int(l["price_when_added"]["amount_in_cents"]) for l in cart_json().get("line_items", []))
+
+
+def fake_checkout(method, path, q, body, headers):
+    """(status, content-type, cuerpo) o None."""
+    ck = cookies_of(headers)
+    if not ck.get("steamLoginSecure", "").startswith(str(FAKE_ID)):
+        return 302, "text/html", "<html>login</html>"
+    form = dict(urllib.parse.parse_qsl(body)) if method == "POST" else {}
+    if method == "POST" and form.get("sessionid") != ck.get("sessionid"):
+        return 200, "application/json", json.dumps({"success": 2, "purchaseresultdetail": 7})
+    js = lambda d: (200, "application/json", json.dumps(d))
+    if path == "checkout/" and method == "GET":
+        return 200, "text/html", CHECKOUT_PAGE % {"sid": ck.get("sessionid", "")}
+    if path == "checkout/inittransaction/":
+        pm = form.get("PaymentMethod")
+        if pm == "visa" and form.get("gidPaymentID") != "776655":
+            return js({"success": 2, "purchaseresultdetail": 6, "transid": "18446744073709551615"})
+        if pm not in ("steamaccount", "visa") or not CART:
+            return js({"success": 2, "purchaseresultdetail": 7, "transid": "18446744073709551615"})
+        tid = str(7000000000000000 + len(TRANS) + 1)
+        TRANS[tid] = {"method": pm, "total": cart_cents(), "polls": 0, "final": False}
+        return js({"success": 1, "purchaseresultdetail": 0, "paymentmethod": 2, "transid": tid})
+    if path == "checkout/getfinalprice/":
+        t = TRANS.get(q.get("transid"))
+        if not t:
+            return js({"success": 2, "purchaseresultdetail": 7})
+        c = t["total"]
+        return js({"success": 1, "total": c, "formattedTotal": "%d,%02d€" % (c // 100, c % 100),
+                   "steamAccountBalance": WALLET_CENTS[0], "providerpaymentmethod": 0 if t["method"] == "steamaccount" else 2,
+                   "requirecvv": t["method"] == "visa"})
+    if path == "checkout/canceltransaction/":
+        TRANS.pop(form.get("transid"), None)
+        return js({"success": 1})
+    if path == "checkout/finalizetransaction/":
+        t = TRANS.get(form.get("transid"))
+        if not t:
+            return js({"success": 2, "purchaseresultdetail": 7})
+        if t["method"] == "steamaccount" and t["total"] > WALLET_CENTS[0]:
+            return js({"success": 2, "purchaseresultdetail": 2})
+        if t["method"] == "visa" and form.get("CardCVV2") != FAKE_CVV:
+            return js({"success": 2, "purchaseresultdetail": 11})
+        t["final"] = True
+        return js({"success": 22, "purchaseresultdetail": 0, "bShowBRSpecificCreditCardError": False})
+    if path == "checkout/transactionstatus/":
+        t = TRANS.get(q.get("transid"))
+        if not t or not t["final"]:
+            return js({"success": 2, "purchaseresultdetail": 7})
+        t["polls"] += 1
+        if t["method"] == "visa" and t["polls"] <= 3:
+            # El banco pide verificar (3D Secure): tres sondeos «esperando al banco»
+            return js({"success": 22, "purchaseresultdetail": 86,
+                       "authenticationdetails": {"threed_secure_step": 2, "issuer_url": "https://banco.example/acs", "md": "x", "pa_request": "y", "term_url": "z"}})
+        if t["method"] == "steamaccount":
+            WALLET_CENTS[0] -= t["total"]
+        for l in CART:
+            it = real_item("bundleid" if "bundleid" in l else "packageid", l.get("bundleid") or l.get("packageid"))
+            for a in it.get("included_appids", [])[:1]:
+                if not any(x[0] == a for x in OWNED):
+                    OWNED.insert(0, (a, it.get("name", "Juego"), 0, 0))
+        CART.clear()
+        c = t["total"]
+        return js({"success": 1, "purchaseresultdetail": 0, "purchasereceipt": {
+            "paymentmethod": 11 if t["method"] == "steamaccount" else 2, "purchasestatus": 1, "resultdetail": 0,
+            "formattedTotal": "%d,%02d€" % (c // 100, c % 100), "transactionid": q.get("transid")}})
     return None
 
 
@@ -252,6 +355,18 @@ class Relay(BaseHTTPRequestHandler):
         url = "https://%s/%s" % (host, rest)
         path, _, query = rest.partition("?")
         q = dict(urllib.parse.parse_qsl(query))
+        if FAKE and host == "checkout.steampowered.com" and path.startswith("checkout/"):
+            r = fake_checkout(method, path, q, self.body, self.headers)
+            if r is not None:
+                st, ct, body = r
+                body = body.encode()
+                self.send_response(st)
+                self.send_header("Content-Type", ct)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                sys.stderr.write("FAKE %s %s -> %d\n" % (method, path, st))
+                return
         fake, extra = None, []
         if FAKE and method == "POST":
             fake = fake_post(host, path, self.body)

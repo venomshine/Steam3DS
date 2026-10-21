@@ -1,0 +1,76 @@
+# Fase 4b: pagar el carrito con la cartera y con la tarjeta guardada (CVV + banco)
+# Relé con RELAY_FAKE_LOGIN=1 y SWKBD_FILE con «123» (el CVV de la tarjeta simulada)
+wait 800
+press R
+wait 360
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+press DOWN
+wait 250
+press A
+wait 450
+touch 160 89
+wait 60
+press A
+wait 120
+press START
+wait 30
+press DOWN
+press DOWN
+press DOWN
+press A
+wait 300
+press X
+wait 200
+shot q01_elegir
+touch 160 61
+wait 200
+shot q02_resumen_cartera
+hold A
+wait 50
+shot q03_manteniendo
+wait 50
+release A
+wait 30
+shot q04_pagando
+wait 300
+shot q05_hecho
+press B
+wait 60
+press DOWN
+wait 250
+press A
+wait 450
+touch 160 89
+wait 60
+press A
+wait 120
+press START
+wait 30
+press DOWN
+press DOWN
+press DOWN
+press A
+wait 300
+press X
+wait 200
+touch 160 101
+wait 200
+shot q06_resumen_tarjeta
+touch 160 90
+wait 120
+shot q07_cvv_escrito
+hold A
+wait 100
+release A
+wait 150
+shot q08_banco
+wait 900
+shot q09_hecho_tarjeta
+press A
+wait 300
+shot q10_biblioteca
+quit

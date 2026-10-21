@@ -12,6 +12,7 @@
 #include "i18n.h"
 #include "img.h"
 #include "net.h"
+#include "pay.h"
 #include "shop.h"
 #include "steam.h"
 #include "ui.h"
@@ -20,7 +21,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 enum { TAB_LIBRARY = TAB_COUNT, TAB_WISHLIST, TAB_CART, TAB_ALL };
@@ -118,10 +119,16 @@ static struct {
 	int pick_sel;
 	bool cart_qr;                // carrito: QR para pagarlo en el móvil
 	u32 cart_seen;               // versión del carrito ya copiada a la lista
+
+	// Pago
+	bool pay_qr;                 // QR para pagarlo en el móvil
+	bool want_cvv;               // abrir el teclado del CVV (fuera del frame)
+	float pay_hold;              // A mantenido para confirmar (0..1)
+	bool pay_armed;              // hay que soltar A antes de poder mantenerlo
 } S;
 
 enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
-	BT_PLIB, BT_PWISH, BT_PLOGOUT };
+	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO };
 
 // Pestañas de la tienda
 #define HOME_PARTS 4
@@ -390,6 +397,8 @@ static void account_lists_clear(void)
 		memset(t, 0, sizeof *t);
 	}
 }
+
+static void open_pay(void);
 
 // El carrito vive en shop.c; la pestaña lo copia como lista cuando cambia
 static void cart_sync(void)
@@ -2464,7 +2473,7 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 			if (shop_busy()) toast(_("Un momento, estoy con lo anterior"));
 			else shop_cart_remove(sel);
 		}
-		if ((kd & KEY_X) && c->n) S.cart_qr = true;
+		if ((kd & KEY_X) && c->n) open_pay();
 	}
 	if (S.tab >= TAB_COUNT) {
 		static const int ids[] = {BT_BACKBAR};
@@ -2571,6 +2580,335 @@ static void game_set_sec(int sec)
 	S.show_qr = false;
 }
 
+// ============================================================================
+// Pago desde la consola: solo con lo que ya tienes en Steam (cartera o tarjeta guardada)
+
+static const Box B_PAYW = {12, 44, 296, 34};
+static const Box B_PAYC = {12, 84, 296, 34};
+static const Box B_PAYQ = {12, 124, 296, 28};
+static const Box B_CVV = {12, 76, 296, 28};
+static const Box B_PAYGO = {12, 150, 296, 34};
+#define PAY_HOLD_S 1.4f
+
+static void open_pay(void)
+{
+	S.pay_qr = false;
+	S.pay_hold = 0;
+	S.pay_armed = false;
+	S.cart_qr = false;
+	pay_open();
+	go_scene(SC_PAY, 1);
+}
+
+static void close_pay(void)
+{
+	if (pay_busy()) return;
+	pay_close();
+	S.tab = TAB_CART;
+	go_scene(SC_STORE, -1);
+	shop_cart_load();
+}
+
+static const char *card_name(const char *type)
+{
+	static const struct { const char *k, *n; } names[] = {
+		{"visa", "Visa"}, {"mastercard", "Mastercard"}, {"amex", "American Express"}, {"discover", "Discover"},
+		{"jcb", "JCB"}, {"cartebleue", "Carte Bleue"}, {"dankort", "Dankort"}, {"mir", "MIR"},
+	};
+	for (size_t i = 0; i < sizeof names / sizeof *names; i++)
+		if (!strcmp(type, names[i].k)) return names[i].n;
+	return _("Tarjeta");
+}
+
+// Por qué no se pudo pagar, en palabras normales (EPurchaseResultDetail)
+static const char *pay_err_text(const PayInfo *p)
+{
+	if (p->maybe_paid) return _("No se pudo comprobar si se cobró. Mira tu correo o el historial de compras de Steam antes de volver a intentarlo.");
+	switch (p->detail) {
+	case 2: return _("No hay saldo suficiente.");
+	case 4: case 34: return _("La compra tardó demasiado y Steam la canceló. No se cobró nada.");
+	case 6: case 16: case 49: return _("Steam no acepta este método para esta compra. Prueba con otro o paga en el móvil.");
+	case 8: case 45: case 52: return _("Tienes otra compra a medias en Steam. Termínala o cancélala en el móvil y vuelve a probar.");
+	case 9: return _("Ya tienes algo de lo que hay en el carrito. Quítalo y vuelve a probar.");
+	case 11: return _("El banco o Steam rechazaron el pago por seguridad. Prueba en el móvil o habla con tu banco.");
+	case 13: case 19: case 23: return _("Algo del carrito no se puede comprar en tu país.");
+	case 24: return _("Para algo del carrito necesitas el juego base.");
+	case 33: return _("La tarjeta guardada está caducada. Cámbiala en la app de Steam.");
+	case 47: return _("Hay cosas repetidas en el carrito (un pack incluye otro). Quita una.");
+	case 53: return _("Demasiados intentos. Espera unos minutos.");
+	case 82: return _("Este método de pago no funciona ahora mismo. Prueba más tarde.");
+	}
+	if (!strcmp(p->err, "sin cookies del checkout")) return _("La sesión web no está lista. Cierra sesión y vuelve a entrar.");
+	if (!strcmp(p->err, "pagina de pago no reconocida")) return _("Steam no abrió la página de pago. Vuelve a iniciar sesión o paga en el móvil.");
+	if (!strcmp(p->err, "verificacion rechazada")) return _("El banco no verificó la compra. No se cobró nada.");
+	if (p->err[0] && strncmp(p->err, "HTTP", 4) && strncmp(p->err, "curl", 4)) return _("Steam no aceptó el pago.");
+	if (p->err[0]) return _("No hay conexión con Steam. No se cobró nada.");
+	return _("Steam no aceptó el pago.");
+}
+
+static void pay_events(void)
+{
+	static PayState last;
+	const PayInfo *p = pay_info();
+	if (p->state == last) return;
+	if (p->state == PAY_DONE) {
+		// Lo comprado ya es tuyo y el carrito se vació
+		library_changed();
+		shop_cart_load();
+	}
+	if (p->state == PAY_REVIEW) {
+		S.pay_hold = 0;
+		S.pay_armed = false;
+	}
+	last = p->state;
+}
+
+static void open_cvv_keyboard(void)
+{
+	SwkbdState kb;
+	char buf[8] = "";
+	swkbdInit(&kb, SWKBD_TYPE_NUMPAD, 2, 4);
+	swkbdSetHintText(&kb, _("CVV (3 o 4 números, detrás de la tarjeta)"));
+	swkbdSetPasswordMode(&kb, SWKBD_PASSWORD_HIDE_DELAY);
+	swkbdSetButton(&kb, SWKBD_BUTTON_LEFT, _("Cancelar"), false);
+	swkbdSetButton(&kb, SWKBD_BUTTON_RIGHT, _("Aceptar"), true);
+	swkbdSetFeatures(&kb, SWKBD_DARKEN_TOP_SCREEN | SWKBD_ALLOW_HOME | SWKBD_ALLOW_RESET | SWKBD_ALLOW_POWER);
+	swkbdSetValidation(&kb, SWKBD_FIXEDLEN, 0, 0);
+	swkbdSetValidation(&kb, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
+	if (swkbdInputText(&kb, buf, sizeof buf) == SWKBD_BUTTON_RIGHT) {
+		pay_set_cvv(buf);
+		if (!pay_info()->cvv_set) toast(_("El CVV son 3 o 4 números"));
+	}
+	memset(buf, 0, sizeof buf);
+	memset(&kb, 0, sizeof kb);
+}
+
+static void draw_pay_top(void)
+{
+	const PayInfo *p = pay_info();
+	if (S.pay_qr) {
+		ui_qr("https://store.steampowered.com/cart/", 20, 34, 170);
+		ui_text(206, 50, _("Pagar en el móvil"), SZ_LARGE, COL_WHITE, AL_LEFT, 180);
+		ui_text_wrap(206, 74, 180, _("Escanea el código: se abre tu carrito de Steam, el mismo de aquí, y lo pagas desde ahí."), SZ_SMALL, COL_TXT, 6, 14);
+		ui_text(TOP_W / 2, SCR_H - 18, _("B para volver"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+		return;
+	}
+	if (p->state == PAY_BANK) {
+		ui_qr(p->bank_url, 20, 34, 170);
+		ui_text(206, 40, _("Tu banco quiere verificar"), SZ_LARGE, COL_WHITE, AL_LEFT, 182);
+		ui_text_wrap(206, 64, 182, _("Escanea el código con el móvil y confirma la compra como te pida el banco. Esta pantalla seguirá sola cuando esté hecho."), SZ_SMALL, COL_TXT, 7, 14);
+		ui_text_wrap(206, 170, 182, _("Si no la verificas, no se cobra nada."), SZ_SMALL, COL_DIM, 2, 14);
+		return;
+	}
+	if (p->state == PAY_DONE) {
+		float a = ease_out_back(clampf((osGetTime() - p->since) / 450.0f, 0, 1));
+		float cx = TOP_W / 2, cy = 82;
+		ui_circle(cx, cy, 30 * a, C2D_Color32(0x5c, 0x7e, 0x10, 0xff));
+		// La marca se traza sola: primero el trazo corto y luego el largo
+		float k = clampf((osGetTime() - p->since - 200) / 350.0f, 0, 1);
+		float k1 = clampf(k / 0.35f, 0, 1), k2 = clampf((k - 0.35f) / 0.65f, 0, 1);
+		float ax = cx - 13, ay = cy + 1, bx = cx - 4, by = cy + 10, ex = cx + 14, ey = cy - 9;
+		if (k1 > 0) C2D_DrawLine(ax, ay, COL_WHITE, ax + (bx - ax) * k1, ay + (by - ay) * k1, COL_WHITE, 5, 0.5f);
+		if (k2 > 0) C2D_DrawLine(bx, by, COL_WHITE, bx + (ex - bx) * k2, by + (ey - by) * k2, COL_WHITE, 5, 0.5f);
+		const char *t = p->approval ? _("Compra enviada para aprobar") : p->pending ? _("Compra en camino") : _("¡Compra hecha!");
+		ui_text(cx, 124, t, SZ_TITLE, COL_WHITE, AL_CENTER, 380);
+		char l[96];
+		snprintf(l, sizeof l, _("Total: %s"), p->receipt_total);
+		ui_text(cx, 152, l, SZ_BODY, COL_LIME, AL_CENTER, 380);
+		if (p->receipt_id[0]) {
+			snprintf(l, sizeof l, _("Código de compra: %s"), p->receipt_id);
+			ui_text(cx, 172, l, SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		}
+		ui_text(cx, 192, p->approval ? _("Quien gestiona tu familia tiene que aprobarla en Steam.")
+			: p->pending ? _("Steam la está terminando: te llegará el recibo por correo.")
+			: _("Ya está en tu biblioteca. El recibo te llega por correo."), SZ_SMALL, COL_TXT, AL_CENTER, 380);
+		return;
+	}
+	// Resumen del carrito
+	const CartInfo *c = shop_cart();
+	ui_icon(IC_CART, 14, 26, 14, COL_ACC);
+	ui_text(36, 25, _("Pagar tu carrito"), SZ_LARGE, COL_WHITE, AL_LEFT, 300);
+	float y = 50;
+	for (int i = 0; i < c->n && i < 7; i++, y += 19) {
+		ui_text(16, y, c->line[i].name, SZ_SMALL, COL_TXT, AL_LEFT, 290);
+		ui_text(TOP_W - 16, y, c->line[i].price, SZ_SMALL, COL_TXT, AL_RIGHT, 0);
+		ui_hline(16, y + 16, TOP_W - 32, COL_LINE);
+	}
+	if (c->n > 7) {
+		char more[48];
+		snprintf(more, sizeof more, _("y %d más"), c->n - 7);
+		ui_text(16, y, more, SZ_SMALL, COL_DIM, AL_LEFT, 0);
+		y += 19;
+	}
+	const char *tot = p->total_fmt[0] ? p->total_fmt : c->subtotal;
+	ui_text(16, y + 6, _("Total"), SZ_BODY, COL_WHITE, AL_LEFT, 0);
+	ui_text(TOP_W - 16, y + 4, tot, SZ_LARGE, COL_LIME, AL_RIGHT, 0);
+	if (p->state == PAY_REVIEW)
+		ui_text_wrap(16, SCR_H - 52, TOP_W - 32, _("Al pagar aceptas el Acuerdo de Suscriptor de Steam. Al ser contenido digital, la descarga puede empezar ya y renuncias al desistimiento de 14 días de la UE; el reembolso de Steam sigue valiendo (14 días y menos de 2 h jugadas)."),
+			SZ_TINY, COL_DIM, 3, 11);
+	else
+		ui_text(TOP_W / 2, SCR_H - 18, _("Los métodos de pago solo se cambian en la app de Steam"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+}
+
+static void draw_pay_bottom(void)
+{
+	const PayInfo *p = pay_info();
+	ui_rect(0, 0, BOT_W, SCR_H, COL_BG);
+	ui_rect(0, 0, BOT_W, LIST_Y, COL_BAR);
+	ui_text(12, 5, _("Pagar"), SZ_SMALL, COL_WHITE, AL_LEFT, 200);
+	ui_rect(0, LIST_Y - 1, BOT_W, 1, COL_LINE);
+	char t[128];
+	switch (p->state) {
+	case PAY_LOADING:
+	case PAY_PREPARING:
+		ui_spinner(BOT_W / 2, 100, 9, COL_ACC);
+		ui_text(BOT_W / 2, 124, p->state == PAY_LOADING ? _("Abriendo el pago de Steam…") : _("Steam está calculando el total…"), SZ_BODY, COL_TXT, AL_CENTER, 300);
+		break;
+	case PAY_CHOOSE: {
+		ui_text(BOT_W / 2, 28, _("¿Cómo quieres pagar?"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+		bool pw = S.pressed == BT_PAYW, pc = S.pressed == BT_PAYC;
+		draw_button(&B_PAYW, IC_COIN, _("Cartera de Steam"), C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), COL_WHITE, p->wallet ? 1 : 0.4f, pw);
+		snprintf(t, sizeof t, _("Saldo: %s"), p->wallet_fmt[0] ? p->wallet_fmt : "–");
+		ui_text(B_PAYW.x + B_PAYW.w - 10, B_PAYW.y + 10, t, SZ_SMALL, col_alpha(COL_WHITE, p->wallet ? 1 : 0.5f), AL_RIGHT, 0);
+		if (p->card && p->card_last4[0]) snprintf(t, sizeof t, _("%s terminada en %s"), card_name(p->card_type), p->card_last4);
+		else if (p->card) snprintf(t, sizeof t, "%s", card_name(p->card_type));
+		else snprintf(t, sizeof t, "%s", _("Sin tarjeta guardada"));
+		draw_button(&B_PAYC, IC_CARD, t, C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, p->card ? 1 : 0.4f, pc);
+		draw_button(&B_PAYQ, IC_PHONE, _("Pagar en el móvil (QR)"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PAYQ);
+		ui_text_wrap(16, 160, BOT_W - 32, _("Solo se usa lo que ya tienes en Steam. Para añadir o cambiar una tarjeta, usa la app oficial."), SZ_TINY, COL_DIM, 3, 11);
+		break;
+	}
+	case PAY_REVIEW: {
+		if (p->method == PM_WALLET) snprintf(t, sizeof t, _("Con tu cartera · saldo %s"), p->wallet_fmt);
+		else snprintf(t, sizeof t, _("%s terminada en %s"), card_name(p->card_type), p->card_last4);
+		ui_text(BOT_W / 2, 30, t, SZ_SMALL, COL_DIM, AL_CENTER, 300);
+		ui_text(BOT_W / 2, 46, p->total_fmt, SZ_TITLE, COL_WHITE, AL_CENTER, 300);
+		if (p->short_wallet) {
+			ui_text_wrap(20, 92, BOT_W - 40, _("Tu saldo no llega para este total. Vuelve con B y elige la tarjeta, o paga en el móvil."), SZ_SMALL, C2D_Color32(0xff, 0x8a, 0x7a, 0xff), 3, 14);
+			break;
+		}
+		if (p->need_cvv) {
+			snprintf(t, sizeof t, "%s", p->cvv_set ? _("CVV escrito · toca para cambiarlo") : _("Steam pide el CVV · toca para escribirlo"));
+			draw_button(&B_CVV, IC_LOCK, t, COL_BTN2, COL_BTN2, p->cvv_set ? COL_LIME : COL_ACC, 1, S.pressed == BT_CVV);
+		}
+		bool ready = !p->need_cvv || p->cvv_set;
+		// El botón se llena mientras mantienes A (o el dedo): así no se paga por un toque sin querer
+		float f = clampf(S.pay_hold, 0, 1);
+		const Box *b = &B_PAYGO;
+		ui_rrect(b->x, b->y, b->w, b->h, 5, col_alpha(C2D_Color32(0x3b, 0x55, 0x14, 0xff), ready ? 1 : 0.4f));
+		if (f > 0) ui_rrect(b->x, b->y, b->w * f, b->h, 5, C2D_Color32(0x75, 0xb0, 0x22, 0xff));
+		snprintf(t, sizeof t, _("Mantén A para pagar %s"), p->total_fmt);
+		ui_text(b->x + b->w / 2, b->y + 9, t, SZ_BODY, col_alpha(COL_WHITE, ready ? 1 : 0.5f), AL_CENTER, b->w - 16);
+		break;
+	}
+	case PAY_PAYING:
+		ui_spinner(BOT_W / 2, 96, 9, COL_LIME);
+		ui_text(BOT_W / 2, 120, _("Pagando…"), SZ_LARGE, COL_WHITE, AL_CENTER, 0);
+		ui_text(BOT_W / 2, 144, _("No apagues la consola ni cierres la app"), SZ_SMALL, COL_DIM, AL_CENTER, 300);
+		break;
+	case PAY_BANK: {
+		int secs = (int)((osGetTime() - p->since) / 1000);
+		ui_spinner(BOT_W / 2, 80, 9, COL_ACC);
+		ui_text(BOT_W / 2, 104, _("Esperando a tu banco…"), SZ_LARGE, COL_WHITE, AL_CENTER, 0);
+		snprintf(t, sizeof t, "%d:%02d", secs / 60, secs % 60);
+		ui_text(BOT_W / 2, 128, t, SZ_BODY, COL_DIM, AL_CENTER, 0);
+		ui_text_wrap(20, 152, BOT_W - 40, _("Escanea el QR de arriba con el móvil. No hace falta tocar nada aquí."), SZ_SMALL, COL_TXT, 3, 14);
+		break;
+	}
+	case PAY_DONE:
+		ui_text(BOT_W / 2, 90, _("¡Disfrútalo!"), SZ_LARGE, COL_WHITE, AL_CENTER, 0);
+		break;
+	case PAY_FAILED:
+		ui_icon(IC_CART, BOT_W / 2 - 12, 40, 24, C2D_Color32(0xff, 0x8a, 0x7a, 0xff));
+		ui_text(BOT_W / 2, 74, _("No se pudo pagar"), SZ_LARGE, COL_WHITE, AL_CENTER, 0);
+		ui_text_wrap(20, 98, BOT_W - 40, pay_err_text(p), SZ_SMALL, COL_TXT, 5, 14);
+		if (p->detail || p->err[0]) {
+			snprintf(t, sizeof t, "%d %s", p->detail, p->err);
+			ui_text(BOT_W / 2, 176, t, SZ_TINY, COL_DIM, AL_CENTER, 300);
+		}
+		break;
+	case PAY_NONE:
+		break;
+	}
+	if (S.pay_qr) {
+		static const char *h[] = {"B", "Volver"};
+		draw_hints(h, 1);
+	} else if (p->state == PAY_DONE) {
+		static const char *h[] = {"A", "Biblioteca", "B", "Tienda"};
+		draw_hints(h, 2);
+	} else if (p->state == PAY_FAILED && !p->maybe_paid) {
+		static const char *h[] = {"A", "Reintentar", "X", "Pagar en el móvil", "B", "Volver"};
+		draw_hints(h, 3);
+	} else if (!pay_busy() && p->state != PAY_LOADING && p->state != PAY_PREPARING) {
+		static const char *h[] = {"B", "Volver"};
+		draw_hints(h, 1);
+	}
+}
+
+static void input_pay(u32 kd, u32 kh, u32 ku, touchPosition *tp, float dt)
+{
+	const PayInfo *p = pay_info();
+	if (S.pay_qr) {
+		if (kd & (KEY_B | KEY_X)) S.pay_qr = false;
+		return;
+	}
+	if (pay_busy()) return;   // ya se mandó: nada de salir a medias
+	if (p->state == PAY_DONE) {
+		if (kd & KEY_A) {
+			pay_close();
+			S.prev_tab = TAB_HOME;
+			open_account_list(TAB_LIBRARY);
+		} else if (kd & KEY_B) {
+			pay_close();
+			S.tab = S.prev_tab < TAB_COUNT ? S.prev_tab : TAB_HOME;
+			go_scene(SC_STORE, -1);
+		}
+		return;
+	}
+	if (kd & KEY_B) {
+		// En el resumen, B vuelve a elegir método (y Steam olvida la compra preparada)
+		if (p->state == PAY_REVIEW) { pay_close(); pay_open(); }
+		else close_pay();
+		return;
+	}
+	if (p->state == PAY_FAILED) {
+		if ((kd & KEY_A) && !p->maybe_paid) pay_open();
+		if (kd & KEY_X) S.pay_qr = true;
+		return;
+	}
+	if (p->state == PAY_CHOOSE) {
+		static const int ids[] = {BT_PAYW, BT_PAYC, BT_PAYQ};
+		int b = press_update(kd, kh, ku, tp, ids, 3);
+		if (b == BT_PAYW) { if (p->wallet) pay_choose(PM_WALLET); else toast(_("No tienes saldo en la cartera")); }
+		if (b == BT_PAYC) { if (p->card) pay_choose(PM_CARD); else toast(_("Guarda una tarjeta desde la app de Steam")); }
+		if (b == BT_PAYQ || (kd & KEY_X)) S.pay_qr = true;
+		return;
+	}
+	if (p->state == PAY_REVIEW && !p->short_wallet) {
+		if (p->need_cvv) {
+			static const int ids[] = {BT_CVV};
+			if (press_update(kd, kh, ku, tp, ids, 1) == BT_CVV || (kd & KEY_Y)) S.want_cvv = true;
+		}
+		bool ready = !p->need_cvv || p->cvv_set;
+		// Hay que soltar A una vez dentro del resumen (el A que te trajo aquí no cuenta)
+		if (!(kh & KEY_A) && !(kh & KEY_TOUCH)) S.pay_armed = true;
+		bool holding = S.pay_armed && ((kh & KEY_A) || ((kh & KEY_TOUCH) && hit(&B_PAYGO, tp->px, tp->py)));
+		if (holding && !ready) {
+			if (kd & (KEY_A | KEY_TOUCH)) toast(_("Primero escribe el CVV"));
+			S.pay_hold = 0;
+		} else if (holding) {
+			S.pay_hold += dt / PAY_HOLD_S;
+			if (S.pay_hold >= 1) {
+				S.pay_hold = 0;
+				S.pay_armed = false;
+				pay_confirm();
+			}
+		} else {
+			S.pay_hold = approach(S.pay_hold, 0, 3);
+		}
+	}
+}
+
 static const Box *button_box(int id)
 {
 	switch (id) {
@@ -2587,6 +2925,11 @@ static const Box *button_box(int id)
 	case BT_PLIB: return &B_PLIB;
 	case BT_PWISH: return &B_PWISH;
 	case BT_PLOGOUT: return &B_PLOGOUT;
+	case BT_PAYW: return &B_PAYW;
+	case BT_PAYC: return &B_PAYC;
+	case BT_PAYQ: return &B_PAYQ;
+	case BT_CVV: return &B_CVV;
+	case BT_PAYGO: return &B_PAYGO;
 	}
 	return NULL;
 }
@@ -2956,7 +3299,7 @@ int main(int argc, char **argv)
 			if ((kd & KEY_A) || b == BT_EXIT_YES) S.quit_fade = 0;
 			if ((kd & (KEY_B | KEY_START)) || b == BT_EXIT_NO) S.ask_exit = false;
 			kd = kh = ku = 0;
-		} else if (S.scene != SC_SPLASH) {
+		} else if (S.scene != SC_SPLASH && !pay_busy()) {
 			if (kd & KEY_START) {
 				S.start_hold = 0;
 				S.start_armed = true;
@@ -2991,6 +3334,11 @@ int main(int argc, char **argv)
 			open_keyboard();
 			kd = kh = ku = 0;
 		}
+		if (S.want_cvv) {
+			S.want_cvv = false;
+			open_cvv_keyboard();
+			kd = kh = ku = 0;
+		}
 		switch (S.scene) {
 		case SC_STORE: input_store(kd, kh, ku, &tp); break;
 		case SC_GAME: input_game(kd, kh, ku, &tp); break;
@@ -2998,6 +3346,7 @@ int main(int argc, char **argv)
 		case SC_SPLASH: splash_update(dt, kd); break;
 		case SC_LOGIN: input_login(kd, dt); break;
 		case SC_PROFILE: input_profile(kd, kh, ku, &tp); break;
+		case SC_PAY: input_pay(kd, kh, ku, &tp, dt); break;
 		}
 		auth_update();
 		// Con sesión, la biblioteca y los deseados se cargan en segundo plano (para «ya es tuyo» y
@@ -3014,6 +3363,8 @@ int main(int argc, char **argv)
 		shop_update();
 		cart_sync();
 		shop_events();
+		pay_update();
+		pay_events();
 		// Avisos de la sesión: entró desde la sesión guardada, o Steam ya no la acepta
 		if (auth_info()->state != S.last_auth) {
 			if (auth_info()->state == AUTH_IN && S.scene == SC_GAME) friends_request(S.app);
@@ -3076,11 +3427,12 @@ int main(int argc, char **argv)
 		case SC_SPLASH: draw_splash_top(); break;
 		case SC_LOGIN: draw_login_top(); break;
 		case SC_PROFILE: draw_profile_top(); break;
+		case SC_PAY: draw_pay_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -3096,6 +3448,7 @@ int main(int argc, char **argv)
 		case SC_SPLASH: draw_splash_bottom(); break;
 		case SC_LOGIN: draw_login_bottom(); break;
 		case SC_PROFILE: draw_profile_bottom(); break;
+		case SC_PAY: draw_pay_bottom(); break;
 		}
 		C2D_ViewReset();
 		if (ce < 1) ui_rect(0, 0, BOT_W, SCR_H, col_alpha(COL_BG, (1 - ce) * 0.9f));

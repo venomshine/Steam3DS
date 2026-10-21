@@ -1100,7 +1100,8 @@ static void draw_overlays_bottom(void)
 // ============================================================================
 // Pantalla de carga: la rueda de válvula gira, sale vapor y una barra de carga
 
-enum { SPR_WHEEL, SPR_STEAM, SPR_GLOW };
+enum { SPR_WHEEL, SPR_STEAM, SPR_GLOW, SPR_FLIP };   // SPR_FLIP..+23: flipbook del vapor
+#define FLIP_FRAMES 24
 
 
 
@@ -1111,6 +1112,76 @@ static void draw_sprite(int idx, float cx, float cy, float scale, float angle, f
 	C2D_ImageTint tint;
 	C2D_AlphaImageTint(&tint, clampf(alpha, 0, 1));
 	C2D_DrawImageAtRotated(img, cx, cy, 0.5f, angle, &tint, scale, scale);
+}
+
+// Con tinte: color mezcla el del sprite (blend 0 = tal cual, 1 = todo color) y su alfa multiplica
+static void draw_sprite_ex(int idx, float cx, float cy, float sx, float sy, float angle, u32 color, float blend)
+{
+	if (!sprites || (color >> 24) == 0) return;
+	C2D_Image img = C2D_SpriteSheetGetImage(sprites, idx);
+	C2D_ImageTint tint;
+	C2D_PlainImageTint(&tint, color, blend);
+	C2D_DrawImageAtRotated(img, cx, cy, 0.5f, angle, &tint, sx, sy);
+}
+
+// Número pseudoaleatorio estable por partícula (sin estado: la misma imagen cada frame)
+static float hrand(u32 i, u32 salt)
+{
+	u32 h = i * 2654435761u ^ salt * 2246822519u;
+	h ^= h >> 15;
+	h *= 2246822519u;
+	h ^= h >> 13;
+	return (h & 0xffff) / 65535.0f;
+}
+
+// Una voluta del chorro de vapor en su edad age (s) y vida life
+typedef struct { float x, y, scale, angle, alpha; int frame; float cool, stretch; } Puff;
+
+static bool jet_puff(int j, float since, Puff *o)
+{
+	const float life = 1.9f;
+	if (since < 0) return false;
+	float age = fmodf(since, life);
+	u32 gen = (u32)(since / life);
+	u32 id = j * 131 + gen * 7919;
+	float r1 = hrand(id, 1), r2 = hrand(id, 2), r3 = hrand(id, 3), r4 = hrand(id, 4);
+	float p = age / life;
+	// Sale rápido y frena (rozamiento), con un cono de ±9° y flotación que lo sigue subiendo
+	const float k = 2.4f;
+	float v0 = 230 + 70 * r1;
+	float dist = v0 / k * (1 - expf(-k * age));
+	float ang = (r2 - 0.5f) * 0.32f;
+	float rise = dist + 26 * age * age;
+	// Turbulencia: ondula más cuanto más lejos está de la salida
+	float wob = sinf(age * (2.2f + r3 * 1.6f) + r4 * 6.28f) * 10 * p + (r3 - 0.5f) * 40 * p * p;
+	o->x = sinf(ang) * dist + wob;
+	o->y = -cosf(ang) * rise;
+	o->scale = 0.26f + 1.75f * (1 - expf(-age * 1.5f)) * (0.85f + 0.3f * r4);
+	// Rápido al salir: estirado en la dirección del movimiento; al frenar se redondea
+	float speed = v0 * expf(-k * age);
+	o->stretch = 1 + speed / 260;
+	o->angle = ang + (r1 - 0.5f) * 0.5f * (1 - clampf(speed / 200, 0, 1)) + age * (r2 - 0.5f) * 0.8f;
+	o->frame = (int)(p * (FLIP_FRAMES - 1) + 0.5f);
+	float in = clampf(age / 0.10f, 0, 1);
+	// Por arriba se deshace en jirones: se apaga antes y más deprisa
+	o->alpha = in * powf(1 - p, 1.25f) * (0.75f + 0.25f * r3);
+	o->cool = clampf(p * 1.4f, 0, 1);
+	return true;
+}
+
+static void draw_puff(const Puff *pf, float cx, float cy, float a, bool back)
+{
+	// Recién salido, blanco y brillante; al enfriarse, gris azulado. Las de atrás, más apagadas.
+	u32 hot = C2D_Color32(0xff, 0xff, 0xff, 0xff), cold = C2D_Color32(0xb8, 0xca, 0xdc, 0xff);
+	u32 c = col_lerp(hot, cold, pf->cool);
+	// Lo que está cerca de la válvula recoge su luz azul
+	float near = clampf(1 - hypotf(pf->x, pf->y) / 90, 0, 1);
+	c = col_lerp(c, C2D_Color32(0x9c, 0xd8, 0xff, 0xff), near * 0.45f);
+	if (back) c = col_lerp(c, C2D_Color32(0x6a, 0x82, 0x9a, 0xff), 0.45f);
+	float al = pf->alpha * a * (back ? 0.55f : 0.85f);
+	float st = pf->stretch > 0 ? pf->stretch : 1;
+	draw_sprite_ex(SPR_FLIP + pf->frame, cx + pf->x, cy + pf->y, pf->scale / sqrtf(st), pf->scale * st, pf->angle,
+		col_alpha(c, al), 0.5f + 0.25f * pf->cool);
 }
 
 static bool splash_ready(void)
@@ -1124,37 +1195,64 @@ static void draw_splash_top(void)
 	ui_vgrad(0, 0, TOP_W, SCR_H, C2D_Color32(0x24, 0x3b, 0x50, 0xff), C2D_Color32(0x17, 0x1a, 0x21, 0xff));
 	float cx = TOP_W / 2, cy = 100;
 	float pop = ease_out_back(clampf(t / 0.55f, 0, 1));
-	draw_sprite(SPR_GLOW, cx, cy, (1.7f + 0.08f * sinf(t * 2.4f)) * pop, 0, 0.55f * pop);
+	const float t0 = 0.62f;      // la válvula se abre
+	float flash = t > t0 ? expf(-(t - t0) * 3.0f) : 0;
+	draw_sprite(SPR_GLOW, cx, cy, (1.7f + 0.08f * sinf(t * 2.4f) + 0.5f * flash) * pop, 0, (0.55f + 0.35f * flash) * pop);
+
+	// Neblina muy tenue alrededor: ambiente
+	if (t > t0) {
+		float hz = clampf((t - t0) / 1.2f, 0, 1);
+		for (int i = 0; i < 3; i++) {
+			float a = hz * (0.10f + 0.04f * sinf(t * 0.7f + i * 2));
+			draw_sprite_ex(SPR_STEAM, cx + (i - 1) * 70 + sinf(t * 0.3f + i) * 12, cy + 30 - i * 18, 2.6f, 1.6f, t * 0.05f * (i - 1),
+				C2D_Color32(0xc0, 0xd4, 0xe8, (u8)(255 * a)), 0.6f);
+		}
+	}
+	// Capa de atrás del chorro (por detrás de la válvula): da profundidad
+	const int JET = 34;
+	const float every = 1.9f / JET;
+	float ramp = clampf((t - t0) / 0.35f, 0, 1);
+	for (int j = 0; j < JET; j += 2) {
+		Puff pf;
+		if (jet_puff(j, t - t0 - 0.08f - j * every, &pf)) draw_puff(&pf, cx, cy - 4, ramp, true);
+	}
+
 	// Como una válvula que se abre: arranca despacio y coge velocidad
 	float spin = t < 0.8f ? 0.9f * t * t : 0.576f + 1.44f * (t - 0.8f);
 	draw_sprite(SPR_WHEEL, cx, cy, 0.62f * pop, spin, pop);
-	// Vapor: al abrirse la válvula sale una bocanada hacia los lados y luego un chorro
-	// que sube desde el centro, se ensancha y se deshace. Cada partícula sale de su
-	// índice (sin estado): misma imagen en cada frame, sin coste de memoria.
-	const float t0 = 0.6f;
+
 	if (t > t0) {
-		for (int i = 0; i < 10; i++) {
-			float age = t - t0 - i * 0.012f;
-			if (age < 0 || age > 1.1f) continue;
-			float p = age / 1.1f, ang = i * 0.628f + 0.3f;
-			float dist = 16 + 70 * (1 - (1 - p) * (1 - p));
-			float a = (p < 0.1f ? p / 0.1f : powf(1 - p, 1.6f)) * 0.42f;
-			draw_sprite(SPR_STEAM, cx + cosf(ang) * dist, cy + sinf(ang) * dist * 0.8f - p * 20, 0.35f + p * 1.3f, ang + age, a);
+		// Bocanada al abrirse: volutas hacia los lados que frenan y se deshacen
+		for (int i = 0; i < 12; i++) {
+			float age = t - t0 - i * 0.015f;
+			const float life = 1.4f;
+			if (age < 0 || age > life) continue;
+			float p = age / life, ang = i * 0.5236f + hrand(i, 9) * 0.4f;
+			float dist = 18 + 95 * (1 - expf(-age * 3.2f));
+			Puff pf = {
+				cosf(ang) * dist, sinf(ang) * dist * 0.75f - 30 * age * age,
+				0.3f + 1.3f * (1 - expf(-age * 2.0f)), hrand(i, 5) * 6.28f + age * 0.6f,
+				clampf(age / 0.06f, 0, 1) * powf(1 - p, 1.3f),
+				(int)(p * (FLIP_FRAMES - 1)), clampf(p * 1.6f, 0, 1),
+			};
+			draw_puff(&pf, cx, cy, 0.8f, false);
 		}
-		const int N = 36;
-		const float every = 0.05f, life = N * every;
-		for (int j = 0; j < N; j++) {
-			float since = t - t0 - j * every;
+		// Capa de delante del chorro
+		for (int j = 1; j < JET; j += 2) {
+			Puff pf;
+			if (jet_puff(j, t - t0 - 0.08f - j * every, &pf)) draw_puff(&pf, cx, cy - 4, ramp, false);
+		}
+		// Núcleo: vapor caliente que sale a toda velocidad, estirado por el movimiento
+		for (int i = 0; i < 10; i++) {
+			const float life = 0.32f;
+			float since = t - t0 - 0.05f - i * (life / 10);
 			if (since < 0) continue;
-			float age = fmodf(since, life);
-			int gen = (int)(since / life);
-			u32 hsh = (u32)(j * 2654435761u) ^ (u32)(gen * 40503u);
-			float rx = ((hsh & 0xff) / 127.5f) - 1, rs = (((hsh >> 8) & 0xff) / 255.0f);
-			float p = age / life;
-			float y = cy - 6 - p * (165 + 45 * rs);
-			float x = cx + rx * 26 * p + sinf(age * 3 + j) * 9 * p + 18 * p * p;
-			float a = (p < 0.10f ? p / 0.10f : powf(1 - p, 1.3f)) * 0.42f;
-			draw_sprite(SPR_STEAM, x, y, 0.30f + p * (2.8f + rs * 1.0f), j * 1.3f + age * (rx > 0 ? 0.7f : -0.7f), a);
+			float age = fmodf(since, life), p = age / life;
+			u32 id = i + (u32)(since / life) * 17;
+			float x = (hrand(id, 7) - 0.5f) * 6 * p, y = -6 - p * 70;
+			float a = clampf(age / 0.04f, 0, 1) * (1 - p) * 0.55f * ramp;
+			draw_sprite_ex(SPR_STEAM, cx + x, cy + y, 0.22f + p * 0.3f, 0.5f + p * 0.9f, 0,
+				C2D_Color32(0xff, 0xff, 0xff, (u8)(255 * a)), 1.0f);
 		}
 	}
 	float ta = clampf((t - 0.25f) / 0.4f, 0, 1);

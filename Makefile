@@ -97,8 +97,8 @@ endif
 all: $(BUILD)
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
-# Sprites de la pantalla de carga (generados por tools/gen_art.py)
-$(ROMFS)/gfx/sprites.t3x: gfx/sprites.t3s $(wildcard gfx/*.png)
+# Sprites de la pantalla de carga (tools/gen_art.py y el flipbook de vapor de tools/gen_steam.py)
+$(ROMFS)/gfx/sprites.t3x: gfx/sprites.t3s $(wildcard gfx/*.png) $(wildcard gfx/steam/*.png)
 	@mkdir -p $(ROMFS)/gfx
 	@cd gfx && $(DEVKITPRO)/tools/bin/tex3ds -i sprites.t3s -o ../$@
 	@echo built ... $(notdir $@)

@@ -51,16 +51,39 @@ static void copy(char *dst, size_t n, const char *src)
 	snprintf(dst, n, "%s", src ? src : "");
 }
 
+// Espacios raros (sin salto, finos, de ancho cero…) que la fuente de la consola pinta como un
+// cuadrado: los anchos pasan a ser un espacio normal y los invisibles se quitan
+static void tidy_utf8(char *s)
+{
+	unsigned char *r = (unsigned char *)s, *w = (unsigned char *)s;
+	while (*r) {
+		u32 cp = 0;
+		int len = 1;
+		if (r[0] == 0xC2 && r[1]) { cp = 0x80 | (r[1] & 0x3F); len = 2; }
+		else if ((r[0] & 0xF0) == 0xE0 && r[1] && r[2]) { cp = ((r[0] & 0x0F) << 12) | ((r[1] & 0x3F) << 6) | (r[2] & 0x3F); len = 3; }
+		bool space = cp == 0xA0 || (cp >= 0x2000 && cp <= 0x200A) || cp == 0x202F || cp == 0x205F || cp == 0x3000;
+		bool gone = cp == 0xAD || (cp >= 0x200B && cp <= 0x200D) || cp == 0x2060 || cp == 0xFEFF;
+		if (space) { *w++ = ' '; r += len; continue; }
+		if (gone) { r += len; continue; }
+		*w++ = *r++;
+	}
+	*w = 0;
+}
+
 // Recorta en n bytes sin partir un carácter UTF-8
 static void copy_utf8(char *dst, size_t n, const char *src)
 {
 	if (!src) { dst[0] = 0; return; }
 	size_t len = strlen(src);
-	if (len < n) { memcpy(dst, src, len + 1); return; }
-	size_t cut = n - 1;
-	while (cut > 0 && ((unsigned char)src[cut] & 0xC0) == 0x80) cut--;
-	memcpy(dst, src, cut);
-	dst[cut] = 0;
+	if (len < n) {
+		memcpy(dst, src, len + 1);
+	} else {
+		size_t cut = n - 1;
+		while (cut > 0 && ((unsigned char)src[cut] & 0xC0) == 0x80) cut--;
+		memcpy(dst, src, cut);
+		dst[cut] = 0;
+	}
+	tidy_utf8(dst);
 }
 
 static Req *service_call(const char *iface_method, cJSON *input)
@@ -389,7 +412,10 @@ bool steam_parse_appdetails(const char *json, u32 appid, AppInfo *a)
 	if (sd) {
 		size_t n = strlen(sd) + 1;
 		a->desc = malloc(n);
-		if (a->desc) html_to_lines(sd, a->desc, n);
+		if (a->desc) {
+			html_to_lines(sd, a->desc, n);
+			tidy_utf8(a->desc);
+		}
 	}
 	copy(a->header, sizeof a->header, jstr(d, "header_image"));
 	a->is_free = jbool(d, "is_free");

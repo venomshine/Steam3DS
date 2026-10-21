@@ -33,7 +33,8 @@ typedef struct {
 	AppInfo info;
 	Req *req, *sum;
 	bool done, failed;
-	u64 used;
+	char err[112];
+	u64 used, fail_at;
 } InfoEnt;
 
 static struct {
@@ -50,6 +51,7 @@ static struct {
 	// Tienda
 	int tab;
 	RowList offers;
+	u64 offers_fail_at;
 	int sel;
 	float scroll, scroll_target;
 	bool dragging;
@@ -87,6 +89,34 @@ static void toast(const char *msg)
 {
 	snprintf(S.toast, sizeof S.toast, "%s", msg);
 	S.toast_t = 2.5f;
+}
+
+// El error de red en palabras de persona (el código exacto queda en net.log)
+static const char *human_err(const char *err)
+{
+	int code = 0;
+	if (sscanf(err, "curl=%d", &code) == 1) {
+		switch (code) {
+		case 6: return _("No se encuentra el servidor de Steam");
+		case 7: return _("No se pudo conectar con Steam");
+		case 28: return _("Steam tarda demasiado en responder");
+		case 35: case 51: case 58: case 60: case 77: return _("Falló la conexión segura con Steam");
+		case 52: case 55: case 56: return _("Se cortó la conexión");
+		}
+		return _("Error de red");
+	}
+	if (sscanf(err, "HTTP %d", &code) == 1) {
+		if (code == 429) return _("Steam pide esperar un poco");
+		if (code >= 500) return _("Steam no responde bien ahora mismo");
+		return _("Steam respondió con un error");
+	}
+	return _("Steam mandó una respuesta inesperada");
+}
+
+// Segundos de espera antes de reintentar solo
+static int retry_delay(const char *err)
+{
+	return strstr(err, "HTTP 429") ? 30 : 8;
 }
 
 static float approach(float cur, float target, float speed)
@@ -132,7 +162,11 @@ static void info_poll(void)
 		InfoEnt *e = &cache[i];
 		if (e->req && e->req->state >= REQ_DONE) {
 			if (e->req->state == REQ_DONE && steam_parse_appdetails(e->req->data, e->appid, &e->info)) e->done = true;
-			else e->failed = true;
+			else {
+				e->failed = true;
+				e->fail_at = osGetTime();
+				snprintf(e->err, sizeof e->err, "%s", e->req->state == REQ_DONE ? "json" : e->req->err);
+			}
 			net_release(e->req);
 			e->req = NULL;
 		}
@@ -167,6 +201,10 @@ static void list_poll(RowList *l, bool append)
 static void offers_more(void)
 {
 	if (S.offers.req || S.offers.end || !S.ctx_ready) return;
+	if (S.offers.err[0]) {
+		if (osGetTime() - S.offers_fail_at < (u64)retry_delay(S.offers.err) * 1000) return;
+		S.offers.err[0] = 0;
+	}
 	S.offers.req = steam_req_offers(S.offers.count, PAGE);
 }
 
@@ -351,9 +389,13 @@ static void draw_store_top(void)
 	}
 	if (S.offers.count == 0) {
 		if (S.offers.err[0] && !S.offers.req) {
-			ui_text(TOP_W / 2, 100, _("No se pudieron cargar las ofertas"), SZ_LARGE, COL_TXT, AL_CENTER, 0);
-			ui_text(TOP_W / 2, 122, S.offers.err, SZ_SMALL, COL_DIM, AL_CENTER, 380);
-			ui_text(TOP_W / 2, 140, _("Pulsa A para reintentar"), SZ_SMALL, COL_ACC, AL_CENTER, 0);
+			int left = retry_delay(S.offers.err) - (int)((osGetTime() - S.offers_fail_at) / 1000);
+			char t[64];
+			snprintf(t, sizeof t, _("Reintentando en %d s · A para ya"), left < 0 ? 0 : left);
+			ui_text(TOP_W / 2, 92, _("No se pudieron cargar las ofertas"), SZ_LARGE, COL_TXT, AL_CENTER, 0);
+			ui_text(TOP_W / 2, 116, human_err(S.offers.err), SZ_BODY, COL_TXT, AL_CENTER, 380);
+			ui_text(TOP_W / 2, 136, t, SZ_SMALL, COL_ACC, AL_CENTER, 0);
+			ui_text(TOP_W / 2, 200, S.offers.err, SZ_TINY, COL_DIM, AL_CENTER, 380);
 		} else {
 			draw_net_wait(TOP_W / 2, 120, _("Cargando ofertas…"));
 		}
@@ -718,8 +760,13 @@ static void draw_game_top(void)
 	InfoEnt *e = info_get(S.app, false);
 	if (!e || !e->done) {
 		if (e && e->failed) {
-			ui_text(TOP_W / 2, 100, _("No se pudo cargar la ficha"), SZ_LARGE, COL_TXT, AL_CENTER, 0);
-			ui_text(TOP_W / 2, 124, _("Pulsa A para reintentar"), SZ_SMALL, COL_ACC, AL_CENTER, 0);
+			int left = retry_delay(e->err) - (int)((osGetTime() - e->fail_at) / 1000);
+			char t[64];
+			snprintf(t, sizeof t, _("Reintentando en %d s · A para ya"), left < 0 ? 0 : left);
+			ui_text(TOP_W / 2, 92, _("No se pudo cargar la ficha"), SZ_LARGE, COL_TXT, AL_CENTER, 0);
+			ui_text(TOP_W / 2, 116, human_err(e->err), SZ_BODY, COL_TXT, AL_CENTER, 380);
+			ui_text(TOP_W / 2, 136, t, SZ_SMALL, COL_ACC, AL_CENTER, 0);
+			ui_text(TOP_W / 2, 200, e->err, SZ_TINY, COL_DIM, AL_CENTER, 380);
 		} else {
 			draw_net_wait(TOP_W / 2, 120, _("Cargando ficha…"));
 		}
@@ -922,7 +969,7 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	if (key_repeat(kd, kh, KEY_LEFT)) store_select(S.sel - 6);
 	if (kd & KEY_A) {
 		if (S.offers.count) open_game(S.offers.rows[S.sel].appid, false);
-		else if (!S.offers.req) { S.offers.err[0] = 0; S.offers.end = false; offers_more(); }
+		else if (!S.offers.req) { S.offers_fail_at = 0; S.offers.end = false; offers_more(); }
 	}
 touch:
 	if (kd & KEY_TOUCH) {
@@ -1088,7 +1135,22 @@ int main(int argc, char **argv)
 
 		poll_country();
 		list_poll(&S.offers, true);
+		if (S.offers.err[0] && !S.offers.req) {
+			if (!S.offers_fail_at) {
+				S.offers_fail_at = now;
+				S.offers.end = false;
+			} else if (S.offers.count == 0) {
+				offers_more();   // espera sola lo que toque
+			}
+		} else {
+			S.offers_fail_at = 0;
+		}
 		info_poll();
+		for (int i = 0; i < CACHE; i++) {
+			InfoEnt *e = &cache[i];
+			bool shown = e->appid == S.app || (S.offers.count && e->appid == S.offers.rows[S.sel].appid);
+			if (e->failed && shown && now - e->fail_at > (u64)retry_delay(e->err) * 1000) info_retry(e);
+		}
 		img_update();
 
 		if (S.ask_exit) {

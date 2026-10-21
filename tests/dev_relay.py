@@ -22,6 +22,7 @@ import time
 import urllib.parse
 import os
 import sys
+import re
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,7 +30,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = 8099
 ALLOWED = ("store.steampowered.com", "api.steampowered.com", "shared.akamai.steamstatic.com",
            "shared.fastly.steamstatic.com", "cdn.akamai.steamstatic.com", "steamcdn-a.akamaihd.net",
-           "avatars.steamstatic.com", "avatars.akamai.steamstatic.com")
+           "avatars.steamstatic.com", "avatars.akamai.steamstatic.com",
+           "login.steampowered.com", "checkout.steampowered.com", "steamcommunity.com", "help.steampowered.com")
 CACHE = None
 
 
@@ -69,10 +71,10 @@ def b64url(d):
     return base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
 
 
-def fake_jwt(kind):
+def fake_jwt(kind, aud=None):
     now = int(time.time())
     life = 86400 if kind == "access" else 200 * 86400
-    payload = {"iss": "steam", "sub": str(FAKE_ID), "aud": ["web", kind], "exp": now + life,
+    payload = {"iss": "steam", "sub": str(FAKE_ID), "aud": aud or ["web", kind], "exp": now + life,
                "iat": now, "jti": "18E3_0000_FAKE" if kind == "refresh" else "18E3_ACCESS"}
     return "eyJhbGciOiJFZERTQSJ9." + b64url(payload) + ".firma"
 
@@ -85,7 +87,37 @@ OWNED = [(1091500, "Cyberpunk 2077", 6120, 3), (381210, "Dead by Daylight", 2410
 WISH = [2138330, 1174180, 1716740, 668580]
 
 
-def fake_post(path, body):
+def multipart(body):
+    return dict(re.findall(r'name="([^"]+)"\r\n\r\n(.*?)\r\n', body, re.S))
+
+
+WEB_HOSTS = ("store.steampowered.com", "checkout.steampowered.com", "steamcommunity.com", "help.steampowered.com")
+settoken_calls = []
+
+
+def fake_post(host, path, body):
+    """Devuelve (json, cabeceras extra) o None."""
+    if host == "login.steampowered.com" and path == "jwt/finalizelogin":
+        f = multipart(body)
+        if not f.get("nonce", "").startswith("eyJhbGciOiJFZERTQSJ9.") or not f.get("sessionid"):
+            return {"error": 8}, []
+        return {"steamID": str(FAKE_ID), "redir": f.get("redir", ""), "transfer_info": [
+            {"url": "https://%s/login/settoken" % h, "params": {"nonce": "nonce-" + h, "auth": "auth-" + h}}
+            for h in WEB_HOSTS]}, []
+    if path == "login/settoken" and host in WEB_HOSTS:
+        f = multipart(body)
+        if f.get("steamID") != str(FAKE_ID) or f.get("nonce") != "nonce-" + host:
+            return {"result": 8}, []
+        settoken_calls.append(host)
+        aud = {"store.steampowered.com": "web:store", "checkout.steampowered.com": "web:checkout",
+               "steamcommunity.com": "web:community", "help.steampowered.com": "web:help"}[host]
+        cookie = "steamLoginSecure=%d%%7C%%7C%s; Path=/; Secure; HttpOnly; SameSite=None" % (FAKE_ID, fake_jwt("access", [aud]))
+        return {"result": 1}, [("Set-Cookie", cookie)]
+    r = fake_post_api(path, body)
+    return (r, []) if r is not None else None
+
+
+def fake_post_api(path, body):
     form = dict(urllib.parse.parse_qsl(body))
     if path.endswith("PollAuthSessionStatus/v1/"):
         n = polls.get(form.get("client_id"), 0) + 1
@@ -97,7 +129,8 @@ def fake_post(path, body):
         return {"response": {"refresh_token": fake_jwt("refresh"), "access_token": fake_jwt("access"),
                              "had_remote_interaction": True, "account_name": "venomshine_prueba"}}
     if path.endswith("GenerateAccessTokenForApp/v1/"):
-        return {"response": {"access_token": fake_jwt("access")}}
+        # Como el Steam real desde 2025: las sesiones de navegador no pueden (AccessDenied)
+        return {"response": {}}
     if path.endswith("RevokeRefreshToken/v1/"):
         return {"response": {}}
     return None
@@ -143,14 +176,18 @@ class Relay(BaseHTTPRequestHandler):
         url = "https://%s/%s" % (host, rest)
         path, _, query = rest.partition("?")
         q = dict(urllib.parse.parse_qsl(query))
-        fake = None
+        fake, extra = None, []
         if FAKE and method == "POST":
-            fake = fake_post(path, self.body)
+            fake = fake_post(host, path, self.body)
+            if fake is not None:
+                fake, extra = fake
         elif FAKE and q.get("access_token", "").startswith("eyJhbGciOiJFZERTQSJ9."):
             fake = fake_get(path, q)
         if fake is not None:
             body = json.dumps(fake).encode()
             self.send_response(200)
+            for k, v in extra:
+                self.send_header(k, v)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()

@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define API "https://api.steampowered.com/"
+#define LOGIN "https://login.steampowered.com/"
 #define SESSION_FILE APP_DIR "/session.ini"
 
 static AuthInfo A;
@@ -24,6 +25,16 @@ static u64 next_poll;
 
 static Req *begin_req, *poll_req, *refresh_req, *profile_req, *level_req;
 static u64 retry_at;
+
+// Cookies de la web de Steam (steamLoginSecure por dominio). Desde 2025 una sesión de
+// «navegador» no puede pedir tokens nuevos a la API: se renueva como la web, con
+// jwt/finalizelogin, y el token de cada dominio viene dentro de su cookie.
+#define MAX_WEB 6
+typedef struct { char host[40]; char cookie[1100]; } WebCookie;
+static WebCookie web[MAX_WEB];
+static char sessionid[28];
+static Req *xfer_req[MAX_WEB];
+static char xfer_host[MAX_WEB][40];
 
 static void set_state(AuthState s)
 {
@@ -120,6 +131,7 @@ static void session_forget(void)
 	remove(SESSION_FILE);
 	memset(refresh_tok, 0, sizeof refresh_tok);
 	memset(access_tok, 0, sizeof access_tok);
+	memset(web, 0, sizeof web);
 	A.steamid = 0;
 	A.account[0] = A.persona[0] = A.avatar[0] = 0;
 	A.level = 0;
@@ -166,15 +178,86 @@ static void fetch_profile(void)
 	level_req = net_get(url, LANE_API);
 }
 
+static void host_of(const char *url, char *out, size_t sz)
+{
+	const char *h = strstr(url, "://");
+	h = h ? h + 3 : url;
+	size_t n = strcspn(h, "/?");
+	snprintf(out, sz, "%.*s", (int)(n < sz ? n : sz - 1), h);
+}
+
+// Formulario multipart (como lo manda la web de Steam). keys/vals terminan en NULL.
+static char *multipart(const char **keys, const char **vals, char *ctype, size_t ctype_sz)
+{
+	char boundary[40];
+	snprintf(boundary, sizeof boundary, "----Steam3DS%08lx%08lx", (unsigned long)rand(), (unsigned long)svcGetSystemTick());
+	snprintf(ctype, ctype_sz, "Content-Type: multipart/form-data; boundary=%s", boundary);
+	size_t cap = 256;
+	for (int i = 0; keys[i]; i++) cap += strlen(keys[i]) + strlen(vals[i]) + 128;
+	char *b = malloc(cap), *p = b;
+	if (!b) return NULL;
+	for (int i = 0; keys[i]; i++)
+		p += sprintf(p, "--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n", boundary, keys[i], vals[i]);
+	sprintf(p, "--%s--\r\n", boundary);
+	return b;
+}
+
+static void wipe_free(char *s)
+{
+	if (!s) return;
+	memset(s, 0, strlen(s));
+	free(s);
+}
+
 static void start_refresh(void)
 {
-	char *rt = url_escape(refresh_tok);
-	char body[1300];
-	snprintf(body, sizeof body, "refresh_token=%s&steamid=%llu&renewal_type=0", rt, (unsigned long long)A.steamid);
-	free(rt);
+	snprintf(sessionid, sizeof sessionid, "%08lx%08lx%08lx", (unsigned long)rand(), (unsigned long)(svcGetSystemTick() & 0xffffffff), (unsigned long)rand());
+	const char *keys[] = {"nonce", "sessionid", "redir", NULL};
+	const char *vals[] = {refresh_tok, sessionid, "https://steamcommunity.com/login/home/?goto=", NULL};
+	char ctype[96], hdr[200];
+	char *body = multipart(keys, vals, ctype, sizeof ctype);
+	if (!body) return;
+	snprintf(hdr, sizeof hdr, "%s\nOrigin: https://steamcommunity.com\nReferer: https://steamcommunity.com/", ctype);
 	if (refresh_req) net_release(refresh_req);
-	refresh_req = net_post(API "IAuthenticationService/GenerateAccessTokenForApp/v1/", body);
-	netlog("sesion: renovando el token de acceso");
+	refresh_req = net_request(LOGIN "jwt/finalizelogin", body, hdr);
+	wipe_free(body);
+	netlog("sesion: renovando la sesion web");
+}
+
+// Cuando ya volvieron todas las transferencias: el token de la tienda pasa a ser el de la API
+static void transfers_done(u64 now)
+{
+	const char *best = NULL;
+	int got = 0;
+	for (int i = 0; i < MAX_WEB; i++) {
+		if (!web[i].cookie[0]) continue;
+		got++;
+		if (!best || strstr(web[i].host, "store.")) best = web[i].cookie;
+	}
+	const char *jwt = best ? strstr(best, "%7C%7C") : NULL;
+	if (jwt) jwt += 6;
+	else if (best && (jwt = strstr(best, "||"))) jwt += 2;
+	if (jwt && strchr(jwt, '.')) {
+		take_access(jwt);
+		cJSON *p = jwt_payload(jwt);
+		const cJSON *aud = p ? cJSON_GetObjectItemCaseSensitive(p, "aud") : NULL;
+		char auds[64] = "";
+		const cJSON *it;
+		cJSON_ArrayForEach(it, aud) if (cJSON_IsString(it) && strlen(auds) + strlen(it->valuestring) + 2 < sizeof auds) {
+			strcat(auds, it->valuestring);
+			strcat(auds, " ");
+		}
+		cJSON_Delete(p);
+		netlog("sesion: renovada (%d dominios, token: %s)", got, auds);
+		if (A.state != AUTH_IN) {
+			set_state(AUTH_IN);
+			fetch_profile();
+		}
+	} else {
+		netlog("sesion: ningun dominio devolvio la cookie, reintento");
+		retry_at = now + 15000;
+		if (A.state == AUTH_IN) access_got = now;   // el token del QR sigue valiendo un rato
+	}
 }
 
 void auth_init(void)
@@ -197,8 +280,11 @@ void auth_begin_qr(void)
 	client_id[0] = request_id[0] = 0;
 	if (poll_req) net_release(poll_req);
 	poll_req = NULL;
-	char *name = url_escape("Nintendo 3DS (" APP_NAME ")");
-	char body[160];
+	// Para una sesión de navegador, Steam lee este nombre como un User-Agent (ua-parser) en
+	// «Dispositivos autorizados»: así sale «NetFront en Nintendo» y no «navegador desconocido».
+	// NetFront es el motor del navegador de la 3DS.
+	char *name = url_escape("Mozilla/5.0 (Nintendo 3DS; U; ; es) NetFront/4.1 " APP_NAME "/" APP_VERSION);
+	char body[256];
 	snprintf(body, sizeof body, "device_friendly_name=%s&platform_type=2&website_id=Community", name);
 	free(name);
 	begin_req = net_post(API "IAuthenticationService/BeginAuthSessionViaQR/v1/", body);
@@ -246,6 +332,7 @@ static void finish_login(const char *refresh, const char *access, const char *ac
 	set_state(AUTH_IN);
 	netlog("sesion: dentro (steamid termina en %04llu)", (unsigned long long)(A.steamid % 10000));
 	fetch_profile();
+	start_refresh();   // cookies de la web (tienda, pago)
 }
 
 void auth_update(void)
@@ -310,41 +397,78 @@ void auth_update(void)
 		poll_req = NULL;
 	}
 
-	// 3) Token de acceso renovado (al arrancar con sesión guardada, o cuando va a caducar)
+	// 3) Sesión web renovada (al arrancar con sesión guardada, o cuando el token va a caducar)
 	if (refresh_req && refresh_req->state >= REQ_DONE) {
-		cJSON *r = response_of(refresh_req, &root);
-		const char *at = jstr(r, "access_token");
-		if (at) {
-			take_access(at);
-			const char *rt = jstr(r, "refresh_token");
-			if (rt) {
-				snprintf(refresh_tok, sizeof refresh_tok, "%s", rt);
-				session_save();
+		cJSON *r = refresh_req->state == REQ_DONE && refresh_req->data ? cJSON_Parse(refresh_req->data) : NULL;
+		const cJSON *xfers = r ? cJSON_GetObjectItemCaseSensitive(r, "transfer_info") : NULL;
+		const cJSON *error = r ? cJSON_GetObjectItemCaseSensitive(r, "error") : NULL;
+		if (cJSON_IsArray(xfers) && cJSON_GetArraySize(xfers) > 0) {
+			memset(web, 0, sizeof web);
+			int n = 0;
+			const cJSON *x;
+			char sid[24];
+			snprintf(sid, sizeof sid, "%llu", (unsigned long long)A.steamid);
+			cJSON_ArrayForEach(x, xfers) {
+				const char *url = jstr(x, "url");
+				const cJSON *pr = cJSON_GetObjectItemCaseSensitive(x, "params");
+				const char *nonce = jstr(pr, "nonce"), *auth = jstr(pr, "auth");
+				if (!url || !nonce || n >= MAX_WEB || strncmp(url, "https://", 8)) continue;
+				const char *keys[] = {"steamID", "nonce", "auth", NULL};
+				const char *vals[] = {sid, nonce, auth ? auth : "", NULL};
+				if (!auth) keys[2] = NULL;
+				char ctype[96];
+				char *body = multipart(keys, vals, ctype, sizeof ctype);
+				if (!body) continue;
+				host_of(url, xfer_host[n], sizeof xfer_host[n]);
+				xfer_req[n++] = net_request(url, body, ctype);
+				wipe_free(body);
 			}
-			if (A.state != AUTH_IN) {
-				set_state(AUTH_IN);
-				fetch_profile();
-			}
-			netlog("sesion: token renovado");
-		} else if (refresh_req->http == 401 || refresh_req->http == 403 || (refresh_req->state == REQ_DONE && !at)) {
+			if (!n) retry_at = now + 15000;
+		} else if (error || (refresh_req->http >= 400 && refresh_req->http < 500)) {
 			// Steam ya no acepta la sesión (se cerró desde otro sitio o caducó)
-			netlog("sesion: Steam no acepta la sesion guardada (HTTP %ld)", refresh_req->http);
+			netlog("sesion: Steam no acepta la sesion guardada (HTTP %ld, error %d)", refresh_req->http,
+				cJSON_IsNumber(error) ? error->valueint : -1);
 			snprintf(A.err, sizeof A.err, "%s", "expired");
 			session_forget();
 			set_state(AUTH_OUT);
 		} else {
-			// Sin red: se reintenta solo
+			// Sin red o respuesta rara: se reintenta solo
+			netlog("sesion: no se pudo renovar (%s)", refresh_req->err[0] ? refresh_req->err : "json");
 			retry_at = now + 8000;
+			if (A.state == AUTH_IN) access_got = now - (u64)(access_life > 900 ? access_life - 900 : 0) * 1000;
 		}
-		cJSON_Delete(root);
+		cJSON_Delete(r);
 		net_release(refresh_req);
 		refresh_req = NULL;
 	}
-	if (A.state == AUTH_STARTING && !refresh_req && retry_at && now >= retry_at) {
+	bool xfer_busy = false, xfer_any = false;
+	for (int i = 0; i < MAX_WEB; i++) {
+		if (!xfer_req[i]) continue;
+		xfer_any = true;
+		if (xfer_req[i]->state < REQ_DONE) {
+			xfer_busy = true;
+			continue;
+		}
+		if (xfer_req[i]->login_cookie) {
+			memcpy(web[i].host, xfer_host[i], sizeof web[i].host);
+			snprintf(web[i].cookie, sizeof web[i].cookie, "%s", xfer_req[i]->login_cookie);
+		} else {
+			netlog("sesion: %s sin cookie (%s)", xfer_host[i], xfer_req[i]->err[0] ? xfer_req[i]->err : "sin Set-Cookie");
+		}
+	}
+	if (xfer_any && !xfer_busy) {
+		for (int i = 0; i < MAX_WEB; i++) {
+			if (xfer_req[i]) net_release(xfer_req[i]);
+			xfer_req[i] = NULL;
+		}
+		transfers_done(now);
+	}
+	if (!refresh_req && !xfer_any && retry_at && now >= retry_at && (A.state == AUTH_STARTING || A.state == AUTH_IN)) {
 		retry_at = 0;
 		start_refresh();
 	}
-	if (A.state == AUTH_IN && !refresh_req && access_got && now - access_got > (u64)(access_life > 900 ? access_life - 600 : 300) * 1000)
+	if (A.state == AUTH_IN && !refresh_req && !xfer_any && !retry_at && access_got &&
+	    now - access_got > (u64)(access_life > 900 ? access_life - 600 : 300) * 1000)
 		start_refresh();
 
 	// 4) Perfil: nombre, avatar y nivel
@@ -385,6 +509,9 @@ void auth_exit(void)
 	Req **all[] = {&begin_req, &poll_req, &refresh_req, &profile_req, &level_req};
 	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
 		if (*all[i]) net_release(*all[i]);
+	for (int i = 0; i < MAX_WEB; i++)
+		if (xfer_req[i]) net_release(xfer_req[i]);
+	memset(web, 0, sizeof web);
 	memset(refresh_tok, 0, sizeof refresh_tok);
 	memset(access_tok, 0, sizeof access_tok);
 }
@@ -392,3 +519,15 @@ void auth_exit(void)
 bool auth_logged(void) { return A.state == AUTH_IN && access_tok[0]; }
 const AuthInfo *auth_info(void) { return &A; }
 const char *auth_token(void) { return auth_logged() ? access_tok : ""; }
+
+bool auth_web_cookies(const char *host, char *out, size_t sz)
+{
+	if (!auth_logged()) return false;
+	for (int i = 0; i < MAX_WEB; i++) {
+		if (web[i].cookie[0] && !strcmp(web[i].host, host)) {
+			snprintf(out, sz, "Cookie: steamLoginSecure=%s; sessionid=%s", web[i].cookie, sessionid);
+			return true;
+		}
+	}
+	return false;
+}

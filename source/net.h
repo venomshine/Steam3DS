@@ -19,6 +19,7 @@ typedef struct Req {
 	NetLane lane;
 	bool head;              // solo cabeceras (HEAD)
 	char *post;             // cuerpo de un POST (application/x-www-form-urlencoded); nunca va al registro
+	char *headers;          // cabeceras extra, una por línea (cookies de la sesión); nunca van al registro
 	bool jpeg;              // decodificar como JPEG al terminar
 	int jpeg_max_w;         // ancho máximo de la imagen decodificada
 
@@ -30,6 +31,7 @@ typedef struct Req {
 	char *data;             // cuerpo (terminado en '\0')
 	size_t len, cap;
 	char country[4];        // de la cookie steamCountry, si la manda
+	char *login_cookie;     // valor de la cookie steamLoginSecure, si la manda (se borra al soltar)
 
 	u8 *pixels;             // RGBA8 si jpeg
 	int w, h;
@@ -45,6 +47,8 @@ Req *net_get(const char *url, NetLane lane);
 Req *net_get_jpeg(const char *url, int max_w);
 Req *net_head(const char *url);
 Req *net_post(const char *url, const char *body);
+// GET (body NULL) o POST con cabeceras extra separadas por '\n' ("Cookie: …", "Content-Type: …")
+Req *net_request(const char *url, const char *body, const char *headers);
 void net_release(Req *r);
 
 // Estado de la conexión, para mostrar el motivo real en pantalla.

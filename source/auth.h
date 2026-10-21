@@ -34,3 +34,5 @@ void auth_logout(void);
 bool auth_logged(void);
 const AuthInfo *auth_info(void);
 const char *auth_token(void);     // token de acceso para la Web API ("" sin sesión)
+// Cabecera «Cookie: …» de la web de Steam para un dominio (p. ej. checkout.steampowered.com)
+bool auth_web_cookies(const char *host, char *out, size_t sz);

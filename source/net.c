@@ -128,6 +128,14 @@ static void req_free(Req *r)
 		memset(r->post, 0, strlen(r->post));
 		free(r->post);
 	}
+	if (r->headers) {
+		memset(r->headers, 0, strlen(r->headers));
+		free(r->headers);
+	}
+	if (r->login_cookie) {
+		memset(r->login_cookie, 0, strlen(r->login_cookie));
+		free(r->login_cookie);
+	}
 	free(r->data);
 	free(r->pixels);
 	free(r);
@@ -209,6 +217,16 @@ Req *net_post(const char *url, const char *body)
 	return r;
 }
 
+Req *net_request(const char *url, const char *body, const char *headers)
+{
+	Req *r = req_new(url, LANE_API);
+	if (!r) return NULL;
+	if (body) r->post = strdup(body);
+	if (headers) r->headers = strdup(headers);
+	lane_push(&lanes[LANE_API], r);
+	return r;
+}
+
 Req *net_head(const char *url)
 {
 	Req *r = req_new(url, LANE_API);
@@ -248,6 +266,20 @@ static size_t on_header(char *p, size_t sz, size_t n, void *ud)
 			r->country[0] = c[0];
 			r->country[1] = c[1];
 			r->country[2] = 0;
+		}
+	}
+	static const char login[] = "set-cookie: steamLoginSecure=";
+	if (len > sizeof(login) && strncasecmp(p, login, sizeof(login) - 1) == 0) {
+		const char *v = p + sizeof(login) - 1;
+		size_t n = 0;
+		while (n < len - (sizeof(login) - 1) && v[n] != ';' && v[n] != '\r' && v[n] != '\n') n++;
+		// «deleted» es Steam borrándola; solo vale la que trae token
+		if (n > 20) {
+			if (r->login_cookie) {
+				memset(r->login_cookie, 0, strlen(r->login_cookie));
+				free(r->login_cookie);
+			}
+			r->login_cookie = strndup(v, n);
 		}
 	}
 	return len;
@@ -343,6 +375,15 @@ static void run_req(Lane *l, Req *r)
 		curl_easy_setopt(c, CURLOPT_POSTFIELDS, r->post);
 		curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)strlen(r->post));
 	}
+	struct curl_slist *hl = NULL;
+	if (r->headers) {
+		char *copy = strdup(r->headers), *save = NULL;
+		for (char *line = strtok_r(copy, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
+			hl = curl_slist_append(hl, line);
+		memset(copy, 0, strlen(r->headers));
+		free(copy);
+		curl_easy_setopt(c, CURLOPT_HTTPHEADER, hl);
+	}
 
 	u64 t0 = osGetTime();
 	CURLcode rc = curl_easy_perform(c);
@@ -352,6 +393,12 @@ static void run_req(Lane *l, Req *r)
 	curl_easy_getinfo(c, CURLINFO_CONNECT_TIME, &ttcp);
 	curl_easy_getinfo(c, CURLINFO_APPCONNECT_TIME, &ttls);
 	curl_easy_getinfo(c, CURLINFO_STARTTRANSFER_TIME, &tfirst);
+	if (hl) {
+		// curl copia cada línea en su lista: se borran antes de soltarla
+		for (struct curl_slist *i = hl; i; i = i->next) memset(i->data, 0, strlen(i->data));
+		curl_slist_free_all(hl);
+		curl_easy_setopt(c, CURLOPT_HTTPHEADER, NULL);
+	}
 
 	if (rc != CURLE_OK) {
 		snprintf(r->err, sizeof r->err, "curl=%d %s", rc, curl_easy_strerror(rc));

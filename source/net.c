@@ -370,9 +370,36 @@ static bool decode_jpeg(Req *r)
 	}
 	jpeg_finish_decompress(&ci);
 	jpeg_destroy_decompress(&ci);
-	r->pixels = out;
+	// Se reordena aquí, en el hilo de red, al mosaico 8×8 (Morton) BGR que espera la GPU:
+	// así la interfaz solo copia y no pierde un frame cada vez que llega una imagen
+	int tw = 8, th = 8;
+	while (tw < w) tw <<= 1;
+	while (th < h) th <<= 1;
+	if (tw > 1024 || th > 1024) {
+		free(out);
+		return false;
+	}
+	u8 *sw = calloc((size_t)tw * th, 3);
+	if (!sw) {
+		free(out);
+		return false;
+	}
+	for (int y = 0; y < h; y++) {
+		for (int x = 0; x < w; x++) {
+			u32 off = ((((y >> 3) * (tw >> 3) + (x >> 3)) << 6) +
+				((x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) | ((x & 4) << 2) | ((y & 4) << 3))) * 3;
+			const u8 *p = out + ((size_t)y * w + x) * 3;
+			sw[off + 0] = p[2];
+			sw[off + 1] = p[1];
+			sw[off + 2] = p[0];
+		}
+	}
+	free(out);
+	r->pixels = sw;
 	r->w = w;
 	r->h = h;
+	r->tw = tw;
+	r->th = th;
 	return true;
 }
 

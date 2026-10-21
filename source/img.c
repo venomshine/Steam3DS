@@ -36,31 +36,12 @@ void img_exit(void)
 	for (int i = 0; i < SLOTS; i++) slot_clear(&slots[i]);
 }
 
-static int pow2(int v)
+// La imagen llega ya en el orden de la GPU (lo hace el hilo de red): solo se copia
+static bool upload(Slot *s, const u8 *tiled, int w, int h, int tw, int th)
 {
-	int p = 8;
-	while (p < v) p <<= 1;
-	return p;
-}
-
-// RGB → textura RGB8 en el orden en mosaico (8×8, Morton) que espera la GPU
-static bool upload(Slot *s, const u8 *rgb, int w, int h)
-{
-	int tw = pow2(w), th = pow2(h);
-	if (tw > 1024 || th > 1024) return false;
+	if (!tiled || tw > 1024 || th > 1024) return false;
 	if (!C3D_TexInit(&s->tex, tw, th, GPU_RGB8)) return false;
-	u8 *dst = s->tex.data;
-	memset(dst, 0, tw * th * 3);
-	for (int y = 0; y < h; y++) {
-		for (int x = 0; x < w; x++) {
-			u32 off = ((((y >> 3) * (tw >> 3) + (x >> 3)) << 6) +
-				((x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) | ((x & 4) << 2) | ((y & 4) << 3))) * 3;
-			const u8 *p = rgb + (y * w + x) * 3;
-			dst[off + 0] = p[2];
-			dst[off + 1] = p[1];
-			dst[off + 2] = p[0];
-		}
-	}
+	memcpy(s->tex.data, tiled, (size_t)tw * th * 3);
 	C3D_TexFlush(&s->tex);
 	C3D_TexSetFilter(&s->tex, GPU_LINEAR, GPU_LINEAR);
 	s->sub.width = w;
@@ -85,7 +66,7 @@ void img_update(void)
 		Slot *s = &slots[i];
 		if (!s->req) continue;
 		if (s->req->state == REQ_DONE) {
-			if (s->req->pixels && upload(s, s->req->pixels, s->req->w, s->req->h)) s->ready = true;
+			if (s->req->pixels && upload(s, s->req->pixels, s->req->w, s->req->h, s->req->tw, s->req->th)) s->ready = true;
 			else s->failed = true;
 			net_release(s->req);
 			s->req = NULL;

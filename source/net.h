@@ -34,8 +34,9 @@ typedef struct Req {
 	char country[4];        // de la cookie steamCountry, si la manda
 	char *login_cookie;     // valor de la cookie steamLoginSecure, si la manda (se borra al soltar)
 
-	u8 *pixels;             // RGBA8 si jpeg
-	int w, h;
+	u8 *pixels;             // si jpeg: ya en el orden de la GPU (RGB8 en mosaico de tw×th)
+	int w, h;               // tamaño de la imagen
+	int tw, th;             // tamaño de la textura (potencias de 2)
 
 	int refs;
 	struct Req *next;

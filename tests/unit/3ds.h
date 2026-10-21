@@ -1,0 +1,4 @@
+// Sustituto mínimo de <3ds.h> para compilar módulos sin gráficos en el PC
+#pragma once
+#include <stdint.h>
+typedef uint8_t u8; typedef uint16_t u16; typedef uint32_t u32; typedef uint64_t u64; typedef int32_t s32;

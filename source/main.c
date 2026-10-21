@@ -608,7 +608,9 @@ static void game_poll(const AppInfo *a)
 	if (S.sec == SEC_EXTRAS && S.dlc_for != a->appid) {
 		rowlist_free(&S.dlc);
 		S.dlc_for = a->appid;
-		if (a->ndlc) S.dlc.req = steam_req_items(a->dlc, a->ndlc > 50 ? 50 : a->ndlc);
+		// En un DLC, Extras enseña el juego base que hace falta para usarlo
+		if (a->fullgame) S.dlc.req = steam_req_items(&a->fullgame, 1);
+		else if (a->ndlc) S.dlc.req = steam_req_items(a->dlc, a->ndlc > 50 ? 50 : a->ndlc);
 	}
 	if (S.sec == SEC_SIMILAR && S.similar_for != a->appid) {
 		rowlist_free(&S.similar);
@@ -797,6 +799,13 @@ static void draw_game_top(void)
 	case SEC_REQS: draw_reqs_top(a); break;
 	case SEC_REVIEWS: draw_reviews_top(a); break;
 	case SEC_EXTRAS: {
+		if (a->fullgame) {
+			draw_list_top(_("CONTENIDO NECESARIO"), &S.dlc, "");
+			if (S.dlc.count)
+				ui_text_wrap(12, 72, TOP_W - 24, _("Para usar este contenido descargable necesitas tener el juego base en tu biblioteca."),
+					SZ_SMALL, COL_DIM, 3, 14);
+			break;
+		}
 		char t[64];
 		snprintf(t, sizeof t, _("CONTENIDO DESCARGABLE (%d)"), a->ndlc);
 		draw_list_top(t, &S.dlc, _("Este juego no tiene contenido descargable"));

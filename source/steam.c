@@ -413,6 +413,14 @@ bool steam_parse_appdetails(const char *json, u32 appid, AppInfo *a)
 		a->lnx = jbool(pl, "linux");
 	}
 
+	const char *type = jstr(d, "type");
+	a->is_dlc = type && !strcmp(type, "dlc");
+	const cJSON *fg = cJSON_GetObjectItemCaseSensitive(d, "fullgame");
+	if (fg) {
+		a->fullgame = (u32)jnum(fg, "appid", 0);
+		copy_utf8(a->fullgame_name, sizeof a->fullgame_name, jstr(fg, "name"));
+	}
+
 	cJSON_ArrayForEach(c, cJSON_GetObjectItemCaseSensitive(d, "dlc")) {
 		if (a->ndlc < 64 && cJSON_IsNumber(c)) a->dlc[a->ndlc++] = (u32)c->valuedouble;
 	}

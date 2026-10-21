@@ -123,6 +123,10 @@ TR = {
 
     # Extras y similares
     "CONTENIDO DESCARGABLE (%d)": ("DOWNLOADABLE CONTENT (%d)", "ダウンロードコンテンツ (%d)"),
+    "CONTENIDO NECESARIO": ("REQUIRED CONTENT", "必要なコンテンツ"),
+    "Para usar este contenido descargable necesitas tener el juego base en tu biblioteca.": (
+        "To use this downloadable content you need the base game in your library.",
+        "このダウンロードコンテンツを使うには、ライブラリに本編が必要です。"),
     "Este juego no tiene contenido descargable": ("This game has no downloadable content", "このゲームにDLCはありません"),
     "MÁS COMO %s": ("MORE LIKE %s", "%s に似たゲーム"),
     "Steam no tiene juegos parecidos para este": ("Steam has no similar games for this one", "似たゲームは見つかりませんでした"),

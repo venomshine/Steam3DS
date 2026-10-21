@@ -1,0 +1,16 @@
+# Un DLC enseña en Extras el juego base que necesita
+wait 900
+press A
+wait 360
+press R
+press R
+press R
+wait 300
+press A
+wait 400
+press R
+press R
+press R
+wait 300
+shot dlc_extras
+quit

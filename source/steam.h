@@ -86,6 +86,9 @@ typedef struct {
 
 	u32 dlc[64];
 	int ndlc;
+	bool is_dlc;
+	u32 fullgame;               // si es un DLC: el juego base que necesita
+	char fullgame_name[96];
 } AppInfo;
 
 void steam_set_context(const char *lang_steam, const char *country);

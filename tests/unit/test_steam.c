@@ -35,6 +35,12 @@ int main(void) {
 	CHECK(a.ndlc == 3);
 	CHECK(a.nshots > 10);
 	CHECK(a.desc && strstr(a.desc, "Night City"));
+	CHECK(!a.is_dlc && a.fullgame == 0);
+	// Un DLC sabe cuál es su juego base
+	AppInfo dl;
+	CHECK(steam_parse_appdetails(slurp("data/app_2138330.json"), 2138330, &dl));
+	printf("DLC: %s -> necesita %u %s\n", dl.name, dl.fullgame, dl.fullgame_name);
+	CHECK(dl.is_dlc && dl.fullgame == 1091500 && !strcmp(dl.fullgame_name, "Cyberpunk 2077"));
 	// Con país de EE. UU. sale ESRB
 	steam_set_context("english", "US");
 	AppInfo b;

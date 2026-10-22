@@ -302,7 +302,9 @@ static void info_retry(InfoEnt *e)
 static void list_poll(RowList *l, bool append)
 {
 	if (!l->req || l->req->state < REQ_DONE) return;
-	if (l->req->state == REQ_DONE) steam_parse_rows(l->req->data, l, append);
+	if (l->req->state == REQ_DONE) {
+		if (!steam_take_rows(l->req, l, append)) steam_parse_rows(l->req->data, l, append);
+	}
 	else snprintf(l->err, sizeof l->err, "%s", l->req->err);
 	net_release(l->req);
 	l->req = NULL;

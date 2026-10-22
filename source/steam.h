@@ -28,6 +28,7 @@ typedef struct {
 	StoreRow *rows;
 	int count, cap;
 	int total;              // total que dice Steam
+	bool has_total;         // Steam dio el total (si no, total es lo que hay)
 	bool end;
 	Req *req;
 	char err[112];
@@ -121,6 +122,9 @@ Req *steam_req_query(StoreQuery q, int start, int count);
 Req *steam_req_offers(int start, int count);
 Req *steam_req_search(const char *term);
 bool steam_parse_rows(const char *json, RowList *list, bool append);
+// Las búsquedas, Query, GetItems y «más como este» llegan ya leídas del hilo de red:
+// steam_take_rows las une a list; si no se pudieron leer allí, queda steam_parse_rows
+bool steam_take_rows(Req *r, RowList *list, bool append);
 
 // Ficha
 Req *steam_req_appdetails(u32 appid);   // se lee en el hilo de red: recógela con steam_take_appdetails

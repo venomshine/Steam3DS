@@ -140,6 +140,63 @@ static void row_from_item(const cJSON *it, StoreRow *row)
 	}
 }
 
+// Las listas también se leen en el hilo de red: una página de la biblioteca con iconos pesa
+// unos 75 KB y leerla en el hilo de la interfaz era el bajón de imagen al abrir START al empezar
+static bool rows_job(Req *r)
+{
+	RowList *l = r->parse_out;
+	return steam_parse_rows(r->data, l, false);
+}
+
+static void rows_free(void *p)
+{
+	rowlist_free(p);
+	free(p);
+}
+
+bool steam_take_rows(Req *r, RowList *list, bool append)
+{
+	if (!r || !r->parsed || !r->parse_out) return false;
+	RowList *got = r->parse_out;
+	if (!append) list->count = 0;
+	if (list->count + got->count > list->cap) {
+		int cap = list->cap ? list->cap : 32;
+		while (cap < list->count + got->count) cap *= 2;
+		StoreRow *n = realloc(list->rows, cap * sizeof(StoreRow));
+		if (!n) return false;   // se queda en parse_out y la lee steam_parse_rows
+		list->rows = n;
+		list->cap = cap;
+	}
+	if (got->count) memcpy(list->rows + list->count, got->rows, got->count * sizeof(StoreRow));
+	list->count += got->count;
+	list->total = got->has_total ? got->total : list->count;
+	if (got->count == 0 || list->count >= list->total) list->end = true;
+	list->err[0] = 0;
+	rows_free(got);
+	r->parse_out = NULL;
+	return true;
+}
+
+static Req *service_rows(const char *iface_method, cJSON *input)
+{
+	RowList *l = calloc(1, sizeof *l);
+	if (!l) {
+		cJSON_Delete(input);
+		return NULL;
+	}
+	char *js = cJSON_PrintUnformatted(input);
+	char *esc = url_escape(js);
+	size_t n = strlen(esc) + 128;
+	char *url = malloc(n);
+	snprintf(url, n, "https://api.steampowered.com/%s/v1/?input_json=%s", iface_method, esc);
+	Req *r = net_get_parsed(url, LANE_API, rows_job, l, rows_free);
+	free(url);
+	free(esc);
+	free(js);
+	cJSON_Delete(input);
+	return r;
+}
+
 bool steam_parse_rows(const char *json, RowList *list, bool append)
 {
 	cJSON *root = cJSON_Parse(json);
@@ -165,6 +222,7 @@ bool steam_parse_rows(const char *json, RowList *list, bool append)
 		row_from_item(it, &list->rows[list->count++]);
 		added++;
 	}
+	list->has_total = meta != NULL;
 	if (meta) list->total = (int)jnum(meta, "total_matching_records", list->count);
 	else list->total = list->count;
 	if (added == 0 || list->count >= list->total) list->end = true;
@@ -213,7 +271,7 @@ Req *steam_req_query(StoreQuery kind, int start, int count)
 	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
 	cJSON_AddBoolToObject(dr, "include_reviews", true);
 	cJSON_AddBoolToObject(dr, "include_release", true);
-	return service_call("IStoreQueryService/Query", in);
+	return service_rows("IStoreQueryService/Query", in);
 }
 
 Req *steam_req_search(const char *term)
@@ -231,7 +289,7 @@ Req *steam_req_search(const char *term)
 	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
 	cJSON_AddBoolToObject(dr, "include_reviews", true);
 	cJSON_AddBoolToObject(dr, "include_release", true);
-	return service_call("IStoreQueryService/SearchSuggestions", in);
+	return service_rows("IStoreQueryService/SearchSuggestions", in);
 }
 
 Req *steam_req_offers(int start, int count)
@@ -252,7 +310,7 @@ Req *steam_req_items(const u32 *ids, int n, bool assets)
 	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
 	cJSON_AddBoolToObject(dr, "include_reviews", true);
 	if (assets) cJSON_AddBoolToObject(dr, "include_assets", true);
-	return service_call("IStoreBrowseService/GetItems", in);
+	return service_rows("IStoreBrowseService/GetItems", in);
 }
 
 void steam_icon_url(const StoreRow *r, char *out, size_t n)
@@ -270,7 +328,7 @@ Req *steam_req_morelike(u32 appid)
 	cJSON_AddItemToObject(in, "context", context());
 	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
 	cJSON_AddBoolToObject(dr, "include_reviews", true);
-	return service_call("IStoreQueryService/MoreLikeThis", in);
+	return service_rows("IStoreQueryService/MoreLikeThis", in);
 }
 
 Req *steam_req_country(void)

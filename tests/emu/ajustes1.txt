@@ -1,0 +1,31 @@
+# Ronda 1-5: barra superior, vista previa, subcategorías de Inicio y búsqueda en la píldora
+wait 120
+shot k00_cargando
+wait 780
+shot k01_inicio
+press DOWN
+wait 300
+shot k02_inicio_sel
+press RIGHT
+wait 360
+shot k03_novedades
+press RIGHT
+press RIGHT
+wait 360
+shot k04_gratis
+press L
+wait 360
+shot k05_buscar_foco
+press Y
+wait 400
+shot k06_resultados_foco
+press DOWN
+wait 300
+shot k07_resultado_sel
+press UP
+wait 30
+shot k08_vuelta_pildora
+press R
+wait 30
+shot k09_inicio_otra_vez
+quit

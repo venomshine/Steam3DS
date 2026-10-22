@@ -55,6 +55,7 @@ void ui_rect(float x, float y, float w, float h, u32 col);
 void ui_vgrad(float x, float y, float w, float h, u32 top, u32 bottom);
 void ui_rrect(float x, float y, float w, float h, float r, u32 col);
 void ui_hline(float x, float y, float w, u32 col);
+void ui_rrect_bottom(float x, float y, float w, float h, float r, u32 col);
 void ui_circle(float x, float y, float r, u32 col);
 void ui_scissor(gfxScreen_t scr, float x, float y, float w, float h);
 void ui_scissor_off(void);
@@ -72,6 +73,8 @@ void ui_badge_disc(float x, float y, float w, float h, int disc, float sz);
 void ui_price_box(float x, float y, float w, float h, const char *orig, const char *price, float sz_old, float sz_new);
 void ui_spinner(float cx, float cy, float r, u32 col);
 void ui_battery(float x, float y, int pct, bool charging);
+void ui_wifi(float cx, float by, int bars);
+void ui_wheel(float cx, float cy, float r, float angle, u32 col);
 void ui_qr(const char *text, float x, float y, float size);
 
 extern C2D_Font g_font;

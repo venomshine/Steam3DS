@@ -55,6 +55,7 @@ void net_release(Req *r);
 
 // Estado de la conexión, para mostrar el motivo real en pantalla.
 bool net_wifi_ok(void);
+bool net_busy(void);           // hay algo descargándose
 const char *net_status_text(void);
 
 char *url_escape(const char *s);   // malloc

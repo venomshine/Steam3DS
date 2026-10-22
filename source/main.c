@@ -25,7 +25,8 @@
 typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
-enum { TAB_LIBRARY = TAB_COUNT, TAB_WISHLIST, TAB_CART, TAB_ALL };
+// Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
+enum { TAB_LIBRARY = TAB_COUNT, TAB_WISHLIST, TAB_CART, TAB_H0, TAB_ALL = TAB_H0 + 4 };
 enum { SEC_SUMMARY, SEC_REQS, SEC_REVIEWS, SEC_EXTRAS, SEC_SIMILAR, SEC_COUNT };
 
 #define ROW_H      29
@@ -127,6 +128,10 @@ static struct {
 	float pay_hold;              // A mantenido para confirmar (0..1)
 	bool pay_armed;              // hay que soltar A antes de poder mantenerlo
 	int paysel;                  // método elegido con la cruceta
+	int home_sub;                // Inicio: subcategoría (lo más vendido, novedades, próximamente, gratis)
+	float sub_x, sub_anim;       // píldora de la subcategoría y la barra que sale al estar en Inicio
+	bool search_focus;           // Buscar: el foco está en la píldora de búsqueda (no en la lista)
+	float search_x;              // la píldora se estira sobre las pestañas (0..1)
 	int pfocus;                  // botón elegido con la cruceta en el perfil
 } S;
 
@@ -151,7 +156,9 @@ typedef struct {
 	int anim_count;
 } Tab;
 static Tab tabs[TAB_ALL];
-#define CUR (&tabs[S.tab])
+// La pestaña de verdad: en Inicio, la lista de la subcategoría elegida
+static int cur_ti(void);
+#define CUR (&tabs[cur_ti()])
 
 // Amigos y el juego abierto (con sesión)
 static struct {
@@ -299,7 +306,12 @@ static const char *home_title[HOME_PARTS] = {"Lo más vendido", "Novedades popul
 
 static bool tab_paged(int t)
 {
-	return t == TAB_OFFERS || t == TAB_DEMOS || t == TAB_BETAS || t == TAB_WISHLIST;
+	return t == TAB_OFFERS || t == TAB_DEMOS || t == TAB_BETAS || t == TAB_WISHLIST || t >= TAB_H0;
+}
+
+static int cur_ti(void)
+{
+	return S.tab == TAB_HOME ? TAB_H0 + S.home_sub : S.tab;
 }
 
 // Espera lo que toque tras un error antes de volver a pedir
@@ -316,12 +328,11 @@ static void tab_more(int ti)
 	Tab *t = &tabs[ti];
 	if (!S.ctx_ready || t->list.req || !tab_can_retry(t)) return;
 	if (ti == TAB_HOME) {
-		if (t->list.count) return;
-		for (int i = 0; i < HOME_PARTS; i++)
-			if (!t->part[i].req && !t->part[i].count) {
-				t->part[i].err[0] = 0;
-				t->part[i].req = steam_req_query(home_q[i], 0, 10);
-			}
+		tab_more(TAB_H0 + S.home_sub);
+		return;
+	} else if (ti >= TAB_H0) {
+		if (t->list.end) return;
+		t->list.req = steam_req_query(home_q[ti - TAB_H0], t->list.count, PAGE);
 	} else if (ti == TAB_LIBRARY) {
 		if (!auth_logged() || t->list.count) return;
 		t->list.req = steam_req_owned(auth_info()->steamid, auth_token());
@@ -395,7 +406,7 @@ static void wish_poll(Tab *t)
 
 static void account_lists_clear(void)
 {
-	for (int ti = TAB_LIBRARY; ti < TAB_ALL; ti++) {
+	for (int ti = TAB_LIBRARY; ti < TAB_H0; ti++) {
 		Tab *t = &tabs[ti];
 		rowlist_free(&t->list);
 		free(t->wish);
@@ -465,38 +476,6 @@ static void library_changed(void)
 	t->sel = 0;
 }
 
-// Inicio: cuando llegan los cuatro apartados se juntan en una lista con títulos
-static void home_poll(void)
-{
-	Tab *t = &tabs[TAB_HOME];
-	bool busy = false, any = false;
-	for (int i = 0; i < HOME_PARTS; i++) {
-		list_poll(&t->part[i], false);
-		if (t->part[i].req) busy = true;
-		if (t->part[i].count) any = true;
-	}
-	if (busy || t->list.count || !t->started) return;
-	if (!any) {
-		// Todo falló: el error del primero, y se reintenta solo
-		for (int i = 0; i < HOME_PARTS; i++)
-			if (t->part[i].err[0] && !t->list.err[0]) snprintf(t->list.err, sizeof t->list.err, "%s", t->part[i].err);
-		return;
-	}
-	for (int i = 0; i < HOME_PARTS; i++) {
-		if (!t->part[i].count) continue;
-		StoreRow hd = {0};
-		hd.header = true;
-		snprintf(hd.name, sizeof hd.name, "%s", _(home_title[i]));
-		add_row(&t->list, &hd);
-		for (int k = 0; k < t->part[i].count; k++) add_row(&t->list, &t->part[i].rows[k]);
-	}
-	t->list.total = t->list.count;
-	t->list.end = true;
-	t->list.err[0] = 0;
-	t->sel = t->list.count > 1 ? 1 : 0;
-	t->sel_y = t->sel;
-	t->sel_changed = osGetTime();
-}
 
 // Buscar: las recientes se guardan en la SD, la última primero
 static void recents_load(void)
@@ -570,8 +549,16 @@ static void search_start(const char *term)
 static void draw_status(const char *user)
 {
 	fx_bar(0, 0, TOP_W, 18, true);
-	ui_text(8, 2, APP_NAME, SZ_SMALL, COL_WHITE, AL_LEFT, 0);
+	float ty = floorf((18 - ui_line_h(SZ_SMALL)) / 2) + 1;
+	float nw = ui_text(8, ty, APP_NAME, SZ_SMALL, COL_WHITE, AL_LEFT, 0);
+	// El logo (el volante) gira mientras se descarga algo y se para despacio al acabar
+	static float ang, spin;
+	bool busy = net_busy();
+	spin = approach(spin, busy ? 1 : 0, busy ? 8 : 2.5f);
+	ang += g_dt * 6.5f * spin;
+	ui_wheel(8 + nw + 10, 9, 5.5f, ang, col_lerp(C2D_Color32(0xc7, 0xd5, 0xe0, 0xff), COL_ACC, spin));
 
+	// Derecha: [usuario ·] fecha · hora   [Wi-Fi] [batería] 87 %
 	char clock[48], right[128];
 	util_clock(clock, sizeof clock);
 	bool chg;
@@ -579,12 +566,14 @@ static void draw_status(const char *user)
 	char pct[8];
 	snprintf(pct, sizeof pct, "%d%%", bat);
 	float r = TOP_W - 8;
-	r -= ui_text(r, 2, pct, SZ_SMALL, COL_DIM, AL_RIGHT, 0) + 4;
-	ui_battery(r - 18, 5, bat, chg);
-	r -= 24;
+	r -= ui_text(r, ty, pct, SZ_SMALL, COL_DIM, AL_RIGHT, 0) + 4;
+	ui_battery(r - 22, 4, bat, chg);
+	r -= 22 + 8;
+	ui_wifi(r - 7, 14, net_wifi_ok() ? osGetWifiStrength() : -1);
+	r -= 14 + 8;
 	if (user) snprintf(right, sizeof right, "%s · %s", user, clock);
 	else snprintf(right, sizeof right, "%s", clock);
-	ui_text(r, 2, right, SZ_SMALL, COL_DIM, AL_RIGHT, 230);
+	ui_text(r, ty, right, SZ_SMALL, COL_DIM, AL_RIGHT, r - (8 + nw + 24));
 }
 
 // Tecla de una pista: el glifo del sistema si la fuente lo tiene; si no, una tecla dibujada
@@ -682,7 +671,9 @@ static void draw_rating(float x, float y, float s, const AppInfo *a)
 		big = tmp;
 	}
 	size_t bl = strlen(big);
-	float bs = s * (bl > 3 ? 0.014f : bl > 2 ? 0.018f : 0.026f);
+	float bs = s * (bl > 2 ? 0.018f : 0.026f);
+	float bw = ui_text_w(big, bs);
+	if (bw > s - 4) bs *= (s - 4) / bw;   // «E10+» y similares: más pequeño hasta que quepa
 	ui_text(x + s / 2, y + h * 0.10f, big, bs, fg, AL_CENTER, s - 2);
 	ui_text(x + s / 2, y + h * 0.66f, sys, s * 0.0085f, fg, AL_CENTER, s - 2);
 }
@@ -762,11 +753,11 @@ static const char *tab_name(int t)
 	return _(n[t]);
 }
 
-#define SEARCH_BAR 30   // alto de la barra de búsqueda (solo en Buscar)
+#define SUB_H 20        // alto de la barra de subcategorías de Inicio
 
 static float list_top(void)
 {
-	return LIST_Y + (S.tab == TAB_SEARCH ? SEARCH_BAR : 0);
+	return LIST_Y + ease_out_cubic(S.sub_anim) * (SUB_H + 2);
 }
 
 static float list_h(void)
@@ -788,9 +779,7 @@ static void footer_text(char *out, size_t n)
 	Tab *t = CUR;
 	switch (S.tab) {
 	case TAB_HOME:
-		out[0] = 0;
-		for (int i = t->sel; i >= 0; i--)
-			if (t->list.rows[i].header) { snprintf(out, n, "%s", t->list.rows[i].name); break; }
+		snprintf(out, n, "%s · %d / %d", _(home_title[S.home_sub]), t->sel + 1, t->list.total);
 		break;
 	case TAB_OFFERS: snprintf(out, n, _("Oferta %d de %d"), t->sel + 1, t->list.total); break;
 	case TAB_DEMOS: snprintf(out, n, _("Demo %d de %d"), t->sel + 1, t->list.total); break;
@@ -814,6 +803,41 @@ static void footer_text(char *out, size_t n)
 	}
 }
 
+static bool friends_text(char *out, size_t n);
+
+// «Muy positivas · 87 %» (y Metacritic si cabe). Si la valoración no cabe, la primera palabra se
+// abrevia («Extremadamente positivas» → «Extrem. positivas»)
+static void draw_review_line(float x, float y, float w, const char *label, int pct, int metacritic)
+{
+	char lab[64], tail[48];
+	snprintf(lab, sizeof lab, "%s", label);
+	snprintf(tail, sizeof tail, " · %d %%", pct);
+	float tw = ui_text_w(tail, SZ_SMALL);
+	if (ui_text_w(lab, SZ_SMALL) + tw > w) {
+		char *sp = strchr(lab, ' ');
+		size_t first = sp ? (size_t)(sp - lab) : strlen(lab);
+		if (first > 7) {
+			// Corta en 6 caracteres (sin partir una letra con tilde) y pone un punto
+			size_t cut = 6;
+			while (cut > 0 && ((unsigned char)lab[cut] & 0xC0) == 0x80) cut--;
+			char rest[64];
+			snprintf(rest, sizeof rest, "%s", lab + first);
+			lab[cut] = '.';
+			size_t rl = strlen(rest);
+			if (rl > sizeof lab - cut - 2) rl = sizeof lab - cut - 2;
+			memcpy(lab + cut + 1, rest, rl);
+			lab[cut + 1 + rl] = 0;
+		}
+	}
+	float lw = ui_text(x, y, lab, SZ_SMALL, review_col(pct), AL_LEFT, w - tw);
+	ui_text(x + lw, y, tail, SZ_SMALL, COL_DIM, AL_LEFT, 0);
+	if (metacritic) {
+		char mc[32];
+		snprintf(mc, sizeof mc, " · Metacritic %d", metacritic);
+		if (lw + tw + ui_text_w(mc, SZ_SMALL) <= w) ui_text(x + lw + tw, y, mc, SZ_SMALL, COL_DIM, AL_LEFT, 0);
+	}
+}
+
 static void draw_preview(const StoreRow *row)
 {
 	InfoEnt *e = info_get(row->appid, false);
@@ -829,39 +853,49 @@ static void draw_preview(const StoreRow *row)
 	}
 	fx_rim(12, 28, 200, 94, 0, 1, false);
 
-	float x = 224, w = TOP_W - 10 - x;
+	// Columna de la derecha, hasta la altura de la imagen: nombre, etiquetas (hasta dos filas),
+	// reseñas y fecha · estudio
+	float x = 224, w = TOP_W - 10 - x, bottom = 124;
 	int nl = ui_text_wrap(x, 26, w, row->name, SZ_LARGE, COL_WHITE, 2, 17);
 	float y = 26 + nl * 17 + 4;
-	if (a) {
+	bool has_rev = row->review[0] && row->review_pct > 0;
+	bool has_date = a && (a->release[0] || a->developer[0]);
+	if (a && a->ngenres) {
+		// Las filas de etiquetas que caben sin quitar sitio a reseñas y fecha
+		float rest = bottom - y - (has_rev ? 13 : 0) - (has_date ? 13 : 0);
+		int rows = rest >= 38 ? 2 : 1;
 		float tx = x;
-		for (int i = 0; i < a->ngenres && i < 2; i++) draw_tag(&tx, y, a->genres[i]);
-		if (a->ngenres) y += 19;
+		for (int i = 0; i < a->ngenres; i++) {
+			float tw = ui_text_w(a->genres[i], SZ_TINY) + 14;
+			if (tx + tw > x + w && tx > x) {
+				if (--rows <= 0) break;
+				tx = x;
+				y += 18;
+			}
+			draw_tag(&tx, y, a->genres[i]);
+		}
+		y += 19;
 	}
-	if (row->review[0] && row->review_pct > 0) {
-		char t[96];
-		float rx = x + ui_text(x, y, _("Reseñas: "), SZ_SMALL, COL_DIM, AL_LEFT, 0);
-		snprintf(t, sizeof t, "%s", row->review);
-		ui_text(rx, y, t, SZ_SMALL, review_col(row->review_pct), AL_LEFT, x + w - rx);
-		y += 13;
-		if (a && a->metacritic) snprintf(t, sizeof t, "%d %% · Metacritic %d", row->review_pct, a->metacritic);
-		else snprintf(t, sizeof t, "%d %%", row->review_pct);
-		ui_text(x, y, t, SZ_SMALL, COL_DIM, AL_LEFT, w);
+	if (has_rev) {
+		draw_review_line(x, y, w, row->review, row->review_pct, a ? a->metacritic : 0);
 		y += 13;
 	}
-	if (a && (a->release[0] || a->developer[0])) {
+	if (has_date && y + 12 <= bottom + 4) {
 		char t[112];
 		snprintf(t, sizeof t, "%s%s%s", a->release, a->release[0] && a->developer[0] ? " · " : "", a->developer);
 		ui_text(x, y, t, SZ_SMALL, COL_DIM, AL_LEFT, w);
 	}
 
 	if (a) {
-		if (a->desc) ui_text_wrap(12, 128, TOP_W - 24, a->desc, SZ_SMALL, COL_TXT, 2, 13);
+		// Descripción en tres líneas, una raya fina y la clasificación con las características
+		if (a->desc) ui_text_wrap(12, 128, TOP_W - 24, a->desc, SZ_SMALL, COL_TXT, 3, 13);
+		ui_hline(12, 172, TOP_W - 24, C2D_Color32(0xff, 0xff, 0xff, 0x26));
 		float fx = 12;
 		if (a->rating[0]) {
-			draw_rating(12, 160, 30, a);
-			fx = 50;
+			draw_rating(12, 177, 28, a);
+			fx = 48;
 		}
-		draw_feats(fx, 160, TOP_W - 12 - fx, a, 2);
+		draw_feats(fx, 178, TOP_W - 12 - fx, a, 2);
 	} else if (e && e->failed) {
 		ui_text(12, 140, _("No se pudo cargar la ficha"), SZ_SMALL, COL_DIM, AL_LEFT, 0);
 	} else {
@@ -927,25 +961,67 @@ static void draw_store_top(void)
 	float fe = clampf((osGetTime() - t->sel_changed) / 160.0f, 0, 1);
 	if (fe < 1) ui_rect(0, 22, TOP_W, SCR_H - 40, col_alpha(COL_BG, (1 - ease_out_cubic(fe)) * 0.85f));
 
-	char cnt[112];
+	char cnt[112], fr[160];
 	footer_text(cnt, sizeof cnt);
-	ui_text(TOP_W - 12, SCR_H - 18, cnt, SZ_SMALL, COL_DIM, AL_RIGHT, TOP_W - 24);
+	float cw = ui_text(TOP_W - 12, SCR_H - 18, cnt, SZ_SMALL, COL_DIM, AL_RIGHT, TOP_W - 24);
+	// Con sesión: qué amigos lo tienen o lo están jugando
+	if (FR.appid == row->appid && friends_text(fr, sizeof fr)) {
+		ui_icon(IC_USERS, 12, SCR_H - 17, 12, FR.playing ? COL_LIME : COL_ACC);
+		ui_text(28, SCR_H - 18, fr, SZ_SMALL, FR.playing ? COL_LIME : COL_TXT, AL_LEFT, TOP_W - 52 - cw);
+	}
+}
+
+static const char *home_sub_name[HOME_PARTS] = {"Lo más vendido", "Novedades", "Próximamente", "Gratis"};
+
+// Subcategorías de Inicio: una barra que cuelga de la de pestañas (recta arriba, redonda abajo)
+static void draw_subbar(void)
+{
+	float e = ease_out_cubic(S.sub_anim);
+	if (e <= 0.01f) return;
+	float x = 10, w = BOT_W - 20, y = LIST_Y - 3 - (1 - e) * SUB_H, h = SUB_H + 1;
+	ui_scissor(GFX_BOTTOM, 0, LIST_Y - 3, BOT_W, SUB_H + 4);
+	ui_rrect_bottom(x, y, w, h, 9, col_alpha(C2D_Color32(0x1c, 0x28, 0x3a, 0xff), 0.96f));
+	ui_rrect_bottom(x, y, w, h, 9, col_alpha(COL_WHITE, 0.05f));
+	ui_rect(x + 9, y + h - 1, w - 18, 1, col_alpha(COL_WHITE, 0.10f));
+	float sw = (w - 4) / HOME_PARTS;
+	fx_select(x + 2 + S.sub_x * sw, y + 3, sw, h - 6, (h - 6) / 2, e);
+	float lh = ui_line_h(SZ_TINY);
+	for (int i = 0; i < HOME_PARTS; i++) {
+		float on = 1 - clampf(fabsf(S.sub_x - i), 0, 1);
+		ui_text(x + 2 + sw * i + sw / 2, y + 3 + (h - 6 - lh) / 2 + 0.5f, _(home_sub_name[i]), SZ_TINY,
+			col_alpha(col_lerp(COL_DIM, COL_WHITE, on), e), AL_CENTER, sw - 4);
+	}
+	ui_scissor_off();
 }
 
 static void draw_tabs(void)
 {
-	// Control segmentado: una cápsula de cristal y, dentro, la píldora de la pestaña que se desliza
-	fx_glass(3, 2, BOT_W - 6, LIST_Y - 4, (LIST_Y - 4) / 2.0f, 1, 0);
+	// Control segmentado: una cápsula de cristal y, dentro, la píldora de la pestaña que se desliza.
+	// En Buscar, con el foco arriba, la píldora se estira sobre las demás y es la barra de búsqueda.
+	const float by = 2, bh = LIST_Y - 4;
+	fx_glass(3, by, BOT_W - 6, bh, bh / 2, 1, 0);
 	float w = BOT_W / 4.6f;
 	float sx = S.tab_x * w, sw = S.tab_x > TAB_COUNT - 1.5f ? BOT_W - sx : w;
 	float px = sx < 5 ? 5 : sx, pw = (sx + sw > BOT_W - 5 ? BOT_W - 5 : sx + sw) - px;
-	fx_select(px + 1, 4, pw - 2, LIST_Y - 8, (LIST_Y - 8) / 2.0f, 1);
+	float se = ease_out_cubic(S.search_x);
+	px += (5 - px) * se;
+	pw += (BOT_W - 10 - pw) * se;
+	fx_select(px + 1, by + 2, pw - 2, bh - 4, (bh - 4) / 2.0f, 1);
+	float lh = ui_line_h(SZ_SMALL), ty = by + (bh - lh) / 2 + 1;
 	for (int t = 0; t < TAB_COUNT; t++) {
 		float x = t * w, tw = t == TAB_SEARCH ? BOT_W - x : w;
 		float on = 1 - clampf(fabsf(S.tab_x - t), 0, 1);
-		u32 c = col_lerp(COL_DIM, COL_WHITE, on);
-		if (t == TAB_SEARCH) ui_icon(IC_SEARCH, x + tw / 2 - 6, 6, 12, c);
-		else ui_text(x + tw / 2, 5, tab_name(t), SZ_SMALL, c, AL_CENTER, tw - 4);
+		u32 c = col_alpha(col_lerp(COL_DIM, COL_WHITE, on), 1 - se);
+		if (t == TAB_SEARCH) ui_icon(IC_SEARCH, x + tw / 2 - 6, by + (bh - 12) / 2, 12, c);
+		else if (se < 0.99f) ui_text(x + tw / 2, ty, tab_name(t), SZ_SMALL, c, AL_CENTER, tw - 4);
+	}
+	if (se > 0.05f) {
+		// Dentro de la píldora estirada: la lupa a la izquierda, lo buscado y la tecla Y
+		Tab *t = &tabs[TAB_SEARCH];
+		ui_icon(IC_SEARCH, px + 10, by + (bh - 12) / 2, 12, col_alpha(COL_ACC, se));
+		if (t->term[0]) ui_text(px + 28, ty, t->term, SZ_SMALL, col_alpha(COL_WHITE, se), AL_LEFT, pw - 60);
+		else ui_text(px + 28, ty, _("Buscar en la tienda…"), SZ_SMALL, col_alpha(COL_DIM, se), AL_LEFT, pw - 60);
+		if (se > 0.9f) hint_key(px + pw - 26, by + (bh - 18) / 2, "Y", true);
 	}
 }
 
@@ -967,18 +1043,6 @@ static void draw_account_bar(void)
 	ui_text(46, 5, title, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
 }
 
-static void draw_search_bar(void)
-{
-	Tab *t = CUR;
-	float y = LIST_Y + 4;
-	bool pressed = S.pressed == BT_SEARCH;
-	if (pressed) fx_select(8, y, BOT_W - 16, SEARCH_BAR - 8, 11, 1);
-	else fx_glass(8, y, BOT_W - 16, SEARCH_BAR - 8, 11, 1, 0);
-	ui_icon(IC_SEARCH, 16, y + 5, 12, COL_ACC);
-	if (t->term[0]) ui_text(34, y + 3, t->term, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 76);
-	else ui_text(34, y + 3, _("Buscar en la tienda…"), SZ_SMALL, COL_DIM, AL_LEFT, BOT_W - 76);
-	hint_key(BOT_W - 30, y + 2, "Y", true);
-}
 
 // Fila elegida: una cápsula de cristal claro con el reflejo de color en el borde
 static void draw_row_sel(float hy)
@@ -990,12 +1054,14 @@ static void draw_store_bottom(void)
 {
 	Tab *t = CUR;
 	if (S.tab >= TAB_COUNT) draw_account_bar();
-	else draw_tabs();
-	if (S.tab == TAB_SEARCH) draw_search_bar();
+	else {
+		draw_subbar();
+		draw_tabs();
+	}
 	float top = list_top(), lh = list_h();
 	ui_scissor(GFX_BOTTOM, 0, top, BOT_W, lh);
 	int first = (int)(t->scroll / ROW_H);
-	if (t->list.count && cur_row()) {
+	if (t->list.count && cur_row() && !(S.tab == TAB_SEARCH && S.search_focus)) {
 		float hy = top + t->sel_y * ROW_H - t->scroll;
 		draw_row_sel(hy);
 	}
@@ -1078,13 +1144,23 @@ static void draw_store_bottom(void)
 		static const char *ha[] = {"A", "Ficha", "B", "Volver", "START", "Menú"};
 		draw_hints(ha, 3);
 	} else if (S.tab == TAB_SEARCH) {
-		if (t->term[0]) {
-			static const char *hs[] = {"Y", "Buscar", "A", "Ficha", "B", "Borrar", "L R", "Pestaña"};
+		if (S.search_focus) {
+			static const char *hs[] = {"A", "Escribir", "↑↓", "Resultados", "L R", "Pestaña"};
+			draw_hints(hs, t->list.count ? 3 : 1);
+			if (!t->list.count) {
+				static const char *h1[] = {"L R", "Pestaña"};
+				draw_hints(h1, 1);
+			}
+		} else if (t->term[0]) {
+			static const char *hs[] = {"A", "Ficha", "↑", "Buscar", "B", "Borrar", "L R", "Pestaña"};
 			draw_hints(hs, 4);
 		} else {
-			static const char *hs[] = {"Y", "Buscar", "A", "Abrir", "L R", "Pestaña"};
+			static const char *hs[] = {"A", "Buscar esto", "↑", "Escribir", "L R", "Pestaña"};
 			draw_hints(hs, 3);
 		}
+	} else if (S.tab == TAB_HOME && !(t->list.err[0] && !t->list.req && !t->list.count)) {
+		static const char *hh4[] = {"A", "Ficha", "← →", "Categoría", "L R", "Pestaña"};
+		draw_hints(hh4, 3);
 	} else if (t->list.err[0] && !t->list.req && !t->list.count) {
 		static const char *hh3[] = {"A", "Reintentar", "L R", "Pestaña", "START", "Menú"};
 		draw_hints(hh3, 3);
@@ -1120,7 +1196,7 @@ static void store_select(int sel, int dir)
 	float ytop = (t->sel > 0 && t->list.rows[t->sel - 1].header) ? y - ROW_H : y;
 	if (ytop < t->scroll_target) t->scroll_target = ytop;
 	if (y + ROW_H > t->scroll_target + lh) t->scroll_target = y + ROW_H - lh;
-	if (tab_paged(S.tab) && t->sel >= t->list.count - 8) tab_more(S.tab);
+	if (tab_paged(cur_ti()) && t->sel >= t->list.count - 8) tab_more(cur_ti());
 }
 
 // ============================================================================
@@ -1154,6 +1230,7 @@ static void friends_reset(void)
 
 static void friends_request(u32 appid)
 {
+	if (FR.appid == appid && (FR.req || FR.done)) return;   // ya pedido (la vista previa y luego la ficha)
 	friends_reset();
 	if (!auth_logged()) return;
 	FR.appid = appid;
@@ -2377,7 +2454,7 @@ static void draw_splash_bg(int idx, float w, float h)
 
 static bool splash_ready(void)
 {
-	return tabs[S.tab].list.count > 0 || tabs[S.tab].list.err[0] || net_status_text()[0];
+	return CUR->list.count > 0 || CUR->list.err[0] || net_status_text()[0];
 }
 
 static void draw_splash_top(void)
@@ -2498,7 +2575,7 @@ static bool key_repeat(u32 down, u32 held, u32 mask)
 	return false;
 }
 
-static const Box B_SEARCHBAR = {8, LIST_Y + 4, BOT_W - 16, SEARCH_BAR - 8};
+static const Box B_SEARCHBAR = {5, 2, BOT_W - 10, LIST_Y - 4};   // la píldora estirada de Buscar
 static int press_update(u32 kd, u32 kh, u32 ku, touchPosition *tp, const int *ids, int n);
 
 static void tab_switch(int nt)
@@ -2508,10 +2585,21 @@ static void tab_switch(int nt)
 	Tab *t = CUR;
 	t->anim_t = g_time;
 	if (nt == TAB_SEARCH) {
+		S.search_focus = true;
 		if (!t->term[0] && !t->list.req) search_show_recents();
 	} else if (!t->started) {
 		tab_more(nt);
 	}
+	t->sel_changed = osGetTime();
+}
+
+static void home_switch(int sub)
+{
+	if (sub < 0 || sub >= HOME_PARTS || sub == S.home_sub) return;
+	S.home_sub = sub;
+	Tab *t = CUR;
+	if (!t->started) tab_more(cur_ti());
+	t->anim_t = g_time;
 	t->sel_changed = osGetTime();
 }
 
@@ -2528,7 +2616,7 @@ static void store_activate(void)
 		// Reintentar ya, sin esperar la cuenta atrás
 		t->fail_at = 0;
 		t->list.end = false;
-		tab_more(S.tab);
+		tab_more(cur_ti());
 	}
 }
 
@@ -2565,11 +2653,31 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		if (kd & KEY_R) tab_switch((S.tab + 1) % TAB_COUNT);
 	}
 	Tab *t = CUR;
-	if (key_repeat(kd, kh, KEY_DOWN)) store_select(t->sel + 1, 1);
-	if (key_repeat(kd, kh, KEY_UP)) store_select(t->sel - 1, -1);
-	if (key_repeat(kd, kh, KEY_RIGHT)) store_select(t->sel + 6, 1);
-	if (key_repeat(kd, kh, KEY_LEFT)) store_select(t->sel - 6, -1);
-	if ((kd & KEY_Y) && S.tab == TAB_SEARCH) S.want_kb = true;
+	if (S.tab == TAB_SEARCH && S.search_focus) {
+		// Foco en la píldora de búsqueda: A o Y escriben; abajo baja a la lista
+		if (key_repeat(kd, kh, KEY_DOWN) && t->list.count) {
+			S.search_focus = false;
+			store_select(0, 1);
+			t->sel_changed = osGetTime();
+		}
+		if (kd & (KEY_A | KEY_Y)) S.want_kb = true;
+		kd &= ~KEY_A;
+	} else {
+		if (key_repeat(kd, kh, KEY_DOWN)) store_select(t->sel + 1, 1);
+		if (key_repeat(kd, kh, KEY_UP)) {
+			if (S.tab == TAB_SEARCH && t->sel == 0) S.search_focus = true;   // arriba del todo: vuelve a la búsqueda
+			else store_select(t->sel - 1, -1);
+		}
+		if (S.tab == TAB_HOME) {
+			// En Inicio, izquierda y derecha cambian de subcategoría
+			if (kd & KEY_LEFT) home_switch(S.home_sub - 1);
+			if (kd & KEY_RIGHT) home_switch(S.home_sub + 1);
+		} else {
+			if (key_repeat(kd, kh, KEY_RIGHT)) store_select(t->sel + 6, 1);
+			if (key_repeat(kd, kh, KEY_LEFT)) store_select(t->sel - 6, -1);
+		}
+		if ((kd & KEY_Y) && S.tab == TAB_SEARCH) S.want_kb = true;
+	}
 	if ((kd & KEY_B) && S.tab == TAB_SEARCH && t->term[0]) {
 		// B borra la búsqueda y vuelve a las recientes
 		if (t->list.req) net_release(t->list.req);
@@ -2579,7 +2687,7 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	}
 	if (kd & KEY_A) store_activate();
 
-	if (S.tab == TAB_SEARCH) {
+	if (S.tab == TAB_SEARCH && S.search_focus) {
 		static const int ids[] = {BT_SEARCH};
 		if (press_update(kd, kh, ku, tp, ids, 1) == BT_SEARCH) S.want_kb = true;
 	}
@@ -2600,19 +2708,28 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 			t->scroll_target = clampf(S.drag_scroll0 - dy, 0, max);
 			t->scroll = t->scroll_target;
 			t->finger = true;
-			if (tab_paged(S.tab) && t->scroll_target > max - 3 * ROW_H) tab_more(S.tab);
+			if (tab_paged(cur_ti()) && t->scroll_target > max - 3 * ROW_H) tab_more(cur_ti());
 		}
 	}
 	if (ku & KEY_TOUCH) {
 		if (S.touch_moved < 8) {
 			int x = S.touch_x0, y = S.touch_y0;
 			if (y < LIST_Y && S.tab < TAB_COUNT) {
-				int nt = (int)(x / (BOT_W / 4.6f));
-				tab_switch(nt >= TAB_COUNT ? TAB_SEARCH : nt);
+				if (!(S.tab == TAB_SEARCH && S.search_focus)) {
+					int nt = (int)(x / (BOT_W / 4.6f));
+					if (nt >= TAB_COUNT && S.tab == TAB_SEARCH) S.search_focus = true;   // tocar la lupa sube el foco
+					else tab_switch(nt >= TAB_COUNT ? TAB_SEARCH : nt);
+				}
+			} else if (S.tab == TAB_HOME && y < LIST_Y + SUB_H) {
+				int i = (int)((x - 12) / ((BOT_W - 24) / (float)HOME_PARTS));
+				home_switch(i < 0 ? 0 : i);
 			} else if (S.dragging) {
 				int i = (int)((y - top + t->scroll) / ROW_H);
 				if (i >= 0 && i < t->list.count && !t->list.rows[i].header) {
-					if (i == t->sel) store_activate();
+					if (S.tab == TAB_SEARCH && S.search_focus) {
+						S.search_focus = false;
+						store_select(i, 0);
+					} else if (i == t->sel) store_activate();
 					else store_select(i, 0);
 				}
 			}
@@ -3296,7 +3413,7 @@ static void start_store(void)
 	steam_set_context(i18n_steam_lang(cc), cc);
 	S.ctx_ready = true;
 	netlog("tienda: pais=%s idioma=%s", steam_country(), steam_lang());
-	tab_more(S.tab);
+	tab_more(cur_ti());
 }
 
 static void poll_country(void)
@@ -3374,7 +3491,7 @@ int main(int argc, char **argv)
 		poll_country();
 		for (int ti = 0; ti < TAB_ALL; ti++) {
 			Tab *t = &tabs[ti];
-			if (ti == TAB_HOME) home_poll();
+			if (ti == TAB_HOME) continue;   // Inicio no tiene lista propia: son las de TAB_H0…
 			else if (ti == TAB_LIBRARY) owned_poll(t);
 			else if (ti == TAB_WISHLIST) wish_poll(t);
 			else list_poll(&t->list, tab_paged(ti));
@@ -3499,8 +3616,10 @@ int main(int argc, char **argv)
 		}
 
 		// Vista previa: la ficha del seleccionado, cuando el cursor se queda quieto un momento
-		if (S.scene == SC_STORE && cur_row() && cur_row()->appid && now - CUR->sel_changed > 250)
+		if (S.scene == SC_STORE && cur_row() && cur_row()->appid && now - CUR->sel_changed > 250) {
 			info_get(cur_row()->appid, true);
+			if (auth_logged() && now - CUR->sel_changed > 600) friends_request(cur_row()->appid);
+		}
 
 		InfoEnt *ge = S.scene != SC_STORE ? info_get(S.app, false) : NULL;
 		game_poll(ge && ge->done ? &ge->info : NULL);
@@ -3515,6 +3634,9 @@ int main(int argc, char **argv)
 		S.exit_anim = approach(S.exit_anim, S.ask_exit ? 1 : 0, S.ask_exit ? 7 : 16);
 		S.menu_anim = approach(S.menu_anim, S.menu_open ? 1 : 0, S.menu_open ? 12 : 18);
 		S.pick_anim = approach(S.pick_anim, S.pick_open ? 1 : 0, S.pick_open ? 12 : 18);
+		S.sub_anim = approach(S.sub_anim, S.scene == SC_STORE && S.tab == TAB_HOME ? 1 : 0, 14);
+		S.sub_x = approach(S.sub_x, S.home_sub, 16);
+		S.search_x = approach(S.search_x, S.tab == TAB_SEARCH && S.search_focus ? 1 : 0, 14);
 		S.sec_anim = clampf(S.sec_anim + dt / 0.22f, 0, 1);
 		S.scene_anim = clampf(S.scene_anim + dt / 0.28f, 0, 1);
 		S.shot_anim = clampf(S.shot_anim + dt / 0.30f, 0, 1);

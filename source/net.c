@@ -188,8 +188,13 @@ void net_release(Req *r)
 	if (left == 0) req_free(r);
 }
 
+static volatile int active;   // peticiones en cola o en curso (para el logo que gira)
+
+bool net_busy(void) { return __atomic_load_n(&active, __ATOMIC_RELAXED) > 0; }
+
 static void lane_push(Lane *l, Req *r)
 {
+	__atomic_add_fetch(&active, 1, __ATOMIC_RELAXED);
 	LightLock_Lock(&l->lock);
 	r->next = NULL;
 	if (l->tail) l->tail->next = r; else l->head = r;
@@ -508,6 +513,7 @@ static void lane_main(void *arg)
 		} else {
 			run_req(l, r);
 		}
+		__atomic_sub_fetch(&active, 1, __ATOMIC_RELAXED);
 		net_release(r);
 	}
 	curl_easy_cleanup(l->curl);

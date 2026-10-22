@@ -324,6 +324,17 @@ void ui_rrect(float x, float y, float w, float h, float r, u32 col)
 	quarter(x + r, y + h - r, r, M_PI / 2, col);
 }
 
+// Rectángulo recto arriba y redondeado abajo (lo que cuelga de una barra)
+void ui_rrect_bottom(float x, float y, float w, float h, float r, u32 col)
+{
+	if (r > h) r = h;
+	if (r > w / 2) r = w / 2;
+	ui_rect(x, y, w, h - r, col);
+	ui_rect(x + r, y + h - r, w - 2 * r, r, col);
+	quarter(x + w - r, y + h - r, r, 0, col);
+	quarter(x + r, y + h - r, r, M_PI / 2, col);
+}
+
 void ui_hline(float x, float y, float w, u32 col)
 {
 	// En coordenadas enteras: una línea de 1 px entre dos filas puede no pintarse en la consola
@@ -550,20 +561,68 @@ void ui_spinner(float cx, float cy, float r, u32 col)
 	}
 }
 
+// Batería como en Cloud3DS: contorno redondeado, polo y relleno de color; rayo si carga.
+// (x, y) es la esquina de arriba a la izquierda de una caja de 19×10
 void ui_battery(float x, float y, int pct, bool charging)
 {
-	u32 c = pct < 15 ? C2D_Color32(0xd9, 0x40, 0x40, 0xff) : pct < 30 ? C2D_Color32(0xe5, 0xc0, 0x30, 0xff) : C2D_Color32(0x5b, 0xa3, 0x2b, 0xff);
-	ui_rect(x, y, 16, 1, COL_DIM);
-	ui_rect(x, y + 8, 16, 1, COL_DIM);
-	ui_rect(x, y, 1, 9, COL_DIM);
-	ui_rect(x + 15, y, 1, 9, COL_DIM);
-	ui_rect(x + 16, y + 3, 1.5f, 3, COL_DIM);
-	ui_rect(x + 2, y + 2, 12 * (pct < 0 ? 0 : pct > 100 ? 100 : pct) / 100.0f, 5, c);
-	if (charging) {
-		u32 y2 = C2D_Color32(0xff, 0xe0, 0x40, 0xff);
-		tri(x + 9, y + 0.5f, x + 5.5f, y + 5, x + 8, y + 5, y2);
-		tri(x + 8, y + 4, x + 10.5f, y + 4, x + 7, y + 8.5f, y2);
+	const float w = 19, h = 10;
+	u32 line = C2D_Color32(0xc7, 0xd5, 0xe0, 0xc0);
+	// Contorno de 1 px con esquinas recortadas
+	ui_rect(x + 2, y, w - 4, 1, line);
+	ui_rect(x + 2, y + h - 1, w - 4, 1, line);
+	ui_rect(x, y + 2, 1, h - 4, line);
+	ui_rect(x + w - 1, y + 2, 1, h - 4, line);
+	ui_rect(x + 1, y + 1, 1, 1, line);
+	ui_rect(x + w - 2, y + 1, 1, 1, line);
+	ui_rect(x + 1, y + h - 2, 1, 1, line);
+	ui_rect(x + w - 2, y + h - 2, 1, 1, line);
+	ui_rrect(x + w + 0.5f, y + 3, 2, h - 6, 1, line);
+	if (pct >= 0) {
+		u32 c = charging ? COL_ACC : pct <= 15 ? C2D_Color32(0xe0, 0x4b, 0x3a, 0xff)
+			: pct <= 30 ? C2D_Color32(0xe8, 0xc5, 0x47, 0xff) : C2D_Color32(0x7c, 0xc4, 0x3a, 0xff);
+		float fw = (w - 4) * (pct > 100 ? 100 : pct) / 100.0f;
+		if (fw < 1.5f) fw = 1.5f;
+		ui_rrect(x + 2, y + 2, fw, h - 4, 1, c);
 	}
+	if (charging) {
+		u32 b = C2D_Color32(0x10, 0x16, 0x20, 0xff);
+		float cx = x + w / 2, cy = y + h / 2;
+		tri(cx + 1, cy - 4, cx - 3, cy + 0.5f, cx, cy + 0.5f, b);
+		tri(cx, cy - 0.5f, cx + 3, cy - 0.5f, cx - 1, cy + 4, b);
+	}
+}
+
+// Señal Wi-Fi: tres arcos encendidos según la intensidad (0-3); -1 = sin conexión.
+// (cx, by) es el punto de abajo de los arcos
+void ui_wifi(float cx, float by, int bars)
+{
+	u32 on = C2D_Color32(0xc7, 0xd5, 0xe0, 0xe0), off = C2D_Color32(0xff, 0xff, 0xff, 0x30);
+	for (int i = 0; i < 3; i++) {
+		float r = 3.5f + i * 3.2f;
+		u32 c = bars > i ? on : off;
+		const int N = 6;
+		for (int k = 0; k < N; k++) {
+			float a0 = -M_PI * 0.75f + (M_PI * 0.5f) * k / N, a1 = -M_PI * 0.75f + (M_PI * 0.5f) * (k + 1) / N;
+			seg(cx + cosf(a0) * r, by + sinf(a0) * r, cx + cosf(a1) * r, by + sinf(a1) * r, 1.5f, c);
+		}
+	}
+	ui_circle(cx, by - 0.5f, 1.3f, bars > 0 ? on : off);
+	if (bars < 0) seg(cx - 6, by - 11, cx + 6, by + 1, 1.4f, C2D_Color32(0xe0, 0x4b, 0x3a, 0xff));
+}
+
+// Volante de válvula (el logo): aro, seis radios y el eje; angle para que gire
+void ui_wheel(float cx, float cy, float r, float angle, u32 col)
+{
+	const int N = 18;
+	for (int i = 0; i < N; i++) {
+		float a0 = i * 2 * M_PI / N, a1 = (i + 1) * 2 * M_PI / N;
+		seg(cx + cosf(a0) * r, cy + sinf(a0) * r, cx + cosf(a1) * r, cy + sinf(a1) * r, r * 0.26f, col);
+	}
+	for (int i = 0; i < 6; i++) {
+		float a = angle + i * M_PI / 3;
+		seg(cx + cosf(a) * r * 0.3f, cy + sinf(a) * r * 0.3f, cx + cosf(a) * r * 0.9f, cy + sinf(a) * r * 0.9f, r * 0.18f, col);
+	}
+	ui_circle(cx, cy, r * 0.36f, col);
 }
 
 void ui_qr(const char *text, float x, float y, float size)

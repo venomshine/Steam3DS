@@ -5,7 +5,7 @@
 INDIRECT = [
     "Inicio", "Ofertas", "Demos", "Betas",
     "Resumen", "Requisitos", "Opiniones", "Extras", "Similares",
-    "Ficha", "Pestaña", "Salir", "Menú", "Carrito", "Quitar", "Pagar", "Tienda", "Reintentar", "Aceptar", "Elegir", "Abrir",
+    "Ficha", "Pestaña", "Salir", "Menú", "Carrito", "Quitar", "Pagar", "Tienda", "Reintentar", "Aceptar", "Elegir", "Abrir", "Escribir", "Resultados", "Buscar esto", "Categoría", "Novedades",
     "Iniciar sesión con el móvil", "Mi perfil", "Biblioteca", "Lista de deseos", "Cerrar sesión", "Salir de Steam3DS",
     "Abre la app de Steam en el móvil", "Toca el escudo de Steam Guard", "Elige «Escanear un código QR» y apunta aquí", "Elegir", "Abrir ficha", "Apartado", "Volver", "Comprar en el móvil", "Cambiar", "Abrir", "Borrar",
     "Lo más vendido", "Novedades populares", "Próximamente", "Gratis para jugar",
@@ -339,4 +339,9 @@ TR = {
     "Inicia sesión (START) para el carrito, deseados e instalar": ("Sign in (START) for the cart, wishlist and installing", "カート・ウィッシュリスト・インストールはサインイン（START）"),
     "Código %d %s": ("Code %d %s", "コード %d %s"),
     "Conectando tu sesión de Steam…": ("Connecting your Steam session…", "Steamのセッションに接続中…"),
+    "Escribir": ("Type", "入力"),
+    "Resultados": ("Results", "結果"),
+    "Buscar esto": ("Search this", "これを検索"),
+    "Categoría": ("Category", "カテゴリ"),
+    "Novedades": ("New releases", "新作"),
 }

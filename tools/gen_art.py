@@ -86,22 +86,27 @@ def wheel(size, angle=18.0, spokes=5, color_out=LIGHT, color_in=ACC):
     return out
 
 
-def valve_logo(size, angle=-90.0, spokes=5, light=False):
+def valve_logo(size, angle=-90.0, spokes=5, light=False, square=False):
     """El logo de Steam redibujado con nuestras válvulas: de reojo es el mismo (el círculo con el
     degradado, la biela, el brazo y los dos aros), pero cada aro blanco es una rueda de válvula
     entera (aro, radios, cubo y agarres) y los círculos de dentro desaparecen. La biela y el brazo
     quedan detrás y la válvula delante, separada por una raya fina del color del fondo.
 
     La geometría está medida sobre el logo oficial en un lienzo de 1500. Devuelve RGBA de
-    size×size (a 8×). light: el círculo en el azul clarito de la válvula de antes (para el banner)."""
+    size×size (a 8×). light: el círculo en el azul clarito de la válvula de antes (para el banner).
+    square: en vez del círculo, el cuadrado de bordes redondos de los iconos de la 3DS, con las
+    válvulas y la biela centradas y algo más grandes (el brazo sigue saliendo por la izquierda)."""
     s = size * K
     f = s / 1500.0
+    # Encuadre: en el cuadrado se centra lo que se ve (válvulas y biela: 347..1236 × 316..1205)
+    z, ox, oy = (1.16, 791.5, 760.75) if square else (1.0, 750.0, 750.0)
 
     def P(x, y):
-        return (x * f, y * f)
+        return (((x - ox) * z + 750) * f, ((y - oy) * z + 750) * f)
 
     def disc(d, cx, cy, r, fill):
-        d.ellipse([(cx - r) * f, (cy - r) * f, (cx + r) * f, (cy + r) * f], fill=fill)
+        (x, y), r = P(cx, cy), r * z * f
+        d.ellipse([x - r, y - r, x + r, y + r], fill=fill)
 
     def layer():
         im = Image.new("L", (s, s), 0)
@@ -120,13 +125,16 @@ def valve_logo(size, angle=-90.0, spokes=5, light=False):
         mid = rr - th / 2
         for i in range(spokes):
             a = math.radians(rot + i * 360 / spokes)
-            d.line([P(cx, cy), P(cx + math.cos(a) * mid, cy + math.sin(a) * mid)], fill=255, width=max(1, int(R * 0.16 * f)))
+            d.line([P(cx, cy), P(cx + math.cos(a) * mid, cy + math.sin(a) * mid)], fill=255, width=max(1, int(R * 0.16 * z * f)))
         disc(d, cx, cy, R * 0.30, 255)
         disc(d, cx, cy, R * 0.11, 0)
         return im
 
     circle, cd = layer()
-    disc(cd, 749.5, 749.0, 688.0, 255)
+    if square:
+        cd.rounded_rectangle([31 * f, 31 * f, 1469 * f, 1469 * f], radius=281 * f, fill=255)
+    else:
+        disc(cd, 749.5, 749.0, 688.0, 255)
 
     # Detrás: la biela y el brazo (entra por la izquierda, cortado por el círculo)
     back, bd = layer()
@@ -143,7 +151,7 @@ def valve_logo(size, angle=-90.0, spokes=5, light=False):
     white = np.array(back)
 
     # Delante: las dos válvulas, cada una con una raya del color del fondo alrededor
-    gap = max(2, int(16 * f)) | 1
+    gap = max(2, int(16 * z * f)) | 1
     for (cx, cy), R, rot in ((BIG, 261.0, angle), (SMALL, 190.5, angle + 36)):
         v = valve(cx, cy, R, rot)
         # Lo de detrás no asoma entre los radios: la válvula lo tapa entera
@@ -160,7 +168,8 @@ def valve_logo(size, angle=-90.0, spokes=5, light=False):
              (1.0, (0x14, 0x86, 0xbb))]
     if light:
         stops = [(0.0, (0x8f, 0xd2, 0xf8)), (0.5, ACC), (1.0, (0x3a, 0x9c, 0xe0))]
-    t = np.clip((np.arange(s) / f - 60) / (1438 - 60), 0, 1)
+    t0, t1 = (31, 1469) if square else (60, 1438)
+    t = np.clip((np.arange(s) / f - t0) / (t1 - t0), 0, 1)
     col = np.zeros((s, 3))
     for (t0, c0), (t1, c1) in zip(stops, stops[1:]):
         m = (t >= t0) & (t <= t1)
@@ -231,17 +240,8 @@ def down(im, size):
 
 def icon():
     s = 48 * K
-    bg = vgrad(s, s, NAVY_TOP, NAVY_BOT)
-    hl = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    ImageDraw.Draw(hl).ellipse([-s * 0.2, -s * 0.5, s * 1.2, s * 0.55], fill=(255, 255, 255, 22))
-    bg = Image.alpha_composite(bg, hl)
-    mask = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([1 * K, 1 * K, s - 1 * K, s - 1 * K], radius=9 * K, fill=255)
-    im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    im.paste(bg, (0, 0), mask)
-    # El logo: el de Steam con nuestra válvula
-    im.alpha_composite(valve_logo(42), (3 * K, 3 * K))
-    return down(im, (48, 48))
+    # El logo en la forma de los iconos de la 3DS: cuadrado de bordes redondos, todo centrado
+    return down(valve_logo(48, square=True), (48, 48))
 
 
 def banner():

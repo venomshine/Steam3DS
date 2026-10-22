@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Sonidos de la pantalla de carga, sintetizados (sin grabaciones de nadie).
+"""Sonidos de la pantalla de carga.
 
-La válvula de hierro se clava en la pared de un sótano: golpe sordo con el «clonc» del metal, el
-yeso que se raja y los cascotes que caen; un bombillo flojo que zumba y chisporrotea cuando
-parpadea; la válvula oxidada que cruje al soltarse y chirría al girar; y el vapor que sale de
-golpe y sigue silbando.
+La válvula de hierro se clava en la pared de un sótano: golpe sordo con el metal, el yeso que se
+raja y los cascotes que caen; un bombillo flojo que zumba y chisporrotea cuando parpadea; la
+válvula oxidada que cruje al soltarse y chirría al girar; y el vapor que sale de golpe y sigue
+silbando.
+
+El golpe, los cascotes y el óxido se montan con grabaciones reales de Kenney (www.kenney.nl,
+CC0: dominio público), en tools/sfx_src: se bajan de tono para que pesen más, se mezclan y se les
+pone la sala. El vapor, el zumbido y el chisporroteo se sintetizan. Necesita ffmpeg para leer
+los .ogg.
 
 Cada sonido va suelto para que la consola lo dispare en su momento exacto de la animación (y los
 bucles se repiten sin corte: el ruido se hace en frecuencia, así que es periódico).
@@ -21,6 +26,7 @@ Salida: romfs/sfx/<nombre>.pcm   (PCM 16 bits con signo, mono, 22050 Hz)
 Uso: python3 tools/gen_sfx.py [carpeta para .wav de muestra]   (solo necesita numpy)
 """
 import os
+import subprocess
 import sys
 import wave
 
@@ -28,7 +34,29 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SR = 22050
+SRC = os.path.join(ROOT, "tools", "sfx_src")
 rng = np.random.default_rng(1977)
+
+
+def rec(name, pitch=1.0, start=0.0, end=None):
+    """Una grabación de tools/sfx_src (mono, a SR), bajada o subida de tono (cambia también lo
+    que dura, como al girar un disco más despacio) y recortada [start, end) s del original."""
+    raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", os.path.join(SRC, name + ".ogg"),
+                          "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"], capture_output=True, check=True).stdout
+    x = np.frombuffer(raw, dtype='<f4').astype(float)
+    x = x[int(start * SR):int(end * SR) if end else None]
+    if pitch != 1.0:
+        n = int(x.size / pitch)
+        x = np.interp(np.arange(n) * pitch, np.arange(x.size), x)
+    return x / (np.abs(x).max() + 1e-9)
+
+
+def place(out, x, at, gain=1.0):
+    i = int(at * SR)
+    if i >= out.size:
+        return
+    m = min(x.size, out.size - i)
+    out[i:i + m] += gain * x[:m]
 
 
 def secs(d):
@@ -102,51 +130,36 @@ def fade_edges(x, a=0.002, b=0.05):
 # Golpe en la pared
 
 def impact():
-    n = secs(2.2)
+    n = secs(2.4)
     t = tt(n)
     out = np.zeros(n)
-    # El porrazo: un golpe grave que cae de tono, más el aire empujado
-    f = 38 + 34 * np.exp(-t / 0.05)
-    ph = 2 * np.pi * np.cumsum(f) / SR
-    thud = np.sin(ph) * np.exp(-t / 0.22) * np.minimum(1, t / 0.002)
-    out += 1.0 * thud
-    out += 0.55 * filt(rng.normal(size=n), 30, 260) * np.exp(-t / 0.07)
-    # El hierro: un «clonc» apagado (hierro fundido, grueso), con parejas que baten
-    clank = modal(n, [(196, 0.5, 0.30), (199.5, 0.35, 0.28), (512, 0.4, 0.18), (517, 0.25, 0.16),
-                      (931, 0.28, 0.10), (1384, 0.2, 0.07), (2113, 0.12, 0.045), (2890, 0.07, 0.03)])
-    out += 0.38 * clank * np.minimum(1, t / 0.001)
-    # El yeso se raja: un chasquido seco y luego crujidos cada vez más espaciados
-    snap = filt(rng.normal(size=secs(0.03)), 1400, 9000) * np.exp(-tt(secs(0.03)) / 0.006)
-    s0 = secs(0.008)
-    out[s0:s0 + snap.size] += 0.9 * snap / np.abs(snap).max()
-    times = np.sort(0.01 + rng.exponential(0.11, 34))
-    times = times[times < 0.75]
-    for k, tk in enumerate(times):
-        ln = secs(0.002 + rng.random() * 0.006)
-        lo = 600 + rng.random() * 1500
-        g = filt(rng.normal(size=ln + 64), lo, lo * (2.5 + rng.random() * 3))[:ln] * np.exp(-tt(ln) / (ln / SR / 3))
-        a = 0.55 * np.exp(-tk / 0.3) * (0.4 + 0.6 * rng.random())
-        i = secs(tk)
-        out[i:i + ln] += a * g / (np.abs(g).max() + 1e-9)
-    # Cascotes: piedrecitas que golpean el suelo (y rebotan alguna vez)
-    for k in range(30):
-        tk = 0.18 + rng.gamma(2.0, 0.22)
-        if tk > 1.9:
-            continue
-        for b in range(1 + (rng.random() < 0.4)):
-            m = secs(0.05)
-            fr = 1800 + rng.random() * 4200
-            tick = modal(m, [(fr, 1, 0.006 + rng.random() * 0.008), (fr * 1.63, 0.5, 0.004)])
-            tick += 0.4 * filt(rng.normal(size=m), 2000, 9000) * np.exp(-tt(m) / 0.002)
-            i = secs(tk + b * (0.07 + rng.random() * 0.05))
-            if i + m < n:
-                out[i:i + m] += 0.16 * (0.4 + rng.random()) * (0.5 if b else 1) * tick / (np.abs(tick).max() + 1e-9)
-    # Arenilla: el polvo que cae, un siseo granulado que se apaga
+    # El cuerpo del golpe: un porrazo sordo, más grave (pesa más)
+    place(out, filt(rec("impactPunch_heavy_002", 0.72), 25, 2500), 0.0, 1.0)
+    place(out, filt(rec("impactPunch_heavy_000", 0.6), 25, 900), 0.004, 0.55)
+    # El hierro de la válvula: un golpe de metal pesado bajado de tono y apagado (hierro grueso)
+    place(out, filt(rec("impactMetal_heavy_001", 0.62), 60, 3800), 0.0, 0.42)
+    place(out, filt(rec("impactMetal_heavy_003", 0.55), 60, 2500), 0.012, 0.22)
+    # El yeso se raja: picazos en roca (con su desmoronamiento), uno encima del otro
+    place(out, filt(rec("impactMining_004", 0.85), 120, 9000), 0.006, 0.55)
+    place(out, filt(rec("impactMining_000", 0.95, start=0.03), 150, 9000), 0.05, 0.3)
+    # Cascotes y polvo: las colas de desmoronamiento de las grabaciones, sueltas, cada vez menos
+    tails = [("impactMining_001", 0.10), ("impactMining_003", 0.12), ("impactMining_000", 0.15), ("impactMining_004", 0.14)]
+    for k in range(9):
+        name, st = tails[k % len(tails)]
+        x = rec(name, 1.1 + rng.random() * 0.45, start=st)
+        x[:secs(0.03)] *= np.linspace(0, 1, secs(0.03))           # sin el golpe del pico
+        tk = 0.16 + rng.gamma(1.6, 0.22)
+        place(out, filt(x, 400, 8000), tk, 0.22 * np.exp(-tk / 0.9) * (0.6 + 0.4 * rng.random()))
+    for k in range(6):
+        x = rec("footstep_concrete_00%d" % (1 + k % 2), 1.6 + rng.random() * 0.6)
+        tk = 0.25 + rng.gamma(2.0, 0.25)
+        place(out, filt(x, 700, 9000), tk, 0.08 * (0.5 + rng.random()))
+    # Arenilla que sigue cayendo un poco
     sand = band_noise(n, 1500, 7000)
     grain = np.clip(rng.normal(size=n // 64 + 1), 0, None).repeat(64)[:n]
-    sand_env = np.minimum(1, np.maximum(t - 0.08, 0) / 0.15) * np.exp(-np.maximum(t - 0.2, 0) / 0.55)
-    out += 0.09 * sand * filt(grain, 1, 60) / 2.0 * sand_env
-    out = room(out, wet=0.25, length=0.8)
+    sand_env = np.minimum(1, np.maximum(t - 0.1, 0) / 0.2) * np.exp(-np.maximum(t - 0.3, 0) / 0.5)
+    out += 0.05 * sand * filt(grain, 1, 60) / 2.0 * sand_env
+    out = room(out, wet=0.28, length=0.9, tone=3000)
     return fade_edges(norm(out, 0.95), 0.0005, 0.3)
 
 
@@ -179,50 +192,24 @@ def flicker():
 
 
 # --------------------------------------------------------------------------
-# La válvula oxidada (rozamiento a tirones: cada tirón hace sonar el hierro)
+# La válvula oxidada: crujidos reales de bisagra, más graves (hierro grande) y con el roce del eje
 
-BODY = [(287, 1.0, 0.035), (291, 0.6, 0.03), (743, 0.7, 0.025), (1210, 0.5, 0.018), (1890, 0.35, 0.012), (2780, 0.2, 0.008)]
-
-
-def slips(n, rate_fn, amp_fn, jitter=0.08):
-    """Tren de tirones: rate_fn(t) tirones por segundo, amp_fn(t) su fuerza."""
-    x = np.zeros(n)
-    tk = 0.0
-    while True:
-        r = rate_fn(tk)
-        if r <= 0:
-            tk += 0.01
-        else:
-            tk += (1 / r) * (1 + rng.normal(0, jitter))
-        if tk >= n / SR:
-            break
-        a = amp_fn(tk)
-        if a > 0:
-            x[int(tk * SR)] += a * (0.6 + 0.4 * rng.random())
-    return x
+CREAKS = [("creak1", 0.16, 0.27), ("creak1", 0.36, 0.53), ("creak2", 0.01, 0.14), ("creak2", 0.31, 0.42),
+          ("creak2", 0.51, 0.65), ("creak3", 0.06, 0.24), ("doorOpen_1", 0.10, 0.32), ("doorOpen_2", 0.15, 0.34)]
 
 
-def body(x):
-    ir = modal(secs(0.15), BODY)
-    y = conv(x, ir)[:x.size]
-    y += 0.3 * filt(x, 1500, 7000) * 10      # el raspado del óxido
-    return y
-
-
-def groan(n, t0, dur, r0, r1, a):
-    """Un quejido: la frecuencia de los tirones se desliza de r0 a r1."""
-    def rate(t):
-        u = (t - t0) / dur
-        return r0 + (r1 - r0) * (3 * u * u - 2 * u ** 3) if 0 <= u <= 1 else 0
-    def amp(t):
-        u = (t - t0) / dur
-        return a * np.sin(np.pi * np.clip(u, 0, 1)) ** 0.6 if 0 <= u <= 1 else 0
-    return slips(n, rate, amp, jitter=0.05)
+def creak_piece(k, pitch):
+    name, a, b = CREAKS[k % len(CREAKS)]
+    x = rec(name, pitch, start=a, end=b)
+    f = secs(0.012)
+    x[:f] *= np.linspace(0, 1, f)
+    x[-f:] *= np.linspace(1, 0, f)
+    return filt(x, 120, 6000)
 
 
 def grind(n, level):
     """El roce continuo del eje oxidado (periódico: vale para el bucle)."""
-    g = band_noise(n, 200, 2400, tilt=-3)
+    g = band_noise(n, 120, 1800, tilt=-3)
     t = tt(n)
     period = n / SR
     mod = 0.6 + 0.4 * np.sin(2 * np.pi * (3 / period) * t) * np.sin(2 * np.pi * (7 / period) * t + 1)
@@ -230,37 +217,31 @@ def grind(n, level):
 
 
 def creak0():
-    n = secs(1.3)
-    t = tt(n)
-    # Se suelta: unos chasquidos sueltos y secos, cada vez más seguidos, y un quejido grave
-    def rate(tk):
-        return 9 + 50 * min(1, tk / 0.45) if tk < 0.5 else 0
-    def amp(tk):
-        return 1.0 if tk < 0.5 else 0
-    x = slips(n, rate, amp, jitter=0.35)
-    x += groan(n, 0.42, 0.75, 70, 165, 0.55)
-    y = body(x)
-    y += grind(n, 0.05) * np.minimum(1, t / 0.4)
-    y = room(y, wet=0.2, length=0.6)[:n]
-    return fade_edges(norm(y, 0.9), 0.0005, 0.08)
+    n = secs(1.4)
+    out = np.zeros(n)
+    # Se suelta: un chasquido seco del metal y un crujido largo y grave
+    place(out, filt(rec("impactMetal_heavy_003", 0.5), 60, 2000), 0.0, 0.35)
+    place(out, creak_piece(6, 0.62), 0.05, 0.9)
+    place(out, creak_piece(1, 0.7), 0.55, 0.75)
+    out += grind(n, 0.05) * np.minimum(1, tt(n) / 0.3)
+    out = room(out, wet=0.22, length=0.6, tone=3000)[:n]
+    return fade_edges(norm(out, 0.9), 0.0005, 0.08)
 
 
 def creak():
     n = secs(4.0)
-    x = np.zeros(n)
-    # Quejidos de distintas alturas con huecos entre ellos (el último acaba antes del final)
-    x += groan(n, 0.15, 0.55, 140, 230, 0.5)
-    x += groan(n, 1.15, 0.40, 210, 150, 0.4)
-    x += groan(n, 1.95, 0.65, 120, 260, 0.55)
-    x += groan(n, 3.05, 0.45, 180, 240, 0.35)
-    y = body(x)
-    y = room(y, wet=0.18, length=0.5)
+    out = np.zeros(n)
+    # Crujidos de distintas alturas con huecos entre ellos (los del final no pasan del bucle)
+    for at, k, p, g in ((0.10, 7, 0.66, 0.8), (0.95, 2, 0.72, 0.6), (1.55, 5, 0.6, 0.75),
+                        (2.45, 0, 0.7, 0.55), (3.05, 4, 0.64, 0.7)):
+        place(out, creak_piece(k, p), at, g)
+    out = room(out, wet=0.2, length=0.5, tone=3000)
     # La cola de la reverberación se suma al principio (bucle sin corte)
-    tail = y[n:]
-    y = y[:n]
-    y[:tail.size] += tail
-    y += grind(n, 0.06 * np.abs(y).max())
-    return norm(y, 0.85)
+    tail = out[n:]
+    out = out[:n]
+    out[:tail.size] += tail
+    out += grind(n, 0.05 * np.abs(out).max())
+    return norm(out, 0.85)
 
 
 # --------------------------------------------------------------------------

@@ -788,11 +788,15 @@ Req *steam_req_owned(u64 steamid, const char *token)
 	return net_get(url, LANE_API);
 }
 
-static int cmp_last_played(const void *a, const void *b)
+static int cmp_name(const void *a, const void *b)
 {
 	const StoreRow *x = a, *y = b;
-	if (x->last_played != y->last_played) return x->last_played < y->last_played ? 1 : -1;
-	return y->minutes - x->minutes;
+	return strcasecmp(x->name, y->name);
+}
+
+void steam_sort_by_name(RowList *l)
+{
+	qsort(l->rows, l->count, sizeof(StoreRow), cmp_name);
 }
 
 bool steam_parse_owned(const char *json, RowList *l)
@@ -823,7 +827,7 @@ bool steam_parse_owned(const char *json, RowList *l)
 		copy(row->icon, sizeof row->icon, jstr(g, "img_icon_url"));
 		if (row->appid && row->name[0]) l->count++;
 	}
-	qsort(l->rows, l->count, sizeof(StoreRow), cmp_last_played);
+	steam_sort_by_name(l);
 	l->total = l->count;
 	l->end = true;
 	l->err[0] = 0;

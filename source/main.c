@@ -384,19 +384,134 @@ static void add_row(RowList *l, const StoreRow *r)
 	l->rows[l->count++] = *r;
 }
 
-// Juegos añadidos en esta sesión (el último primero): salen arriba en la biblioteca, que es lo
-// que esperas ver al abrirla justo después (Steam los pone al final o por número)
-static u32 added_now[8];
+// Juegos «nuevos» de la biblioteca (un punto que brilla en su fila): los que tienes y no estaban
+// la primera vez que se cargó la biblioteca en la consola, hasta que abres su ficha o los juegas.
+// Se guarda por cuenta en la SD: así un juego comprado hace tiempo en el PC también sale como nuevo
+static u32 *seen;
+static int nseen, seen_cap;
+static bool seen_exists;     // ya hay lista guardada (si no, la primera carga la crea sin puntos)
+static u64 seen_owner;       // cuenta de la lista cargada
+static u32 added_now[8];     // añadidos desde la app en esta sesión: nuevos aunque aún no hubiera lista
 static int nadded_now;
 
 static void note_added(u32 appid)
 {
-	int j = 0;
-	while (j < nadded_now && added_now[j] != appid) j++;
-	if (j == nadded_now && nadded_now < 8) nadded_now++;
-	if (j >= nadded_now) j = nadded_now - 1;
-	memmove(added_now + 1, added_now, j * sizeof *added_now);
-	added_now[0] = appid;
+	if (nadded_now < 8) added_now[nadded_now++] = appid;
+}
+
+static void seen_path(char *p, size_t n)
+{
+	snprintf(p, n, APP_DIR "/vistos_%llu.bin", (unsigned long long)auth_info()->steamid);
+}
+
+static void seen_load(void)
+{
+	u64 id = auth_info()->steamid;
+	if (seen_owner == id) return;
+	seen_owner = id;
+	nseen = 0;
+	seen_exists = false;
+	char p[96];
+	seen_path(p, sizeof p);
+	FILE *f = fopen(p, "rb");
+	if (!f) return;
+	seen_exists = true;
+	u32 a;
+	while (fread(&a, sizeof a, 1, f) == 1) {
+		if (nseen == seen_cap) {
+			int cap = seen_cap ? seen_cap * 2 : 256;
+			u32 *n = realloc(seen, cap * sizeof *n);
+			if (!n) break;
+			seen = n;
+			seen_cap = cap;
+		}
+		seen[nseen++] = a;
+	}
+	fclose(f);
+}
+
+static bool seen_has(u32 appid)
+{
+	for (int i = 0; i < nseen; i++)
+		if (seen[i] == appid) return true;
+	return false;
+}
+
+static void seen_add(u32 appid)
+{
+	if (seen_has(appid)) return;
+	if (nseen == seen_cap) {
+		int cap = seen_cap ? seen_cap * 2 : 256;
+		u32 *n = realloc(seen, cap * sizeof *n);
+		if (!n) return;
+		seen = n;
+		seen_cap = cap;
+	}
+	seen[nseen++] = appid;
+}
+
+static void seen_save(void)
+{
+	char p[96], tmp[100];
+	seen_path(p, sizeof p);
+	snprintf(tmp, sizeof tmp, "%s.tmp", p);
+	FILE *f = fopen(tmp, "wb");
+	if (!f) return;
+	bool ok = fwrite(seen, sizeof *seen, nseen, f) == (size_t)nseen;
+	ok = fclose(f) == 0 && ok;
+	if (!ok) {
+		remove(tmp);
+		return;
+	}
+	remove(p);
+	rename(tmp, p);
+	seen_exists = true;
+}
+
+static bool lib_is_new(u32 appid)
+{
+	return auth_logged() && seen_owner == auth_info()->steamid && seen_exists && !seen_has(appid);
+}
+
+// La biblioteca ya está entera: la primera vez se apunta todo lo que hay (sin puntos); después,
+// los que ya has jugado dejan de ser nuevos
+static void seen_sync(Tab *t)
+{
+	seen_load();
+	bool first = !seen_exists, changed = first;
+	for (int i = 0; i < t->list.count; i++) {
+		const StoreRow *r = &t->list.rows[i];
+		bool added = false;
+		for (int k = 0; k < nadded_now; k++) added |= added_now[k] == r->appid;
+		if ((first && !added) || (r->minutes > 0 && !seen_has(r->appid))) {
+			seen_add(r->appid);
+			changed = true;
+		}
+	}
+	if (changed) seen_save();
+}
+
+static bool owned_app(u32 appid);
+
+// Al abrir la ficha de un juego tuyo deja de ser nuevo (la de uno que aún no tienes no cuenta)
+static void seen_open(u32 appid)
+{
+	if (!lib_is_new(appid) || !owned_app(appid)) return;
+	seen_add(appid);
+	seen_save();
+}
+
+// Ordena la biblioteca por nombre sin que la selección salte a otro juego (si aún no te has
+// movido, se queda en el primero)
+static void lib_sort(Tab *t)
+{
+	u32 sel = t->sel > 0 && t->sel < t->list.count ? t->list.rows[t->sel].appid : 0;
+	steam_sort_by_name(&t->list);
+	for (int i = 0; sel && i < t->list.count; i++)
+		if (t->list.rows[i].appid == sel) {
+			if (i != t->sel) t->sel_y = t->sel = i;
+			break;
+		}
 }
 
 static void owned_poll(Tab *t)
@@ -404,9 +519,14 @@ static void owned_poll(Tab *t)
 	Req *r = t->list.req;
 	if (!r || r->state < REQ_DONE) return;
 	if (t->lib_stage == 2) {
+		// Los nombres llegan de 50 en 50: se piden todos seguidos para poder ordenar por nombre
+		bool fail = r->state != REQ_DONE;
 		list_poll(&t->list, true);
 		t->list.total = t->nwish;
 		t->list.end = t->wish_next >= t->nwish;
+		lib_sort(t);
+		if (!t->list.end && !fail) tab_more(TAB_LIBRARY);
+		else if (t->list.end) seen_sync(t);
 		return;
 	}
 	if (t->lib_stage == 0) {
@@ -439,13 +559,6 @@ static void owned_poll(Tab *t)
 			free(ids);
 			return;
 		}
-		for (int k = nadded_now - 1; k >= 0; k--)
-			for (int j = 1; j < n; j++)
-				if (ids[j] == added_now[k]) {
-					memmove(ids + 1, ids, j * sizeof *ids);
-					ids[0] = added_now[k];
-					break;
-				}
 		free(t->wish);
 		t->wish = ids;
 		t->nwish = n;
@@ -457,17 +570,10 @@ static void owned_poll(Tab *t)
 		tab_more(TAB_LIBRARY);
 		return;
 	}
-	for (int k = nadded_now - 1; k >= 0; k--)
-		for (int j = 1; j < t->list.count; j++)
-			if (t->list.rows[j].appid == added_now[k]) {
-				StoreRow row = t->list.rows[j];
-				memmove(t->list.rows + 1, t->list.rows, j * sizeof row);
-				t->list.rows[0] = row;
-				break;
-			}
 	net_release(r);
 	t->list.req = NULL;
 	t->sel_changed = osGetTime();
+	seen_sync(t);
 }
 
 static void wish_poll(Tab *t)
@@ -1316,7 +1422,14 @@ static void draw_store_bottom(void)
 			if (r->minutes >= 60) snprintf(hrs, sizeof hrs, "%d h", (r->minutes + 30) / 60);
 			else if (r->minutes) snprintf(hrs, sizeof hrs, "%d min", r->minutes);
 			else snprintf(hrs, sizeof hrs, "–");
-			ui_text(BOT_W - 10, vc(y, ROW_H - 1, SZ_SMALL), hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+			ui_text(BOT_W - 22, vc(y, ROW_H - 1, SZ_SMALL), hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+			if (lib_is_new(r->appid)) {
+				// Nuevo: un punto que brilla al otro lado de la barrita, hasta que abres su ficha
+				float cx = BOT_W - 12, cy = y + (ROW_H - 1) / 2.0f, pu = 0.5f + 0.5f * sinf(g_time * 3.2f + i);
+				ui_circle(cx, cy, 5.5f, col_alpha(COL_ACC, 0.10f + 0.16f * pu));
+				ui_circle(cx, cy, 3.2f, col_alpha(COL_ACC, 0.85f + 0.15f * pu));
+				ui_circle(cx - 0.8f, cy - 0.8f, 1.1f, col_alpha(COL_WHITE, 0.7f));
+			}
 		} else if (r->coming_soon && !r->price[0]) {
 			ui_text(BOT_W - 10, vc(y, ROW_H - 1, SZ_TINY), _("Próximamente"), SZ_TINY, COL_DIM, AL_RIGHT, 0);
 		} else {
@@ -1557,6 +1670,7 @@ static void open_game(u32 appid, bool push)
 	if (!push) S.depth = 0;
 	go_scene(SC_GAME, 1);
 	S.app = appid;
+	seen_open(appid);
 	S.sec = SEC_SUMMARY;
 	S.show_qr = false;
 	S.pick_open = false;

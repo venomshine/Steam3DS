@@ -138,7 +138,8 @@ Req *steam_req_country(void);
 
 // Con sesión (token de acceso)
 Req *steam_req_owned(u64 steamid, const char *token);
-bool steam_parse_owned(const char *json, RowList *list);     // ordenada por la última vez que jugaste
+bool steam_parse_owned(const char *json, RowList *list);     // ordenada por nombre, como en Steam
+void steam_sort_by_name(RowList *list);
 Req *steam_req_wishlist(u64 steamid, const char *token);
 int steam_parse_wishlist(const char *json, u32 **ids);       // appids por prioridad (malloc); -1 si falla
 // store.steampowered.com/dynamicstore/userdata/ (con las cookies de la tienda): juegos que tienes

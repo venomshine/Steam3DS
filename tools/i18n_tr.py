@@ -90,7 +90,6 @@ TR = {
     "Capturas (%d)": ("Screenshots (%d)", "スクリーンショット (%d)"),
     "Disponible al iniciar sesión": ("Available after signing in", "サインイン後に使えます"),
     "Comprar en el móvil": ("Buy on phone", "スマホで購入"),
-    "B para volver": ("B to go back", "Bで戻る"),
 
     # Características
     "1 jugador": ("Single-player", "シングルプレイヤー"),
@@ -121,7 +120,6 @@ TR = {
     "MÍNIMO": ("MINIMUM", "最低"),
     "RECOMENDADO": ("RECOMMENDED", "推奨"),
     "Steam no indica requisitos para este juego": ("Steam doesn't list requirements for this game", "このゲームの動作環境は記載されていません"),
-    "También en Linux": ("Also on Linux", "Linuxにも対応"),
 
     # Opiniones
     "%d %% de %d reseñas": ("%d %% of %d reviews", "%d %% (%d 件)"),
@@ -184,6 +182,7 @@ TR = {
     "No hay juegos en tu biblioteca": ("There are no games in your library", "ライブラリにゲームがありません"),
     "Nivel de Steam": ("Steam level", "Steamレベル"),
     "Cargando tu biblioteca…": ("Loading your library…", "ライブラリを読み込み中…"),
+    "Aún no hay horas de juego en tu cuenta": ("No playtime on your account yet", "まだプレイ時間の記録がありません"),
     "%d juegos · %ld h jugadas": ("%d games · %ld h played", "%d 本 · %ld 時間プレイ"),
     "LO MÁS JUGADO": ("MOST PLAYED", "よくプレイしたゲーム"),
     "Tu cuenta de Steam": ("Your Steam account", "あなたのSteamアカウント"),
@@ -343,9 +342,6 @@ TR = {
     'La oferta acaba en %s': ('Offer ends in %s', 'セール終了まで %s'),
     'Las fichas enseñan los requisitos de Windows': ('Game pages show Windows requirements', 'Windowsの必要環境を表示します'),
     'Las fichas enseñan los requisitos de macOS': ('Game pages show macOS requirements', 'macOSの必要環境を表示します'),
-    'Mostrando macOS · para Windows: START › Requisitos': ('Showing macOS · for Windows: START › Requirements', 'macOSを表示中 · Windowsは START › 必要環境'),
-    'También en macOS y Linux · para ver los de macOS: START › Requisitos': ('Also on macOS and Linux · for macOS: START › Requirements', 'macOS・Linuxにも対応 · macOSは START › 必要環境'),
-    'También en macOS · para ver sus requisitos: START › Requisitos': ('Also on macOS · to see its requirements: START › Requirements', 'macOSにも対応 · 必要環境は START › 必要環境'),
     'Ver en Steam': ('Check on Steam', 'Steamで見る'),
     'requisitos del sistema (Windows)': ('system requirements (Windows)', '必要環境（Windows）'),
     'requisitos del sistema (macOS)': ('system requirements (macOS)', '必要環境（macOS）'),

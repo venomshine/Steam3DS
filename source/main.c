@@ -740,6 +740,43 @@ static void draw_tag(float *x, float y, const char *t)
 	*x += w + 4;
 }
 
+// Pantalla de un QR (arriba): el código a la izquierda y, a la derecha, el título subrayado, la
+// explicación y, si se da, la portada del juego con su nombre o una línea más. Todo centrado en
+// el alto que queda bajo la barra de arriba
+static void draw_qr_panel(const char *url, const char *title, const char *body, const AppInfo *a, const char *foot, u32 foot_col)
+{
+	const float qs = 170, area = SCR_H - 18;
+	ui_qr(url, 20, 18 + (area - qs) / 2, qs);
+	const float x = 206, w = TOP_W - 12 - x, ih = floorf(w * 215 / 460);
+	int nb = ui_text_lines(body, SZ_SMALL, w);
+	if (nb > 7) nb = 7;
+	int nf = foot ? ui_text_lines(foot, SZ_SMALL, w) : 0;
+	if (nf > 2) nf = 2;
+	float h = ui_line_h(SZ_LARGE) + 10 + (nb - 1) * 14 + ui_line_h(SZ_SMALL);
+	if (a) h += 12 + ih + 6 + ui_line_h(SZ_SMALL);
+	if (nf) h += 10 + (nf - 1) * 14 + ui_line_h(SZ_SMALL);
+	float y = 18 + (area - h) / 2;
+	float tw = ui_text(x, y, title, SZ_LARGE, COL_WHITE, AL_LEFT, w);
+	ui_rrect(x, y + 19, tw < w ? tw : w, 2, 1, col_alpha(COL_ACC, 0.8f));   // subrayado, como al iniciar sesión
+	y += ui_line_h(SZ_LARGE) + 10;
+	ui_text_wrap(x, y, w, body, SZ_SMALL, COL_TXT, 7, 14);
+	y += (nb - 1) * 14 + ui_line_h(SZ_SMALL);
+	if (a) {
+		y += 12;
+		const Pic *p = img_get(a->header, 460);
+		ui_rect(x - 1, y - 1, w + 2, ih + 2, C2D_Color32(0xff, 0xff, 0xff, 0x30));
+		if (p) img_draw_cover(p, x, y, w, ih, 0.5f);
+		else {
+			ui_rect(x, y, w, ih, COL_PANEL);
+			if (!img_failed(a->header)) ui_spinner(x + w / 2, y + ih / 2, 6, COL_DIM);
+		}
+		y += ih + 6;
+		ui_text(x, y, a->name, SZ_SMALL, COL_WHITE, AL_LEFT, w);
+		y += ui_line_h(SZ_SMALL);
+	}
+	if (nf) ui_text_wrap(x, y + 10, w, foot, SZ_SMALL, foot_col, 2, 14);
+}
+
 static void draw_rating(float x, float y, float s, const AppInfo *a)
 {
 	if (!a->rating[0]) return;
@@ -1016,13 +1053,10 @@ static void draw_store_top(void)
 		return;
 	}
 	if (S.tab == TAB_CART && S.cart_qr) {
-		ui_qr("https://store.steampowered.com/cart/", 20, 34, 170);
-		ui_text(206, 50, _("Pagar en el móvil"), SZ_LARGE, COL_WHITE, AL_LEFT, 180);
-		ui_text_wrap(206, 74, 180, _("Escanea el código: se abre tu carrito de Steam, el mismo de aquí, y lo pagas desde ahí."), SZ_SMALL, COL_TXT, 6, 14);
 		char tot[64];
 		snprintf(tot, sizeof tot, _("Total: %s"), shop_cart()->subtotal);
-		ui_text(206, 160, tot, SZ_BODY, COL_LIME, AL_LEFT, 180);
-		ui_text(TOP_W / 2, SCR_H - 18, _("B para volver"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+		draw_qr_panel("https://store.steampowered.com/cart/", _("Pagar en el móvil"),
+			_("Escanea el código: se abre tu carrito de Steam, el mismo de aquí, y lo pagas desde ahí."), NULL, tot, COL_LIME);
 		return;
 	}
 	if (S.tab == TAB_CART && shop_cart_loaded() && shop_cart()->n == 0) {
@@ -1840,11 +1874,8 @@ static void draw_game_top(void)
 	if (S.show_qr) {
 		char url[96];
 		snprintf(url, sizeof url, "https://store.steampowered.com/app/%lu/", (unsigned long)a->appid);
-		ui_qr(url, 20, 34, 170);
-		ui_text(206, 50, _("Ver en Steam"), SZ_LARGE, COL_WHITE, AL_LEFT, 180);
-		ui_text_wrap(206, 74, 180, _("Escanea el código con la cámara del móvil: se abre la página de este juego en la tienda de Steam."), SZ_SMALL, COL_TXT, 6, 14);
-		ui_text(206, 170, a->name, SZ_SMALL, COL_DIM, AL_LEFT, 180);
-		ui_text(TOP_W / 2, SCR_H - 18, _("B para volver"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+		draw_qr_panel(url, _("Ver en Steam"),
+			_("Escanea el código con la cámara del móvil: se abre la página de este juego en la tienda de Steam."), a, NULL, 0);
 		return;
 	}
 	C3D_Mtx view;
@@ -3197,17 +3228,14 @@ static void draw_pay_top(void)
 {
 	const PayInfo *p = pay_info();
 	if (S.pay_qr) {
-		ui_qr("https://store.steampowered.com/cart/", 20, 34, 170);
-		ui_text(206, 50, _("Pagar en el móvil"), SZ_LARGE, COL_WHITE, AL_LEFT, 180);
-		ui_text_wrap(206, 74, 180, _("Escanea el código: se abre tu carrito de Steam, el mismo de aquí, y lo pagas desde ahí."), SZ_SMALL, COL_TXT, 6, 14);
-		ui_text(TOP_W / 2, SCR_H - 18, _("B para volver"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+		draw_qr_panel("https://store.steampowered.com/cart/", _("Pagar en el móvil"),
+			_("Escanea el código: se abre tu carrito de Steam, el mismo de aquí, y lo pagas desde ahí."), NULL, NULL, 0);
 		return;
 	}
 	if (p->state == PAY_BANK) {
-		ui_qr(p->bank_url, 20, 34, 170);
-		ui_text(206, 40, _("Tu banco quiere verificar"), SZ_LARGE, COL_WHITE, AL_LEFT, 182);
-		ui_text_wrap(206, 64, 182, _("Escanea el código con el móvil y confirma la compra como te pida el banco. Esta pantalla seguirá sola cuando esté hecho."), SZ_SMALL, COL_TXT, 7, 14);
-		ui_text_wrap(206, 170, 182, _("Si no la verificas, no se cobra nada."), SZ_SMALL, COL_DIM, 2, 14);
+		draw_qr_panel(p->bank_url, _("Tu banco quiere verificar"),
+			_("Escanea el código con el móvil y confirma la compra como te pida el banco. Esta pantalla seguirá sola cuando esté hecho."),
+			NULL, _("Si no la verificas, no se cobra nada."), COL_DIM);
 		return;
 	}
 	if (p->state == PAY_DONE) {

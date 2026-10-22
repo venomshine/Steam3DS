@@ -329,6 +329,128 @@ static void replace_all(char *s, size_t n, const char *from, const char *to)
 	}
 }
 
+// «Acerca de este juego» a texto: fuera imágenes y vídeos; títulos marcados con \x01 al principio
+// de su línea, listas con «• », párrafos separados por una línea en blanco
+static char *html_to_about(const char *in)
+{
+	if (!in) return NULL;
+	size_t cap = strlen(in) + 64;
+	char *out = malloc(cap);
+	if (!out) return NULL;
+	size_t o = 0;
+	int skip = 0;   // dentro de <video> o <script>
+	while (*in && o + 8 < cap) {
+		if (*in == '<') {
+			const char *e = strchr(in, '>');
+			if (!e) break;
+			bool close = in[1] == '/';
+			const char *tag = in + (close ? 2 : 1);
+			if (!strncasecmp(tag, "video", 5) || !strncasecmp(tag, "script", 6)) skip += close ? -1 : 1;
+			else if (!skip) {
+				if ((tag[0] == 'h' || tag[0] == 'H') && tag[1] >= '1' && tag[1] <= '6') {
+					out[o++] = '\n';
+					if (!close) out[o++] = '\x01';
+					else out[o++] = '\n';
+				} else if (!strncasecmp(tag, "br", 2)) {
+					out[o++] = '\n';
+				} else if (!strncasecmp(tag, "p", 1) && (tag[1] == '>' || tag[1] == ' ') && close) {
+					out[o++] = '\n';
+					out[o++] = '\n';
+				} else if (!strncasecmp(tag, "li", 2) && !close) {
+					out[o++] = '\n';
+					memcpy(out + o, "• ", 4);
+					o += 4;
+				} else if (!strncasecmp(tag, "ul", 2) && close) {
+					out[o++] = '\n';
+				}
+			}
+			if (skip < 0) skip = 0;
+			in = e + 1;
+		} else if (skip) {
+			in++;
+		} else if (*in == '&') {
+			static const struct { const char *e; const char *r; } ents[] = {
+				{"&amp;", "&"}, {"&quot;", "\""}, {"&lt;", "<"}, {"&gt;", ">"}, {"&nbsp;", " "},
+				{"&#39;", "'"}, {"&reg;", "®"}, {"&trade;", "™"}, {"&copy;", "©"},
+			};
+			bool done = false;
+			for (size_t i = 0; i < sizeof ents / sizeof *ents; i++) {
+				size_t l = strlen(ents[i].e);
+				if (!strncmp(in, ents[i].e, l)) {
+					size_t rl = strlen(ents[i].r);
+					memcpy(out + o, ents[i].r, rl);
+					o += rl;
+					in += l;
+					done = true;
+					break;
+				}
+			}
+			if (!done) out[o++] = *in++;
+		} else if (*in == '\r' || *in == '\t' || *in == '\n') {
+			if (o && out[o - 1] != ' ' && out[o - 1] != '\n') out[o++] = ' ';
+			in++;
+		} else {
+			out[o++] = *in++;
+		}
+	}
+	out[o] = 0;
+	// Limpieza: espacios al empezar línea, títulos vacíos y como mucho una línea en blanco seguida
+	size_t w = 0;
+	int nl = 2;
+	for (size_t i = 0; i < o; i++) {
+		char c = out[i];
+		if (c == ' ' && (nl || (w && out[w - 1] == ' '))) continue;
+		if (c == '\n') {
+			while (w && out[w - 1] == ' ') w--;
+			if (w && out[w - 1] == '\x01') { w--; continue; }   // título vacío
+			if (nl >= 2) continue;
+			nl++;
+			out[w++] = c;
+			continue;
+		}
+		if (c != '\x01') nl = 0;
+		out[w++] = c;
+	}
+	while (w && (out[w - 1] == '\n' || out[w - 1] == ' ')) w--;
+	out[w] = 0;
+	// Títulos sin texto debajo (antes de otro título o del final): fuera. Pasa cuando lo que
+	// seguía eran solo imágenes o vídeos
+	char *dst = out;
+	bool text = false;
+	for (char *line = out; *line;) {
+		char *end = strchr(line, '\n');
+		size_t len = end ? (size_t)(end - line) + 1 : strlen(line);
+		bool heading = line[0] == '\x01';
+		bool keep = true;
+		if (heading) {
+			keep = false;
+			for (char *q = line + len; *q;) {
+				char *qe = strchr(q, '\n');
+				size_t ql = qe ? (size_t)(qe - q) : strlen(q);
+				if (ql && q[0] != '\x01') { keep = true; break; }
+				if (ql && q[0] == '\x01') break;
+				q += ql + (qe ? 1 : 0);
+			}
+		} else if (len > 1) {
+			text = true;
+		}
+		if (keep) {
+			memmove(dst, line, len);
+			dst += len;
+		}
+		line += len;
+	}
+	*dst = 0;
+	w = dst - out;
+	while (w && (out[w - 1] == '\n' || out[w - 1] == ' ')) out[--w] = 0;
+	tidy_utf8(out);
+	if (!w || !text) {
+		free(out);
+		return NULL;
+	}
+	return out;
+}
+
 static int parse_requirements(const char *html, ReqLine *out, int max)
 {
 	if (!html) return 0;
@@ -417,6 +539,31 @@ bool steam_parse_appdetails(const char *json, u32 appid, AppInfo *a)
 			tidy_utf8(a->desc);
 		}
 	}
+	a->about = html_to_about(jstr(d, "about_the_game"));
+	if (!a->about) a->about = html_to_about(jstr(d, "detailed_description"));
+	// Sin descripción corta (pasa en algunas demos): el principio del «acerca de», sin títulos
+	if ((!a->desc || !a->desc[0]) && a->about) {
+		free(a->desc);
+		a->desc = strdup(a->about);
+		if (a->desc) {
+			for (char *q = a->desc; *q; q++) if (*q == '\n' || *q == '\x01') *q = ' ';
+			if (strlen(a->desc) > 400) a->desc[400] = 0;
+		}
+	}
+	if (a->desc) {
+		// Sin espacios al principio ni al final
+		char *q = a->desc;
+		while (*q == ' ' || *q == '\n') q++;
+		memmove(a->desc, q, strlen(q) + 1);
+		size_t dl = strlen(a->desc);
+		while (dl && (a->desc[dl - 1] == ' ' || a->desc[dl - 1] == '\n')) a->desc[--dl] = 0;
+		if (!dl) {
+			free(a->desc);
+			a->desc = NULL;
+		}
+	}
+	const cJSON *dm = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(d, "demos"), 0);
+	if (dm) a->demo = (u32)jnum(dm, "appid", 0);
 	copy(a->header, sizeof a->header, jstr(d, "header_image"));
 	a->is_free = jbool(d, "is_free");
 
@@ -485,6 +632,11 @@ bool steam_parse_appdetails(const char *json, u32 appid, AppInfo *a)
 	if (cJSON_IsObject(pc)) {
 		a->nmin = parse_requirements(jstr(pc, "minimum"), a->rmin, 7);
 		a->nrec = parse_requirements(jstr(pc, "recommended"), a->rrec, 7);
+	}
+	const cJSON *macr = cJSON_GetObjectItemCaseSensitive(d, "mac_requirements");
+	if (cJSON_IsObject(macr)) {
+		a->nmmin = parse_requirements(jstr(macr, "minimum"), a->mmin, 7);
+		a->nmrec = parse_requirements(jstr(macr, "recommended"), a->mrec, 7);
 	}
 	const cJSON *pl = cJSON_GetObjectItemCaseSensitive(d, "platforms");
 	if (pl) {
@@ -719,6 +871,8 @@ void appinfo_free(AppInfo *a)
 {
 	free(a->desc);
 	a->desc = NULL;
+	free(a->about);
+	a->about = NULL;
 	for (int i = 0; i < a->nshots; i++) free(a->shots[i]);
 	a->nshots = 0;
 }
@@ -779,6 +933,12 @@ int steam_parse_buyopts(const char *json, u32 appid, BuyOpt *out, int max)
 			copy_utf8(b->name, sizeof b->name, jstr(p, "purchase_option_name"));
 			opt_prices(p, b->price, b->orig, &b->disc);
 			b->free = jbool(p, "is_free_license");
+			// La oferta acaba cuando acaba el primero de sus descuentos
+			const cJSON *ad;
+			cJSON_ArrayForEach(ad, cJSON_GetObjectItemCaseSensitive(p, "active_discounts")) {
+				u32 end = (u32)jnum(ad, "discount_end_date", 0);
+				if (end && (!b->disc_end || end < b->disc_end)) b->disc_end = end;
+			}
 			n++;
 		}
 	}
@@ -973,4 +1133,21 @@ bool steam_parse_wallet(const char *json, WalletInfo *w)
 	copy(w->country, sizeof w->country, jstr(r, "wallet_country_code"));
 	cJSON_Delete(root);
 	return true;
+}
+
+int steam_parse_userdata_owned(const char *json, u32 **ids)
+{
+	*ids = NULL;
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *apps = cJSON_GetObjectItemCaseSensitive(root, "rgOwnedApps");
+	if (!cJSON_IsArray(apps)) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = cJSON_GetArraySize(apps), k = 0;
+	*ids = malloc(sizeof(u32) * (n ? n : 1));
+	const cJSON *it;
+	cJSON_ArrayForEach(it, apps) if (cJSON_IsNumber(it) && *ids) (*ids)[k++] = (u32)it->valuedouble;
+	cJSON_Delete(root);
+	return k;
 }

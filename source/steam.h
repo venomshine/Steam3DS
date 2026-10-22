@@ -86,6 +86,10 @@ typedef struct {
 
 	ReqLine rmin[7], rrec[7];
 	int nmin, nrec;
+	ReqLine mmin[7], mrec[7];   // macOS
+	int nmmin, nmrec;
+	char *about;                // «Acerca de este juego» en texto: \x01 delante de los títulos, «• » en las listas
+	u32 demo;                   // demo gratuita del juego (0 si no tiene)
 	bool mac, lnx;
 
 	char review_label[40];
@@ -134,6 +138,8 @@ Req *steam_req_owned(u64 steamid, const char *token);
 bool steam_parse_owned(const char *json, RowList *list);     // ordenada por la última vez que jugaste
 Req *steam_req_wishlist(u64 steamid, const char *token);
 int steam_parse_wishlist(const char *json, u32 **ids);       // appids por prioridad (malloc); -1 si falla
+// store.steampowered.com/dynamicstore/userdata/ (con las cookies de la tienda): juegos que tienes
+int steam_parse_userdata_owned(const char *json, u32 **ids); // appids (malloc); -1 si falla
 
 void appinfo_free(AppInfo *a);
 void rowlist_free(RowList *l);
@@ -147,6 +153,7 @@ typedef struct {
 	char price[20], orig[20];
 	int disc;
 	bool free;                  // licencia gratuita
+	u32 disc_end;               // cuándo acaba la oferta (hora Unix, UTC; 0 si no hay o no se sabe)
 } BuyOpt;
 
 Req *steam_req_buyopts(u32 appid);

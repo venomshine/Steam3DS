@@ -86,14 +86,14 @@ def wheel(size, angle=18.0, spokes=5, color_out=LIGHT, color_in=ACC):
     return out
 
 
-def valve_logo(size, angle=-90.0, spokes=5):
+def valve_logo(size, angle=-90.0, spokes=5, light=False):
     """El logo de Steam redibujado con nuestras válvulas: de reojo es el mismo (el círculo con el
     degradado, la biela, el brazo y los dos aros), pero cada aro blanco es una rueda de válvula
     entera (aro, radios, cubo y agarres) y los círculos de dentro desaparecen. La biela y el brazo
     quedan detrás y la válvula delante, separada por una raya fina del color del fondo.
 
     La geometría está medida sobre el logo oficial en un lienzo de 1500. Devuelve RGBA de
-    size×size (a 8×)."""
+    size×size (a 8×). light: el círculo en el azul clarito de la válvula de antes (para el banner)."""
     s = size * K
     f = s / 1500.0
 
@@ -131,7 +131,9 @@ def valve_logo(size, angle=-90.0, spokes=5):
     # Detrás: la biela y el brazo (entra por la izquierda, cortado por el círculo)
     back, bd = layer()
     BIG, SMALL = (975.5, 577.0), (538.0, 1015.0)
-    bd.polygon([P(713, 580), P(546, 825), P(729, 1010), P(969, 838)], fill=255)
+    # Los lados de la biela son los del oficial, alargados hasta dentro de cada válvula para que no
+    # asome ninguna esquina por fuera del aro
+    bd.polygon([P(797.5, 456), P(455, 958.4), P(600.5, 1102), P(1096.8, 746.7)], fill=255)
     ux, uy = math.cos(math.radians(22.4)), math.sin(math.radians(22.4))
     nx, ny = -uy, ux
     hw, ex, ey, far = 108.5, 530.0, 1013.0, 900.0
@@ -156,6 +158,8 @@ def valve_logo(size, angle=-90.0, spokes=5):
     stops = [(0.0, (0x10, 0x1d, 0x2d)), (0.17, (0x0a, 0x1b, 0x33)), (0.35, (0x07, 0x19, 0x38)),
              (0.6, (0x12, 0x2c, 0x60)), (0.75, (0x14, 0x4e, 0x81)), (0.86, (0x13, 0x64, 0x96)),
              (1.0, (0x14, 0x86, 0xbb))]
+    if light:
+        stops = [(0.0, (0x8f, 0xd2, 0xf8)), (0.5, ACC), (1.0, (0x3a, 0x9c, 0xe0))]
     t = np.clip((np.arange(s) / f - 60) / (1438 - 60), 0, 1)
     col = np.zeros((s, 3))
     for (t0, c0), (t1, c1) in zip(stops, stops[1:]):
@@ -245,7 +249,7 @@ def banner():
     im = vgrad(W, H, (0x24, 0x3b, 0x50), NAVY_BOT)
     g = down(glow(128), (int(150 * K), int(150 * K)))
     im.alpha_composite(g, (int(-12 * K), int(-11 * K)))
-    im.alpha_composite(valve_logo(92), (int(6 * K), int(18 * K)))
+    im.alpha_composite(valve_logo(92, light=True), (int(6 * K), int(18 * K)))
     d = ImageDraw.Draw(im)
     x0, maxw = 102 * K, 144 * K
 

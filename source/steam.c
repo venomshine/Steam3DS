@@ -211,7 +211,10 @@ bool steam_parse_rows(const char *json, RowList *list, bool append)
 	int added = 0;
 	const cJSON *it;
 	cJSON_ArrayForEach(it, items) {
-		if (!jstr(it, "name")) continue;
+		// Lo que no está en la tienda (herramientas, servidores, apps ocultas) llega sin nombre y
+		// con appid 0: en la biblioteca salía como una fila vacía que no abría nada
+		const char *name = jstr(it, "name");
+		if (!name || !*name || jnum(it, "appid", 0) <= 0) continue;
 		if (list->count == list->cap) {
 			int cap = list->cap ? list->cap * 2 : 32;
 			StoreRow *r = realloc(list->rows, cap * sizeof(StoreRow));

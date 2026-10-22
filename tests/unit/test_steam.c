@@ -94,6 +94,11 @@ int main(void) {
 	RowList ia = {0};
 	CHECK(steam_parse_rows("{\"response\":{\"store_items\":[{\"appid\":367520,\"name\":\"Hollow Knight\",\"assets\":{\"community_icon\":\"f6ab055c2366237200b1a31cccbd6cf81e436d72\"}}]}}", &ia, false));
 	CHECK(ia.count == 1 && !strcmp(ia.rows[0].icon, "f6ab055c2366237200b1a31cccbd6cf81e436d72"));
+	// Lo que no está en la tienda llega sin nombre y con appid 0 (respuesta real de GetItems para 228980)
+	RowList inv = {0};
+	CHECK(steam_parse_rows("{\"response\":{\"store_items\":[{\"item_type\":0,\"id\":228980,\"success\":15,\"visible\":false,\"name\":\"\",\"appid\":0},{\"appid\":730,\"name\":\"Counter-Strike 2\"}]}}", &inv, false));
+	CHECK(inv.count == 1 && inv.rows[0].appid == 730);
+	rowlist_free(&inv);
 	steam_req_items((u32[]){367520}, 1, true);
 	CHECK(strstr(last_url, "include_assets") != NULL);
 	// Deseados: por prioridad, y la 0 («sin ordenar») al final

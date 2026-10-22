@@ -3,14 +3,16 @@
 
 La válvula es un mapa de alturas (aro como tubo, radios cilíndricos, cubo abombado con su
 agujero y agarres esféricos), sucia de mugre negra pegada a ella, e iluminada por un bombillo
-flojo y cálido arriba a la derecha. Tiene cinco radios, así que el giro se repite cada 72°:
-basta con 24 fotogramas de 3°. Se hornean con la luz en los dos extremos del balanceo y la
+flojo y cálido arriba a la derecha. Tiene cinco radios, así que la forma se repite cada 72°:
+basta con 24 fotogramas de 3°. La mugre no se repite (si se horneara, saltaría 72° atrás al
+volver al primer fotograma): va en una capa aparte que la consola gira entera. Se hornean con la luz en los dos extremos del balanceo y la
 consola los mezcla según dónde esté el bombillo (y gira la imagen lo que falte entre dos
 fotogramas, como mucho 1,5°).
 
 Salida:
   gfx/w3d/aNN.png   24 fotogramas, luz en un extremo del balanceo
   gfx/w3d/bNN.png   24 fotogramas, luz en el otro
+  gfx/wheel_dirt.png     la mugre (negra, con arañazos claros), para dibujar encima girada
   gfx/wheel_shadow.png   la silueta difuminada (la sombra en la pared; la consola la gira)
 
 Uso: python3 tools/gen_wheel3d.py   (solo necesita numpy y Pillow)
@@ -68,9 +70,11 @@ def grime_map(s, seed=7):
     return blot, fine, spots, scratches
 
 
-def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, ss=4, dirt=0.0, amb=0.42, kd=0.78, tint=(1, 1, 1), ks=0.75):
+def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, ss=4, dirt=0.0, amb=0.42, kd=0.78, tint=(1, 1, 1), ks=0.75, split=False):
     """Válvula con relieve: mapa de alturas (aro como tubo, radios cilíndricos, cubo abombado y
-    agarres esféricos) iluminado desde arriba a la derecha. Devuelve RGBA size×size."""
+    agarres esféricos) iluminado desde arriba a la derecha. Devuelve RGBA size×size.
+    split: la mugre que no se repite cada 72° (manchas, grano, salpicaduras y arañazos) no se
+    hornea; se devuelve aparte como capa (la consola la gira entera, sin saltos)."""
     s = size * ss
     c = (s - 1) / 2
     y, x = np.mgrid[0:s, 0:s].astype(float)
@@ -144,8 +148,21 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
         crev = np.clip((blur(z, ss * 2.5) - z) * 9, 0, 1)            # rincones y uniones
         low = np.clip(1 - z / (0.12 * relief + 1e-6), 0, 1) * mask    # lo más bajo, junto al canto
         black = np.clip(0.55 * np.clip((blot - 0.35) * 1.8, 0, 1) + 0.25 * fine + 0.9 * crev + 0.35 * low + 0.25 * spots, 0, 0.72)
+        if split:
+            # En los fotogramas solo la mugre de la forma (rincones y canto), que gira con los radios;
+            # el resto oscurece lo mismo desde la capa: (1 - 0.82·total) = (1 - 0.82·forma)·(1 - a)
+            shape = np.clip(0.9 * crev + 0.35 * low, 0, 0.72)
+            a = 1 - (1 - 0.82 * dirt * black) / (1 - 0.82 * dirt * shape)
+            e = scr * 0.15 * dirt * (1 - black)                  # arañazos: un velo claro y cálido
+            A = np.clip(a + e, 0, 1) * mask
+            g = np.where(A > 1e-4, e / np.maximum(A, 1e-4), 0)
+            layer = np.zeros((s, s, 4))
+            layer[..., :3] = (g[..., None] * np.array(tint) * 0.85) * A[..., None]   # premultiplicado
+            layer[..., 3] = A
+            black = shape
         albedo = albedo * (1 - 0.82 * dirt * black)[..., None]
-        albedo = np.clip(albedo + (scr * 0.18 * dirt * (1 - black))[..., None], 0, 1)   # arañazos claros donde no hay mugre
+        if not split:
+            albedo = np.clip(albedo + (scr * 0.18 * dirt * (1 - black))[..., None], 0, 1)   # arañazos claros donde no hay mugre
         spec_mask = 1 - 0.8 * dirt * black
     else:
         spec_mask = 1
@@ -157,7 +174,18 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
     rgba[..., :3] = np.clip(col, 0, 1) * 255
     rgba[..., 3] = mask * 255
     im = Image.fromarray(rgba.astype('uint8'), 'RGBA')
-    return im.resize((size, size), Image.LANCZOS), Image.fromarray((mask * 255).astype('uint8')).resize((size, size), Image.LANCZOS)
+    im = im.resize((size, size), Image.LANCZOS)
+    m = Image.fromarray((mask * 255).astype('uint8')).resize((size, size), Image.LANCZOS)
+    if split and dirt > 0:
+        # Se reduce premultiplicada (sin halos en los bordes) y se vuelve a dividir por el alfa
+        ch = [np.array(Image.fromarray(layer[..., i].astype('float32'), 'F').resize((size, size), Image.BOX)) for i in range(4)]
+        al = np.clip(ch[3], 0, 1)
+        out = np.zeros((size, size, 4))
+        for i in range(3):
+            out[..., i] = np.where(al > 1e-3, ch[i] / np.maximum(al, 1e-3), 0)
+        out[..., 3] = al
+        return im, m, Image.fromarray((np.clip(out, 0, 1) * 255 + 0.5).astype('uint8'), 'RGBA')
+    return im, m
 
 
 if __name__ == "__main__":
@@ -165,8 +193,11 @@ if __name__ == "__main__":
     os.makedirs(out, exist_ok=True)
     for tag, th in zip("ab", SWING):
         for k in range(FRAMES):
-            fr, _ = wheel3d(SIZE, k * 3.0, light=light_dir(th), **LOOK)
+            fr, _, _ = wheel3d(SIZE, k * 3.0, light=light_dir(th), split=True, **LOOK)
             fr.save(os.path.join(out, "%s%02d.png" % (tag, k)))
+    # La mugre que no se repite cada 72°, en su capa (la misma con cualquier luz)
+    _, _, layer = wheel3d(SIZE, 0.0, light=light_dir(SWING[0]), split=True, **LOOK)
+    layer.save(os.path.join(ROOT, "gfx", "wheel_dirt.png"))
     # Sombra: la silueta, con margen para el desenfoque
     _, m = wheel3d(SIZE, 0.0, ss=2)
     pad = 16
@@ -176,4 +207,4 @@ if __name__ == "__main__":
     rgba = Image.new("RGBA", sh.size, (3, 5, 9, 0))
     rgba.putalpha(sh)
     rgba.save(os.path.join(ROOT, "gfx", "wheel_shadow.png"))
-    print("gfx/w3d/a00..b%02d.png gfx/wheel_shadow.png" % (FRAMES - 1))
+    print("gfx/w3d/a00..b%02d.png gfx/wheel_dirt.png gfx/wheel_shadow.png" % (FRAMES - 1))

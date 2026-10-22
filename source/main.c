@@ -3003,7 +3003,7 @@ enum { SPR_WHEEL, SPR_STEAM, SPR_GLOW, SPR_FLIP };   // SPR_FLIP..+23: flipbook 
 // La válvula en 3D (tools/gen_wheel3d.py): su sombra y 24 fotogramas de giro (3° cada uno) con la
 // luz del bombillo en cada extremo del balanceo
 // (en su propia hoja, wheel3d.t3x)
-enum { W3D_SHADOW, W3D_A, W3D_B = W3D_A + 24 };
+enum { W3D_SHADOW, W3D_DIRT, W3D_A, W3D_B = W3D_A + 24 };
 #define W3D_SIZE    112.0f
 #define WHEEL_PX    100.0f      // tamaño de la válvula en pantalla
 #define WHEEL_R     46.0f       // radio del aro en pantalla
@@ -3175,7 +3175,9 @@ static float puff_front(const Puff *pf, float oy)
 }
 
 // La válvula: el fotograma del giro con la luz de cada extremo del balanceo, mezclados según
-// dónde esté el bombillo, y girada lo que falte entre fotograma y fotograma
+// dónde esté el bombillo, y girada lo que falte entre fotograma y fotograma. Los fotogramas se
+// repiten cada 72° (cinco radios); la mugre no, así que va en su capa y gira entera (si no,
+// saltaba 72° atrás cada vez que volvía al primer fotograma).
 static void draw_wheel3d(float cx, float cy, float scale, float spin, float alpha)
 {
 	if (!wheel_sheet || alpha <= 0) return;
@@ -3189,12 +3191,14 @@ static void draw_wheel3d(float cx, float cy, float scale, float spin, float alph
 	float off = (11 + 4 * (1 + bulb.ly)) * scale;
 	C2D_AlphaImageTint(&tint, clampf(0.85f * alpha * (0.7f + 0.3f * bulb.power), 0, 1));
 	C2D_DrawImageAtRotated(C2D_SpriteSheetGetImage(wheel_sheet, W3D_SHADOW), cx - bulb.lx * off, cy - bulb.ly * off, 0.5f, spin, &tint, s, s);
-	// Los dos fotogramas, oscurecidos cuando el bombillo flojea
+	// Los dos fotogramas y la mugre, oscurecidos cuando el bombillo flojea
 	float dark = 1 - bulb.power;
 	C2D_PlainImageTint(&tint, C2D_Color32(0, 0, 0, (u8)(255 * clampf(alpha, 0, 1))), dark);
 	C2D_DrawImageAtRotated(C2D_SpriteSheetGetImage(wheel_sheet, W3D_A + k), cx, cy, 0.5f, rest, &tint, s, s);
 	C2D_PlainImageTint(&tint, C2D_Color32(0, 0, 0, (u8)(255 * clampf(alpha * bulb.swing, 0, 1))), dark);
 	C2D_DrawImageAtRotated(C2D_SpriteSheetGetImage(wheel_sheet, W3D_B + k), cx, cy, 0.5f, rest, &tint, s, s);
+	C2D_PlainImageTint(&tint, C2D_Color32(0, 0, 0, (u8)(255 * clampf(alpha, 0, 1))), dark);
+	C2D_DrawImageAtRotated(C2D_SpriteSheetGetImage(wheel_sheet, W3D_DIRT), cx, cy, 0.5f, spin, &tint, s, s);
 }
 
 static void draw_splash_top(void)

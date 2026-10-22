@@ -3013,10 +3013,30 @@ enum { W3D_SHADOW, W3D_DIRT, W3D_A, W3D_B = W3D_A + 24 };
 // sombra, el charco de luz en la pared, el polvo y el vapor
 static struct { float swing, lx, ly, power; } bulb;
 
+// La entrada: la válvula llega desde un poco más cerca (sin crecer ni rebotar) y se clava en la
+// pared de golpe; la pantalla tiembla, arranca a girar cuando se asienta y entonces sale el vapor
+#define SPLASH_HIT   0.40f
+#define SPLASH_SPIN  0.85f
+#define SPLASH_STEAM 1.15f
+
+// Temblor del golpe: fuerte y corto, cada eje con su ritmo
+static void splash_shake(float t, float amp, float *dx, float *dy)
+{
+	float u = t - SPLASH_HIT;
+	*dx = *dy = 0;
+	if (u < 0 || u > 0.6f) return;
+	float e = amp * expf(-u * 9.0f);
+	*dx = e * sinf(u * 2 * (float)M_PI * 19);
+	*dy = e * 0.8f * sinf(u * 2 * (float)M_PI * 23 + 1.3f);
+}
+
 static void bulb_update(float t)
 {
 	bulb.swing = 0.5f + 0.5f * sinf(t * 2 * (float)M_PI / 4.0f);
 	float th = (22 + 46 * bulb.swing) * (float)M_PI / 180;
+	// El golpe sacude el bombillo: se balancea de más un momento
+	float u = t - SPLASH_HIT;
+	if (u > 0) th += 0.16f * expf(-u * 2.2f) * sinf(u * 7.0f);
 	bulb.lx = cosf(th);
 	bulb.ly = -sinf(th);
 	// Tiembla un poco siempre y, a ratos, pierde fuerza un instante (a veces dos seguidos)
@@ -3030,6 +3050,8 @@ static void bulb_update(float t)
 		if (in >= at && in < at + 0.07f) f -= depth;
 		if (h > 0.7f && in >= at + 0.12f && in < at + 0.17f) f -= depth * 0.6f;
 	}
+	// y parpadea con el golpe
+	if (u > 0 && u < 0.3f) f -= 0.4f * expf(-u * 14) * (0.6f + 0.4f * sinf(u * 90));
 	bulb.power = f;
 }
 
@@ -3177,8 +3199,9 @@ static float puff_front(const Puff *pf, float oy)
 // La válvula: el fotograma del giro con la luz de cada extremo del balanceo, mezclados según
 // dónde esté el bombillo, y girada lo que falte entre fotograma y fotograma. Los fotogramas se
 // repiten cada 72° (cinco radios); la mugre no, así que va en su capa y gira entera (si no,
-// saltaba 72° atrás cada vez que volvía al primer fotograma).
-static void draw_wheel3d(float cx, float cy, float scale, float spin, float alpha)
+// saltaba 72° atrás cada vez que volvía al primer fotograma). lift: lo separada que está aún de
+// la pared (0 = clavada): la sombra se aleja, crece y se apaga
+static void draw_wheel3d(float cx, float cy, float scale, float spin, float alpha, float lift)
 {
 	if (!wheel_sheet || alpha <= 0) return;
 	float deg = spin * 180 / (float)M_PI;
@@ -3188,9 +3211,10 @@ static void draw_wheel3d(float cx, float cy, float scale, float spin, float alph
 	float s = scale * WHEEL_PX / W3D_SIZE;
 	C2D_ImageTint tint;
 	// La sombra en la pared, al lado contrario de la luz (más larga cuanto más de lado viene)
-	float off = (11 + 4 * (1 + bulb.ly)) * scale;
-	C2D_AlphaImageTint(&tint, clampf(0.85f * alpha * (0.7f + 0.3f * bulb.power), 0, 1));
-	C2D_DrawImageAtRotated(C2D_SpriteSheetGetImage(wheel_sheet, W3D_SHADOW), cx - bulb.lx * off, cy - bulb.ly * off, 0.5f, spin, &tint, s, s);
+	float off = (11 + 4 * (1 + bulb.ly)) * scale * (1 + 2.6f * lift);
+	float ss = s * (1 + 0.18f * lift);
+	C2D_AlphaImageTint(&tint, clampf(0.85f * alpha * (0.7f + 0.3f * bulb.power) * (1 - 0.55f * lift), 0, 1));
+	C2D_DrawImageAtRotated(C2D_SpriteSheetGetImage(wheel_sheet, W3D_SHADOW), cx - bulb.lx * off, cy - bulb.ly * off, 0.5f, spin, &tint, ss, ss);
 	// Los dos fotogramas y la mugre, oscurecidos cuando el bombillo flojea
 	float dark = 1 - bulb.power;
 	C2D_PlainImageTint(&tint, C2D_Color32(0, 0, 0, (u8)(255 * clampf(alpha, 0, 1))), dark);
@@ -3205,17 +3229,28 @@ static void draw_splash_top(void)
 {
 	float t = splash_t;
 	bulb_update(t);
-	draw_splash_bg(0, TOP_W, SCR_H);
+	float dx, dy;
+	splash_shake(t, 6, &dx, &dy);
+	// El fondo, un poco ampliado para que el temblor no deje ver el borde
+	if (splash_bg) C2D_DrawImageAt(C2D_SpriteSheetGetImage(splash_bg, 0), -8 + dx, -6 + dy, 0.5f, NULL, (TOP_W + 16.0f) / TOP_W, (SCR_H + 12.0f) / SCR_H);
+	else draw_splash_bg(0, TOP_W, SCR_H);
+	C3D_Mtx view;
+	C2D_ViewSave(&view);
+	C2D_ViewTranslate(dx, dy);
 	// Sala en penumbra y el charco de luz cálida del bombillo, que se balancea
-	ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, 0x58));
+	ui_rect(-10, -10, TOP_W + 20, SCR_H + 20, C2D_Color32(0, 0, 0, 0x58));
 	float cx = TOP_W / 2, cy = 100;
 	float px = cx + bulb.lx * 210, py = cy + bulb.ly * 210;
 	draw_sprite_ex(SPR_GLOW, px, py, 4.7f, 4.7f, 0, C2D_Color32(0xff, 0xc4, 0x82, (u8)(0x70 * bulb.power)), 1);
 	draw_ambient(t, TOP_W, SCR_H, px, py, clampf(t / 0.8f, 0, 1));
-	float pop = ease_out_back(clampf(t / 0.55f, 0, 1));
-	const float t0 = 0.85f;      // la válvula se abre (ya girando)
+	// Hasta el golpe se acerca a la pared cada vez más deprisa; después ya no cambia de tamaño
+	float k = clampf(t / SPLASH_HIT, 0, 1);
+	float lift = 1 - k * k;
+	float scale = 1 + 0.28f * lift;
+	float pop = clampf(t / 0.2f, 0, 1);
+	const float t0 = SPLASH_STEAM;      // la válvula se abre (ya girando)
 	float flash = t > t0 ? expf(-(t - t0) * 3.0f) : 0;
-	draw_sprite(SPR_GLOW, cx, cy, (1.9f + 0.08f * sinf(t * 2.4f) + 0.5f * flash) * pop, 0, (0.20f + 0.25f * flash) * pop * bulb.power);
+	draw_sprite(SPR_GLOW, cx, cy, (1.9f + 0.08f * sinf(t * 2.4f) + 0.5f * flash) * scale, 0, (0.20f + 0.25f * flash) * pop * bulb.power);
 
 	// Neblina muy tenue alrededor: ambiente
 	if (t > t0) {
@@ -3259,9 +3294,9 @@ static void draw_splash_top(void)
 
 	// Como una válvula que se abre: quieta hasta asentarse en la pared, luego arranca despacio y
 	// coge velocidad
-	float u = t - 0.55f;
+	float u = t - SPLASH_SPIN;
 	float spin = u <= 0 ? 0 : u < 0.8f ? 0.9f * u * u : 0.576f + 1.44f * (u - 0.8f);
-	draw_wheel3d(cx, cy, pop, spin, pop);
+	draw_wheel3d(cx, cy, scale, spin, pop, lift);
 
 	// Lo que ya ha salido del aro, por delante
 	for (int i = 0; i < nb; i++) draw_puff(&burst[i], cx, cy, 0.9f * puff_front(&burst[i], 0), false);
@@ -3284,25 +3319,35 @@ static void draw_splash_top(void)
 		float seg = 46, p = (sinf(t * 3.0f) + 1) / 2;
 		ui_rect(bx + p * (bw - seg), by, seg, 3, C2D_Color32(0x66, 0xc0, 0xf4, a8));
 	}
+	C2D_ViewRestore(&view);
 }
 
 static void draw_splash_bottom(void)
 {
-	draw_splash_bg(1, BOT_W, SCR_H);
-	ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, 0x70));   // abajo llega aún menos luz
+	// Abajo el golpe llega más flojo
+	float dx, dy;
+	splash_shake(splash_t, 3, &dx, &dy);
+	if (splash_bg) C2D_DrawImageAt(C2D_SpriteSheetGetImage(splash_bg, 1), -4 + dx, -4 + dy, 0.5f, NULL, (BOT_W + 8.0f) / BOT_W, (SCR_H + 8.0f) / SCR_H);
+	else draw_splash_bg(1, BOT_W, SCR_H);
+	C3D_Mtx view;
+	C2D_ViewSave(&view);
+	C2D_ViewTranslate(dx, dy);
+	ui_rect(-6, -6, BOT_W + 12, SCR_H + 12, C2D_Color32(0, 0, 0, 0x70));   // abajo llega aún menos luz
 	draw_ambient(splash_t + 3.1f, BOT_W, SCR_H, BOT_W + 40, -120, clampf(splash_t / 0.8f, 0, 1));
 	float ta = clampf((splash_t - 0.5f) / 0.5f, 0, 1);
 	u8 a8 = (u8)(255 * ta);
 	ui_text(BOT_W / 2, 104, _("hecho por VENOMSHiNE"), SZ_BODY, C2D_Color32(0xc7, 0xd5, 0xe0, a8), AL_CENTER, 0);
 	ui_text(BOT_W / 2, 124, "v" APP_VERSION, SZ_SMALL, C2D_Color32(0x8f, 0x98, 0xa0, a8), AL_CENTER, 0);
+	C2D_ViewRestore(&view);
 }
 
 static void splash_update(float dt, u32 kd)
 {
-	splash_t += dt;
+	// Los primeros fotogramas tardan (se está cargando todo): sin este tope la entrada se saltaba
+	splash_t += dt < 0.034f ? dt : 0.034f;
 	if (splash_out < 0) {
 		bool skip = splash_t > 0.6f && (kd & (KEY_A | KEY_B | KEY_TOUCH));
-		if ((splash_t > 3.2f && splash_ready()) || splash_t > 6.5f || skip) splash_out = 0;
+		if ((splash_t > 3.5f && splash_ready()) || splash_t > 6.5f || skip) splash_out = 0;
 	} else {
 		splash_out += dt;
 		if (splash_out > 0.35f) {

@@ -2187,32 +2187,17 @@ static void draw_game_bottom(void)
 		const StoreRow *own_row = in ? owned_row(a->appid) : NULL;
 		bool own = in && owned_app(a->appid);
 		bool wished = in && in_wishlist(a->appid);
-		// Lo que cuesta en la tienda, también si ya es tuyo
-		char own_price[48] = "";
-		if (a->is_free) snprintf(own_price, sizeof own_price, "%s", _("Gratis"));
-		else if (a->has_price && a->disc > 0) snprintf(own_price, sizeof own_price, "-%d%% · %s", a->disc, a->price);
-		else if (a->has_price) snprintf(own_price, sizeof own_price, "%s", a->price);
-#ifndef PRICE_VARIANT
-#define PRICE_VARIANT 1
-#endif
-		char top[80];
-		if (own && PRICE_VARIANT == 2 && own_price[0]) snprintf(top, sizeof top, "%s · %s", _("Ya es tuyo"), own_price);
+		// Si ya es tuyo, lo dice la línea de arriba (con tus horas); el precio se ve siempre igual,
+		// porque puedes querer comprarlo para regalarlo
+		char top[64];
+		if (own && own_row && own_row->minutes >= 60)
+			snprintf(top, sizeof top, _("Ya es tuyo · %d h jugadas"), (own_row->minutes + 30) / 60);
 		else snprintf(top, sizeof top, "%s", own ? _("Ya es tuyo") : a->is_free ? _("Jugar") : _("Comprar"));
 		ui_text(12, 36, top, SZ_SMALL, own ? COL_LIME : COL_DIM, AL_LEFT, 0);
-		ui_text(12, 50, a->name, SZ_BODY, COL_WHITE, AL_LEFT, a->disc && !own ? 160 : 190);
+		ui_text(12, 50, a->name, SZ_BODY, COL_WHITE, AL_LEFT, a->disc ? 160 : 190);
 		int nopt = 0;
 		const BuyOpt *opts = shop_buyopts(a->appid, &nopt, NULL);
-		if (own) {
-			// Ya es tuyo: sin sello; el precio, en verde y pequeño
-			if (PRICE_VARIANT == 1) {
-				ui_text(308, 51, own_price, SZ_SMALL, COL_LIME, AL_RIGHT, 0);
-				if (own_row && own_row->minutes >= 60) {
-					char hrs[32];
-					snprintf(hrs, sizeof hrs, _("%d h jugadas"), (own_row->minutes + 30) / 60);
-					ui_text(308, 37, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
-				}
-			}
-		} else if (a->disc > 0) {
+		if (a->disc > 0) {
 			ui_badge_disc(308 - 64 - 52, 36, 52, 32, a->disc, SZ_LARGE);
 			ui_price_box(308 - 64, 36, 64, 32, a->orig, a->price, SZ_SMALL, SZ_BODY + 0.05f);
 			// Cuenta atrás hasta que acaba la oferta (con la hora de los servidores de Steam)
@@ -2240,9 +2225,7 @@ static void draw_game_bottom(void)
 		bool busy_cart = shop_busy_with(free ? SH_FREE : SH_CART_ADD, a->appid);
 		// Sin forma de comprarlo (aún no ha salido o no se vende aquí): el botón lo dice y se apaga
 		bool soon = in && !own && !free && !carted && opts && nopt == 0;
-		char own_btn[96];
-		snprintf(own_btn, sizeof own_btn, "%s · %s", _("En tu biblioteca"), own_price);
-		const char *cl = own ? (PRICE_VARIANT == 3 && own_price[0] ? own_btn : _("Ya lo tienes")) : free ? _("Añadir a la biblioteca") : carted ? _("En el carrito · Ver")
+		const char *cl = own ? _("Ya lo tienes") : free ? _("Añadir a la biblioteca") : carted ? _("En el carrito · Ver")
 			: soon ? (a->coming_soon ? _("Próximamente") : _("No está a la venta")) : _("Añadir al carrito");
 		if (busy_cart) cl = free ? _("Añadiendo a tu biblioteca…") : _("Añadiendo al carrito…");
 		if (!in) draw_button_k(&B_CART, "Y", false, IC_PHONE, _("Ver en Steam"), C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff),

@@ -159,6 +159,7 @@ typedef struct {
 	bool wish_loaded;
 	float anim_t;                // cuándo empezaron a entrar las filas (lista animada)
 	int lib_stage;               // Biblioteca: 0 GetOwnedGames, 1 userdata de la tienda, 2 nombres por tandas
+	int lib_base;                // juegos que ya dio GetOwnedGames (a los que se suman los de la tienda)
 	int anim_count;
 } Tab;
 static Tab tabs[TAB_ALL];
@@ -524,7 +525,7 @@ static void owned_poll(Tab *t)
 		// Los nombres llegan de 50 en 50: se piden todos seguidos para poder ordenar por nombre
 		bool fail = r->state != REQ_DONE;
 		list_poll(&t->list, true);
-		t->list.total = t->nwish;
+		t->list.total = t->lib_base + t->nwish;
 		t->list.end = t->wish_next >= t->nwish;
 		lib_sort(t);
 		if (!t->list.end && !fail) tab_more(TAB_LIBRARY);
@@ -534,22 +535,28 @@ static void owned_poll(Tab *t)
 	if (t->lib_stage == 0) {
 		bool ok = r->state == REQ_DONE && steam_parse_owned(r->data, &t->list);
 		netlog("biblioteca: GetOwnedGames %s (HTTP %ld, eresult %d, %d juegos)", ok ? "ok" : "mal", r->http, r->eresult, t->list.count);
-		if (!ok || t->list.count == 0) {
-			if (r->state == REQ_DONE && r->data) netlog("biblioteca: respuesta %.120s", r->data);
-			// Plan B: lo que la tienda sabe que tienes (la misma lista con la que marca «En la biblioteca»)
-			char ck[1200];
-			net_release(r);
-			t->list.req = NULL;
-			if (auth_web_cookies("store.steampowered.com", ck, sizeof ck)) {
-				t->list.req = net_request("https://store.steampowered.com/dynamicstore/userdata/", NULL, ck);
-				t->lib_stage = 1;
-				t->list.err[0] = 0;
-			} else if (!ok) {
-				snprintf(t->list.err, sizeof t->list.err, "%s", "json");
-			}
-			memset(ck, 0, sizeof ck);
-			return;
+		if (!ok && r->state == REQ_DONE && r->data) netlog("biblioteca: respuesta %.120s", r->data);
+		if (!ok) t->list.count = 0;
+		// Además, lo que la tienda sabe que tienes (la misma lista con la que marca «En tu
+		// biblioteca»): GetOwnedGames no trae las licencias gratis que aún no has jugado, y a
+		// algunas cuentas no les devuelve nada
+		t->lib_base = t->list.count;
+		char ck[1200];
+		net_release(r);
+		t->list.req = NULL;
+		if (auth_web_cookies("store.steampowered.com", ck, sizeof ck)) {
+			t->list.req = net_request("https://store.steampowered.com/dynamicstore/userdata/", NULL, ck);
+			t->lib_stage = 1;
+			t->list.err[0] = 0;
+		} else if (!ok) {
+			snprintf(t->list.err, sizeof t->list.err, "%s", "json");
 		}
+		memset(ck, 0, sizeof ck);
+		if (!t->list.req) {
+			t->sel_changed = osGetTime();
+			seen_sync(t);
+		}
+		return;
 	} else {
 		u32 *ids = NULL;
 		int n = r->state == REQ_DONE ? steam_parse_userdata_owned(r->data, &ids) : -1;
@@ -557,19 +564,31 @@ static void owned_poll(Tab *t)
 		net_release(r);
 		t->list.req = NULL;
 		if (n < 0) {
-			snprintf(t->list.err, sizeof t->list.err, "%s", "json");
+			// Si GetOwnedGames ya dio juegos, se quedan esos
+			if (!t->lib_base) snprintf(t->list.err, sizeof t->list.err, "%s", "json");
+			else seen_sync(t);
 			free(ids);
 			return;
 		}
+		// Solo los que GetOwnedGames no trajo
+		int m = 0;
+		for (int i = 0; i < n; i++) {
+			bool dup = false;
+			for (int j = 0; j < t->lib_base && !dup; j++) dup = t->list.rows[j].appid == ids[i];
+			if (!dup) ids[m++] = ids[i];
+		}
+		if (t->lib_base) netlog("biblioteca: %d de GetOwnedGames y %d más de la tienda", t->lib_base, m);
+		n = m;
 		free(t->wish);
 		t->wish = ids;
 		t->nwish = n;
 		t->wish_loaded = true;
 		t->wish_next = 0;
-		t->list.total = n;
+		t->list.total = t->lib_base + n;
 		t->list.end = n == 0;
 		t->lib_stage = 2;
-		tab_more(TAB_LIBRARY);
+		if (n) tab_more(TAB_LIBRARY);
+		else seen_sync(t);
 		return;
 	}
 	net_release(r);
@@ -674,7 +693,7 @@ static void library_changed(void)
 	t->wish = NULL;
 	t->nwish = t->wish_next = 0;
 	t->wish_loaded = false;
-	t->lib_stage = 0;
+	t->lib_stage = t->lib_base = 0;
 	t->started = false;
 	t->sel = 0;
 }

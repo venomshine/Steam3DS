@@ -123,6 +123,7 @@ def fake_post(host, path, body):
 
 # Carrito, deseados y licencias gratis simulados (con nombres y precios reales de la tienda)
 CART = []
+FREE_ADDED = set()
 next_line = [9000000000000001]
 
 
@@ -187,6 +188,7 @@ def fake_shop(path, body):
         if not it.get("is_free") and it.get("type") != 1:
             return {"response": {"purchase_result_detail": 5}}
         OWNED.append((a, it.get("name", "Juego %d" % a), 0, 0))
+        FREE_ADDED.add(a)   # como en Steam: GetOwnedGames no trae las licencias gratis sin jugar
         return {"response": {"appids_added": [a], "packageids_added": [], "purchase_result_detail": 0}}
     return None
 
@@ -233,9 +235,9 @@ def fake_get(path, q):
         if os.environ.get("RELAY_EMPTY_OWNED") == "1":
             return {"response": {}}
         now = int(time.time())
-        return {"response": {"game_count": len(OWNED), "games": [
+        return {"response": {"game_count": len([a for a, *_ in OWNED if a not in FREE_ADDED]), "games": [
             {"appid": a, "name": n, "playtime_forever": m, "rtime_last_played": now - d * 86400, "img_icon_url": ""}
-            for a, n, m, d in OWNED]}}
+            for a, n, m, d in OWNED if a not in FREE_ADDED]}}
     if path.endswith("GetWishlist/v1/"):
         return {"response": {"items": [{"appid": a, "priority": i + 1, "date_added": int(time.time()) - i * 86400 * 7}
                                        for i, a in enumerate(WISH)]}}

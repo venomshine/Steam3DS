@@ -212,18 +212,18 @@ static const char *human_err(const char *err)
 		switch (code) {
 		case 6: return _("No se encuentra el servidor de Steam");
 		case 7: return _("No se pudo conectar con Steam");
-		case 28: return _("Steam tarda demasiado en responder");
-		case 35: case 51: case 58: case 60: case 77: return _("Falló la conexión segura con Steam");
-		case 52: case 55: case 56: return _("Se cortó la conexión");
+		case 28: return _("Steam no responde (tiempo de espera agotado)");
+		case 35: case 51: case 58: case 60: case 77: return _("No se pudo establecer una conexión segura con Steam");
+		case 52: case 55: case 56: return _("Se perdió la conexión");
 		}
 		return _("Error de red");
 	}
 	if (sscanf(err, "HTTP %d", &code) == 1) {
-		if (code == 429) return _("Steam pide esperar un poco");
-		if (code >= 500) return _("Steam no responde bien ahora mismo");
-		return _("Steam respondió con un error");
+		if (code == 429) return _("Demasiadas solicitudes. Inténtalo de nuevo en unos minutos.");
+		if (code >= 500) return _("Los servidores de Steam no están disponibles en este momento");
+		return _("Steam ha devuelto un error");
 	}
-	return _("Steam mandó una respuesta inesperada");
+	return _("Respuesta inesperada de Steam");
 }
 
 // Segundos de espera antes de reintentar solo
@@ -855,7 +855,7 @@ static void draw_net_wait(float cx, float cy, const char *what)
 			: !strcmp(st, "wifi_noip") ? _("Conectando al Wi-Fi…") : _("La red de la consola no responde");
 		ui_icon(IC_WIFI, cx - 10, cy - 30, 20, COL_DIM);
 		ui_text(cx, cy, msg, SZ_BODY, COL_TXT, AL_CENTER, 0);
-		ui_text(cx, cy + 16, _("Se reintenta solo"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+		ui_text(cx, cy + 16, _("Se reintentará automáticamente"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 	} else {
 		ui_spinner(cx, cy - 6, 9, COL_ACC);
 		if (what) ui_text(cx, cy + 10, what, SZ_SMALL, COL_DIM, AL_CENTER, 0);
@@ -1046,8 +1046,8 @@ static void footer_text(char *out, size_t n)
 	case TAB_BETAS: snprintf(out, n, "%s", _("Acceso anticipado")); break;   // el total de Steam cuenta también los que ya salieron
 	case TAB_LIBRARY: {
 		const StoreRow *r = cur_row();
-		if (r && r->minutes) snprintf(out, n, _("Has jugado %d h"), (r->minutes + 30) / 60);
-		else if (r) snprintf(out, n, "%s", _("Aún no lo has jugado"));
+		if (r && r->minutes) snprintf(out, n, _("%d h jugadas"), (r->minutes + 30) / 60);
+		else if (r) snprintf(out, n, "%s", _("Nunca jugado"));
 		else out[0] = 0;
 		break;
 	}
@@ -1173,7 +1173,7 @@ static void draw_preview(const StoreRow *row)
 		}
 		draw_feats(fx, ry + 1, TOP_W - 12 - fx, a, a->desc ? 2 : 4);
 	} else if (e && e->failed) {
-		ui_text(12, 140, _("No se pudo cargar la ficha"), SZ_SMALL, COL_DIM, AL_LEFT, 0);
+		ui_text(12, 140, _("No se pudo cargar la página del juego"), SZ_SMALL, COL_DIM, AL_LEFT, 0);
 	} else {
 		ui_spinner(TOP_W / 2, 165, 7, COL_DIM);
 	}
@@ -1187,28 +1187,28 @@ static void draw_store_top(void)
 		// Buscar, sin búsqueda: qué se puede hacer
 		ui_icon(IC_SEARCH, TOP_W / 2 - 18, 62, 36, COL_ACC);
 		ui_text(TOP_W / 2, 112, _("Busca juegos, DLC y demos"), SZ_LARGE, COL_WHITE, AL_CENTER, 380);
-		ui_text(TOP_W / 2, 136, _("Toca la barra de abajo o pulsa Y para escribir"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
-		if (S.nrecents) ui_text(TOP_W / 2, 154, _("Abajo, tus búsquedas recientes"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		ui_text(TOP_W / 2, 136, _("Toca la barra de búsqueda o pulsa Y para escribir"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		if (S.nrecents) ui_text(TOP_W / 2, 154, _("Tus búsquedas recientes aparecen abajo"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
 		return;
 	}
 	if (S.tab == TAB_CART && S.cart_qr) {
 		char tot[64];
 		snprintf(tot, sizeof tot, _("Total: %s"), shop_cart()->subtotal);
 		draw_qr_panel("https://store.steampowered.com/cart/", _("Pagar en el móvil"),
-			_("Escanea el código: se abre tu carrito de Steam, el mismo de aquí, y lo pagas desde ahí."), NULL, tot, COL_LIME);
+			_("Escanea el código para abrir tu carrito de Steam en el móvil y completar la compra."), NULL, tot, COL_LIME);
 		return;
 	}
 	if (S.tab == TAB_CART && shop_cart_loaded() && shop_cart()->n == 0) {
 		ui_icon(IC_CART, TOP_W / 2 - 14, 80, 28, COL_ACC);
 		ui_text(TOP_W / 2, 120, _("Tu carrito está vacío"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
-		ui_text(TOP_W / 2, 144, _("Añade juegos desde su ficha con el botón del carrito"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		ui_text(TOP_W / 2, 144, _("Añade juegos desde su página con el botón del carrito"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
 		return;
 	}
 	if (!row || (row->appid == 0)) {
 		if (t->list.err[0] && !t->list.req) {
 			int left = retry_delay(t->list.err) - (int)((osGetTime() - t->fail_at) / 1000);
 			char tt[64];
-			snprintf(tt, sizeof tt, _("Reintentando en %d s · A para ya"), left < 0 ? 0 : left);
+			snprintf(tt, sizeof tt, _("Reintentando en %d s · Pulsa A para reintentar ahora"), left < 0 ? 0 : left);
 			ui_text(TOP_W / 2, 92, _("No se pudo cargar esta lista"), SZ_LARGE, COL_TXT, AL_CENTER, 0);
 			ui_text(TOP_W / 2, 116, human_err(t->list.err), SZ_BODY, COL_TXT, AL_CENTER, 380);
 			ui_text(TOP_W / 2, 136, tt, SZ_SMALL, COL_ACC, AL_CENTER, 0);
@@ -1216,14 +1216,14 @@ static void draw_store_top(void)
 		} else if (S.tab == TAB_WISHLIST && t->wish_loaded && !t->nwish) {
 			ui_icon(IC_HEART, TOP_W / 2 - 14, 80, 28, COL_ACC);
 			ui_text(TOP_W / 2, 120, _("Tu lista de deseos está vacía"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
-			ui_text(TOP_W / 2, 144, _("Añade juegos desde su ficha con el botón Deseados"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+			ui_text(TOP_W / 2, 144, _("Añade juegos desde su página con el botón Deseados"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
 		} else if (S.tab == TAB_LIBRARY && !t->list.req && !t->list.count) {
 			ui_text(TOP_W / 2, 120, _("No hay juegos en tu biblioteca"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
 		} else if (S.tab == TAB_SEARCH && !t->list.req) {
 			char tt[112];
 			snprintf(tt, sizeof tt, _("No hay resultados para «%s»"), t->term);
 			ui_text(TOP_W / 2, 110, tt, SZ_LARGE, COL_TXT, AL_CENTER, 380);
-			ui_text(TOP_W / 2, 134, _("Prueba con otras palabras o con el nombre en inglés"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+			ui_text(TOP_W / 2, 134, _("Prueba con otros términos o con el nombre en inglés"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
 		} else {
 			draw_net_wait(TOP_W / 2, 120, _("Cargando…"));
 		}
@@ -1434,7 +1434,7 @@ static void draw_store_bottom(void)
 	float end_y = top + t->list.count * ROW_H - t->scroll;
 	if (t->list.req && end_y < SCR_H) ui_spinner(BOT_W / 2, end_y + 14, 6, COL_DIM);
 	if (S.tab == TAB_SEARCH && !t->term[0] && !t->list.count)
-		ui_text(BOT_W / 2, top + 30, _("Aún no has buscado nada"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+		ui_text(BOT_W / 2, top + 30, _("No hay búsquedas recientes"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 	if (S.tab == TAB_WISHLIST && t->wish_loaded && !t->nwish)
 		ui_text(BOT_W / 2, top + 30, _("Tu lista de deseos está vacía"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 	if (S.tab == TAB_CART) {
@@ -1453,12 +1453,12 @@ static void draw_store_bottom(void)
 		ui_rrect(BOT_W - 4, y + 2, 3, hh - 4, 1.5f, C2D_Color32(0xff, 0xff, 0xff, 0x55));
 	}
 	if (S.tab == TAB_CART) {
-		static const char *hc[] = {"A", "Ficha", "↑↓", "Elegir", "Y", "Quitar", "X", "Pagar", "B", "Volver"};
+		static const char *hc[] = {"A", "Abrir", "↑↓", "Elegir", "Y", "Quitar", "X", "Pagar", "B", "Volver"};
 		static const char *hb[] = {"B", "Volver", "START", "Menú"};
 		if (t->list.count) draw_hints(hc, 5);
 		else draw_hints(hb, 2);
 	} else if (S.tab >= TAB_COUNT) {
-		static const char *ha[] = {"A", "Ficha", "↑↓", "Elegir", "B", "Volver", "START", "Menú"};
+		static const char *ha[] = {"A", "Abrir", "↑↓", "Elegir", "B", "Volver", "START", "Menú"};
 		draw_hints(ha, 4);
 	} else if (S.tab == TAB_SEARCH) {
 		if (S.search_focus) {
@@ -1467,7 +1467,7 @@ static void draw_store_bottom(void)
 			if (t->list.count) draw_hints(hs, 4);
 			else draw_hints(h1, 3);
 		} else if (t->term[0]) {
-			static const char *hs[] = {"A", "Ficha", "↑↓", "Elegir", "Y", "Buscar", "B", "Borrar", "L R", "Pestaña"};
+			static const char *hs[] = {"A", "Abrir", "↑↓", "Elegir", "Y", "Buscar", "B", "Borrar", "L R", "Pestaña"};
 			draw_hints(hs, 5);
 		} else {
 			static const char *hs[] = {"A", "Buscar esto", "↑↓", "Elegir", "Y", "Escribir", "L R", "Pestaña"};
@@ -1477,10 +1477,10 @@ static void draw_store_bottom(void)
 		static const char *hh3[] = {"A", "Reintentar", "L R", "Pestaña", "START", "Menú"};
 		draw_hints(hh3, 3);
 	} else if (S.tab == TAB_HOME) {
-		static const char *hh4[] = {"A", "Ficha", "↑↓", "Elegir", "← →", "Categoría", "L R", "Pestaña", "START", "Menú"};
+		static const char *hh4[] = {"A", "Abrir", "↑↓", "Elegir", "← →", "Categoría", "L R", "Pestaña", "START", "Menú"};
 		draw_hints(hh4, 5);
 	} else {
-		static const char *hh2[] = {"A", "Ficha", "↑↓", "Elegir", "← →", "Saltar", "L R", "Pestaña", "START", "Menú"};
+		static const char *hh2[] = {"A", "Abrir", "↑↓", "Elegir", "← →", "Saltar", "L R", "Pestaña", "START", "Menú"};
 		draw_hints(hh2, 5);
 	}
 }
@@ -1919,7 +1919,7 @@ static void draw_reqs_top(const AppInfo *a)
 	const ReqLine *mn = mac ? a->mmin : a->rmin, *rc = mac ? a->mrec : a->rrec;
 	int nmn = mac ? a->nmmin : a->nmin, nrc = mac ? a->nmrec : a->nrec;
 	if (!nmn && !nrc) {
-		ui_text(TOP_W / 2, 110, _("Steam no indica requisitos para este juego"), SZ_BODY, COL_DIM, AL_CENTER, 0);
+		ui_text(TOP_W / 2, 110, _("No hay requisitos del sistema disponibles para este juego"), SZ_BODY, COL_DIM, AL_CENTER, 0);
 	} else {
 		if (nmn) draw_req_col(12, 46, nrc ? 182 : 376, _("MÍNIMO"), mn, nmn);
 		if (nrc) draw_req_col(nmn ? 206 : 12, 46, nmn ? 182 : 376, _("RECOMENDADO"), rc, nrc);
@@ -2015,13 +2015,13 @@ static void draw_game_top(void)
 		if (e && e->failed) {
 			int left = retry_delay(e->err) - (int)((osGetTime() - e->fail_at) / 1000);
 			char t[64];
-			snprintf(t, sizeof t, _("Reintentando en %d s · A para ya"), left < 0 ? 0 : left);
-			ui_text(TOP_W / 2, 92, _("No se pudo cargar la ficha"), SZ_LARGE, COL_TXT, AL_CENTER, 0);
+			snprintf(t, sizeof t, _("Reintentando en %d s · Pulsa A para reintentar ahora"), left < 0 ? 0 : left);
+			ui_text(TOP_W / 2, 92, _("No se pudo cargar la página del juego"), SZ_LARGE, COL_TXT, AL_CENTER, 0);
 			ui_text(TOP_W / 2, 116, human_err(e->err), SZ_BODY, COL_TXT, AL_CENTER, 380);
 			ui_text(TOP_W / 2, 136, t, SZ_SMALL, COL_ACC, AL_CENTER, 0);
 			ui_text(TOP_W / 2, 200, e->err, SZ_TINY, COL_DIM, AL_CENTER, 380);
 		} else {
-			draw_net_wait(TOP_W / 2, 120, _("Cargando ficha…"));
+			draw_net_wait(TOP_W / 2, 120, _("Cargando…"));
 		}
 		return;
 	}
@@ -2030,7 +2030,7 @@ static void draw_game_top(void)
 		char url[96];
 		snprintf(url, sizeof url, "https://store.steampowered.com/app/%lu/", (unsigned long)a->appid);
 		draw_qr_panel(url, _("Ver en Steam"),
-			_("Escanea el código con la cámara del móvil: se abre la página de este juego en la tienda de Steam."), a, NULL, 0);
+			_("Escanea el código con la cámara del móvil para abrir la página de este juego en la tienda de Steam."), a, NULL, 0);
 		return;
 	}
 	C3D_Mtx view;
@@ -2045,7 +2045,7 @@ static void draw_game_top(void)
 		if (a->fullgame) {
 			draw_list_top(a->is_demo ? _("JUEGO COMPLETO") : _("CONTENIDO NECESARIO"), &S.dlc, "");
 			if (S.dlc.count)
-				ui_text_wrap(12, 72, TOP_W - 24, a->is_demo ? _("Esta demo es una muestra de este juego.")
+				ui_text_wrap(12, 72, TOP_W - 24, a->is_demo ? _("Esta es una demo del juego completo.")
 					: _("Para usar este contenido descargable necesitas tener el juego base en tu biblioteca."),
 					SZ_SMALL, COL_DIM, 3, 14);
 			break;
@@ -2059,7 +2059,7 @@ static void draw_game_top(void)
 	case SEC_SIMILAR: {
 		char t[160];
 		snprintf(t, sizeof t, _("MÁS COMO %s"), a->name);
-		draw_list_top(t, &S.similar, _("Steam no tiene juegos parecidos para este"));
+		draw_list_top(t, &S.similar, _("No hay juegos similares disponibles"));
 		break;
 	}
 	}
@@ -2145,7 +2145,7 @@ static void draw_pick(const AppInfo *a)
 	float y0 = pick_y(n) + (1 - an) * 60;
 	fx_panel(6, y0, BOT_W - 12, SCR_H - y0 + 16, 16, an);
 	ui_rrect(BOT_W / 2 - 16, y0 + 6, 32, 3, 1.5f, col_alpha(COL_DIM, an * 0.6f));
-	ui_text(18, y0 + 12, _("¿Qué quieres añadir al carrito?"), SZ_BODY, col_alpha(COL_WHITE, an), AL_LEFT, BOT_W - 36);
+	ui_text(18, y0 + 12, _("Elige la edición"), SZ_BODY, col_alpha(COL_WHITE, an), AL_LEFT, BOT_W - 36);
 	for (int i = 0; i < n; i++) {
 		float y = y0 + 34 + i * PICK_ROW;
 		bool on = i == S.pick_sel;
@@ -2191,8 +2191,8 @@ static void draw_game_bottom(void)
 		// porque puedes querer comprarlo para regalarlo
 		char top[64];
 		if (own && own_row && own_row->minutes >= 60)
-			snprintf(top, sizeof top, _("Ya es tuyo · %d h jugadas"), (own_row->minutes + 30) / 60);
-		else snprintf(top, sizeof top, "%s", own ? _("Ya es tuyo") : a->is_free ? _("Jugar") : _("Comprar"));
+			snprintf(top, sizeof top, _("En tu biblioteca · %d h jugadas"), (own_row->minutes + 30) / 60);
+		else snprintf(top, sizeof top, "%s", own ? _("En tu biblioteca") : a->is_free ? _("Jugar") : _("Comprar"));
 		ui_text(12, 36, top, SZ_SMALL, own ? COL_LIME : COL_DIM, AL_LEFT, 0);
 		ui_text(12, 50, a->name, SZ_BODY, COL_WHITE, AL_LEFT, a->disc ? 160 : 190);
 		int nopt = 0;
@@ -2225,7 +2225,7 @@ static void draw_game_bottom(void)
 		bool busy_cart = shop_busy_with(free ? SH_FREE : SH_CART_ADD, a->appid);
 		// Sin forma de comprarlo (aún no ha salido o no se vende aquí): el botón lo dice y se apaga
 		bool soon = in && !own && !free && !carted && opts && nopt == 0;
-		const char *cl = own ? _("Ya lo tienes") : free ? _("Añadir a la biblioteca") : carted ? _("En el carrito · Ver")
+		const char *cl = own ? _("Ya está en tu biblioteca") : free ? _("Añadir a la biblioteca") : carted ? _("En el carrito · Ver carrito")
 			: soon ? (a->coming_soon ? _("Próximamente") : _("No está a la venta")) : _("Añadir al carrito");
 		if (busy_cart) cl = free ? _("Añadiendo a tu biblioteca…") : _("Añadiendo al carrito…");
 		if (!in) draw_button_k(&B_CART, "Y", false, IC_PHONE, _("Ver en Steam"), C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff),
@@ -2247,17 +2247,17 @@ static void draw_game_bottom(void)
 		char shots[40];
 		snprintf(shots, sizeof shots, _("Capturas (%d)"), a->nshots);
 		draw_button_k(&B_SHOTS, a->nshots ? "X+→" : NULL, false, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, a->nshots ? 1 : 0.45f, S.pressed == BT_SHOTS);
-		draw_button_k(&B_INST, own ? "X+↓" : NULL, false, IC_PC, _("Instalar en tu PC (a distancia)"), C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, own ? 1 : 0.4f, S.pressed == BT_INST);
+		draw_button_k(&B_INST, own ? "X+↓" : NULL, false, IC_PC, _("Instalar en tu PC de forma remota"), C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, own ? 1 : 0.4f, S.pressed == BT_INST);
 		float ny = B_INST.y + B_INST.h + 5;
-		if (!in) ui_text(BOT_W / 2, ny, _("Inicia sesión (START) para el carrito, deseados e instalar"), SZ_TINY, COL_DIM, AL_CENTER, 300);
-		else if (!own) ui_text(BOT_W / 2, ny, _("Instalar se activa cuando el juego es tuyo"), SZ_TINY, COL_DIM, AL_CENTER, 300);
+		if (!in) ui_text(BOT_W / 2, ny, _("Inicia sesión (START) para comprar y usar tu lista de deseos"), SZ_TINY, COL_DIM, AL_CENTER, 300);
+		else if (!own) ui_text(BOT_W / 2, ny, _("La instalación remota requiere tener el juego en tu biblioteca"), SZ_TINY, COL_DIM, AL_CENTER, 300);
 	}
 
 	if (S.show_qr) {
 		static const char *h[] = {"B", "Volver"};
 		draw_hints(h, 1);
 	} else if (S.sec >= SEC_EXTRAS) {
-		static const char *h[] = {"↑↓", "Elegir", "A", "Abrir ficha", "L R", "Apartado", "B", "Volver", "START", "Menú"};
+		static const char *h[] = {"↑↓", "Elegir", "A", "Abrir", "L R", "Apartado", "B", "Volver", "START", "Menú"};
 		draw_hints(h, 5);
 	} else if (S.sec == SEC_REVIEWS) {
 		static const char *h[] = {"↑↓", "Leer", "L R", "Apartado", "B", "Volver", "START", "Menú"};
@@ -2552,7 +2552,7 @@ static void draw_profile_top(void)
 static void draw_profile_bottom(void)
 {
 	ui_text(BOT_W / 2, 30, _("Tu cuenta de Steam"), SZ_LARGE, COL_WHITE, AL_CENTER, 300);
-	ui_text(BOT_W / 2, 54, _("Desde aquí ves lo tuyo; la tienda funciona igual"), SZ_SMALL, COL_DIM, AL_CENTER, 300);
+	ui_text(BOT_W / 2, 54, _("Consulta tu biblioteca, tu lista de deseos y tu cuenta"), SZ_SMALL, COL_DIM, AL_CENTER, 300);
 	char lib[48], wish[48];
 	Tab *l = &tabs[TAB_LIBRARY], *w = &tabs[TAB_WISHLIST];
 	if (l->list.count) snprintf(lib, sizeof lib, _("Biblioteca (%d)"), l->list.count);
@@ -2627,14 +2627,14 @@ static void menu_choose(int item)
 		g_cfg.reqs_mac = !g_cfg.reqs_mac;
 		config_save();
 		S.menu_open = true;   // el menú se queda abierto para ver el cambio
-		toast(g_cfg.reqs_mac ? _("Las fichas enseñan los requisitos de macOS") : _("Las fichas enseñan los requisitos de Windows"));
+		toast(g_cfg.reqs_mac ? _("Se mostrarán los requisitos de macOS") : _("Se mostrarán los requisitos de Windows"));
 		break;
 	case MI_EXIT:
 		S.ask_exit = true;
 		S.exit_anim = 0;
 		break;
 	default:
-		toast(_("Llega en la siguiente parte de esta fase"));
+		toast(_("Disponible próximamente"));
 		break;
 	}
 }
@@ -2670,7 +2670,7 @@ static void draw_menu(void)
 	} else {
 		ui_icon(IC_USER, hx + 3, hy + 4, 18, col_alpha(COL_DIM, a));
 		ui_text(hx + 34, hy, APP_NAME, SZ_BODY, col_alpha(COL_WHITE, a), AL_LEFT, 200);
-		ui_text(hx + 34, hy + 14, _("Sin iniciar sesión"), SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
+		ui_text(hx + 34, hy + 14, _("No has iniciado sesión"), SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
 	}
 	static const struct { Icon ic; const char *label; } info[] = {
 		[MI_LOGIN] = {IC_PHONE, "Iniciar sesión con el móvil"},
@@ -2736,18 +2736,18 @@ static void draw_login_top(void)
 		if (p) img_draw_cover(p, TOP_W / 2 - s / 2, 60 + (64 - s) / 2, s, s, 0.5f);
 		else ui_rect(TOP_W / 2 - s / 2, 60 + (64 - s) / 2, s, s, COL_PANEL);
 		char t[96];
-		snprintf(t, sizeof t, _("Hola, %s"), ai->persona[0] ? ai->persona : ai->account);
+		snprintf(t, sizeof t, _("Te damos la bienvenida, %s"), ai->persona[0] ? ai->persona : ai->account);
 		ui_text(TOP_W / 2, 140, t, SZ_TITLE, col_alpha(COL_WHITE, e), AL_CENTER, 380);
-		ui_text(TOP_W / 2, 166, _("Ya tienes tu sesión de Steam en la consola"), SZ_SMALL, col_alpha(COL_DIM, e), AL_CENTER, 380);
+		ui_text(TOP_W / 2, 166, _("Has iniciado sesión correctamente"), SZ_SMALL, col_alpha(COL_DIM, e), AL_CENTER, 380);
 		return;
 	}
 	if (!ai->qr_url[0]) {
 		if (ai->err[0]) {
-			ui_text(TOP_W / 2, 100, _("No se pudo pedir el código a Steam"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
+			ui_text(TOP_W / 2, 100, _("No se pudo obtener el código de Steam"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
 			ui_text(TOP_W / 2, 124, human_err(ai->err), SZ_BODY, COL_DIM, AL_CENTER, 380);
-			ui_text(TOP_W / 2, 144, _("Se reintenta solo"), SZ_SMALL, COL_ACC, AL_CENTER, 0);
+			ui_text(TOP_W / 2, 144, _("Se reintentará automáticamente"), SZ_SMALL, COL_ACC, AL_CENTER, 0);
 		} else {
-			draw_net_wait(TOP_W / 2, 120, _("Pidiendo el código a Steam…"));
+			draw_net_wait(TOP_W / 2, 120, _("Obteniendo el código de Steam…"));
 		}
 		return;
 	}
@@ -2760,7 +2760,7 @@ static void draw_login_top(void)
 	static const char *steps[] = {
 		"Abre la app de Steam en el móvil",
 		"Toca el escudo de Steam Guard",
-		"Elige «Escanear un código QR» y apunta aquí",
+		"Selecciona «Escanear un código QR» y apunta a esta pantalla",
 	};
 	float y = qy + 30;
 	float lt = ui_line_h(SZ_TINY), ls = ui_line_h(SZ_SMALL);
@@ -2777,22 +2777,22 @@ static void draw_login_top(void)
 	// Estado: esperando, o ya escaneado y falta aprobar (alineado con el pie del QR)
 	float sy = qy + qs - 26;
 	if (ai->qr_scanned) {
-		int nl = ui_text_lines(_("Escaneado: apruébalo en el móvil"), SZ_SMALL, w - 20);
+		int nl = ui_text_lines(_("Código escaneado. Confirma el inicio de sesión en el móvil"), SZ_SMALL, w - 20);
 		float bh = 12 + 13 * nl;
 		FxButton ok = {C2D_Color32(0x2b, 0x55, 0x1a, 0xff), 1, false, false};
 		fx_button(x, sy + 26 - bh, w, bh, 10, &ok);
-		ui_text_wrap(x + 10, sy + 26 - bh + 6, w - 20, _("Escaneado: apruébalo en el móvil"), SZ_SMALL, COL_LIME, 2, 13);
+		ui_text_wrap(x + 10, sy + 26 - bh + 6, w - 20, _("Código escaneado. Confirma el inicio de sesión en el móvil"), SZ_SMALL, COL_LIME, 2, 13);
 	} else {
 		float cy = sy + 13;
 		ui_spinner(x + 8, cy, 6, COL_DIM);
-		ui_text(x + 22, cy - ls * 0.55f, _("Esperando al móvil…"), SZ_SMALL, COL_DIM, AL_LEFT, w - 30);
+		ui_text(x + 22, cy - ls * 0.55f, _("Esperando confirmación…"), SZ_SMALL, COL_DIM, AL_LEFT, w - 30);
 	}
 }
 
 static void draw_login_bottom(void)
 {
 	// Todo centrado dentro del panel: el candado, el título y el texto (cada línea centrada)
-	const char *msg = _("Apruebas la entrada desde la app oficial de Steam. La sesión se guarda en la tarjeta SD; puedes cerrarla cuando quieras desde el menú (START) o desde Steam, en Dispositivos autorizados.");
+	const char *msg = _("El inicio de sesión se confirma desde la app oficial de Steam. La sesión se guarda en la tarjeta SD y puedes cerrarla en cualquier momento desde el menú (START) o desde Steam, en Dispositivos autorizados.");
 	const float px = 14, py = 12, pw = BOT_W - 28, ph = SCR_H - 18 - 12 - py;
 	fx_glass(px, py, pw, ph, 18, 1, 0);
 	int nl = ui_text_lines(msg, SZ_SMALL, pw - 36);
@@ -2801,7 +2801,7 @@ static void draw_login_bottom(void)
 	ui_circle(BOT_W / 2, y + 18, 18, C2D_Color32(0xff, 0xff, 0xff, 0x12));
 	ui_icon(IC_LOCK, BOT_W / 2 - 10, y + 18 - 10 - 2, 20, COL_ACC);
 	y += 36 + 10;
-	ui_text(BOT_W / 2, y, _("Tu contraseña nunca pasa por la consola"), SZ_BODY, COL_WHITE, AL_CENTER, pw - 24);
+	ui_text(BOT_W / 2, y, _("Tu contraseña nunca se introduce en la consola"), SZ_BODY, COL_WHITE, AL_CENTER, pw - 24);
 	y += 16 + 10;
 	ui_text_wrap_center(BOT_W / 2, y, pw - 36, msg, SZ_SMALL, COL_DIM, 8, 14);
 	static const char *hh[] = {"B", "Volver"};
@@ -3135,7 +3135,7 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		const CartInfo *c = shop_cart();
 		int sel = CUR->sel;
 		if ((kd & KEY_Y) && sel >= 0 && sel < c->n) {
-			if (shop_busy()) toast(_("Un momento, estoy con lo anterior"));
+			if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
 			else shop_cart_remove(sel);
 		}
 		if ((kd & KEY_X) && c->n) open_pay();
@@ -3317,27 +3317,27 @@ static const char *card_name(const char *type)
 // Por qué no se pudo pagar, en palabras normales (EPurchaseResultDetail)
 static const char *pay_err_text(const PayInfo *p)
 {
-	if (p->maybe_paid) return _("No se pudo comprobar si se cobró. Mira tu correo o el historial de compras de Steam antes de volver a intentarlo.");
+	if (p->maybe_paid) return _("No se pudo confirmar el cobro. Revisa tu correo o el historial de compras de Steam antes de volver a intentarlo.");
 	switch (p->detail) {
-	case 2: return _("No hay saldo suficiente.");
-	case 4: case 34: return _("La compra tardó demasiado y Steam la canceló. No se cobró nada.");
-	case 6: case 16: case 49: return _("Steam no acepta este método para esta compra. Prueba con otro o paga en el móvil.");
-	case 8: case 45: case 52: return _("Tienes otra compra a medias en Steam. Termínala o cancélala en el móvil y vuelve a probar.");
-	case 9: return _("Ya tienes algo de lo que hay en el carrito. Quítalo y vuelve a probar.");
-	case 11: return _("El banco o Steam rechazaron el pago por seguridad. Prueba en el móvil o habla con tu banco.");
-	case 13: case 19: case 23: return _("Algo del carrito no se puede comprar en tu país.");
-	case 24: return _("Para algo del carrito necesitas el juego base.");
-	case 33: return _("La tarjeta guardada está caducada. Cámbiala en la app de Steam.");
-	case 47: return _("Hay cosas repetidas en el carrito (un pack incluye otro). Quita una.");
+	case 2: return _("Saldo insuficiente.");
+	case 4: case 34: return _("La compra ha caducado y Steam la ha cancelado. No se ha realizado ningún cargo.");
+	case 6: case 16: case 49: return _("Este método de pago no está disponible para esta compra. Elige otro o paga desde el móvil.");
+	case 8: case 45: case 52: return _("Tienes otra compra pendiente en Steam. Complétala o cancélala desde el móvil e inténtalo de nuevo.");
+	case 9: return _("Ya tienes uno de los artículos del carrito. Elimínalo e inténtalo de nuevo.");
+	case 11: return _("El banco o Steam han rechazado el pago por motivos de seguridad. Inténtalo desde el móvil o contacta con tu banco.");
+	case 13: case 19: case 23: return _("Algún artículo del carrito no está disponible en tu país.");
+	case 24: return _("Algún artículo del carrito requiere el juego base.");
+	case 33: return _("La tarjeta guardada ha caducado. Actualízala en la app oficial de Steam.");
+	case 47: return _("El carrito contiene artículos duplicados (un lote incluye otro). Elimina uno.");
 	case 53: return _("Demasiados intentos. Espera unos minutos.");
-	case 82: return _("Este método de pago no funciona ahora mismo. Prueba más tarde.");
+	case 82: return _("Este método de pago no está disponible en este momento. Inténtalo más tarde.");
 	}
-	if (!strcmp(p->err, "sin cookies del checkout")) return _("La sesión web no está lista. Cierra sesión y vuelve a entrar.");
-	if (!strcmp(p->err, "pagina de pago no reconocida")) return _("Steam no abrió la página de pago. Vuelve a iniciar sesión o paga en el móvil.");
-	if (!strcmp(p->err, "verificacion rechazada")) return _("El banco no verificó la compra. No se cobró nada.");
-	if (p->err[0] && strncmp(p->err, "HTTP", 4) && strncmp(p->err, "curl", 4)) return _("Steam no aceptó el pago.");
-	if (p->err[0]) return _("No hay conexión con Steam. No se cobró nada.");
-	return _("Steam no aceptó el pago.");
+	if (!strcmp(p->err, "sin cookies del checkout")) return _("La sesión no está lista. Cierra sesión y vuelve a iniciarla.");
+	if (!strcmp(p->err, "pagina de pago no reconocida")) return _("No se pudo abrir el pago. Vuelve a iniciar sesión o paga desde el móvil.");
+	if (!strcmp(p->err, "verificacion rechazada")) return _("El banco no verificó la compra. No se ha realizado ningún cargo.");
+	if (p->err[0] && strncmp(p->err, "HTTP", 4) && strncmp(p->err, "curl", 4)) return _("Steam ha rechazado el pago.");
+	if (p->err[0]) return _("No se puede conectar con Steam. No se ha realizado ningún cargo.");
+	return _("Steam ha rechazado el pago.");
 }
 
 static void pay_events(void)
@@ -3363,7 +3363,7 @@ static void open_cvv_keyboard(void)
 	SwkbdState kb;
 	char buf[8] = "";
 	swkbdInit(&kb, SWKBD_TYPE_NUMPAD, 2, 4);
-	swkbdSetHintText(&kb, _("CVV (3 o 4 números, detrás de la tarjeta)"));
+	swkbdSetHintText(&kb, _("CVV (3 o 4 dígitos, en el reverso de la tarjeta)"));
 	swkbdSetPasswordMode(&kb, SWKBD_PASSWORD_HIDE_DELAY);
 	swkbdSetButton(&kb, SWKBD_BUTTON_LEFT, _("Cancelar"), false);
 	swkbdSetButton(&kb, SWKBD_BUTTON_RIGHT, _("Aceptar"), true);
@@ -3372,7 +3372,7 @@ static void open_cvv_keyboard(void)
 	swkbdSetValidation(&kb, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
 	if (swkbdInputText(&kb, buf, sizeof buf) == SWKBD_BUTTON_RIGHT) {
 		pay_set_cvv(buf);
-		if (!pay_info()->cvv_set) toast(_("El CVV son 3 o 4 números"));
+		if (!pay_info()->cvv_set) toast(_("El CVV debe tener 3 o 4 dígitos"));
 	}
 	memset(buf, 0, sizeof buf);
 	memset(&kb, 0, sizeof kb);
@@ -3383,13 +3383,13 @@ static void draw_pay_top(void)
 	const PayInfo *p = pay_info();
 	if (S.pay_qr) {
 		draw_qr_panel("https://store.steampowered.com/cart/", _("Pagar en el móvil"),
-			_("Escanea el código: se abre tu carrito de Steam, el mismo de aquí, y lo pagas desde ahí."), NULL, NULL, 0);
+			_("Escanea el código para abrir tu carrito de Steam en el móvil y completar la compra."), NULL, NULL, 0);
 		return;
 	}
 	if (p->state == PAY_BANK) {
-		draw_qr_panel(p->bank_url, _("Tu banco quiere verificar"),
-			_("Escanea el código con el móvil y confirma la compra como te pida el banco. Esta pantalla seguirá sola cuando esté hecho."),
-			NULL, _("Si no la verificas, no se cobra nada."), COL_DIM);
+		draw_qr_panel(p->bank_url, _("Verificación del banco"),
+			_("Escanea el código con el móvil y confirma la compra según te indique tu banco. Esta pantalla se actualizará automáticamente."),
+			NULL, _("Si no la verificas, no se realizará ningún cargo."), COL_DIM);
 		return;
 	}
 	if (p->state == PAY_DONE) {
@@ -3402,7 +3402,7 @@ static void draw_pay_top(void)
 		float ax = cx - 13, ay = cy + 1, bx = cx - 4, by = cy + 10, ex = cx + 14, ey = cy - 9;
 		if (k1 > 0) C2D_DrawLine(ax, ay, COL_WHITE, ax + (bx - ax) * k1, ay + (by - ay) * k1, COL_WHITE, 5, 0.5f);
 		if (k2 > 0) C2D_DrawLine(bx, by, COL_WHITE, bx + (ex - bx) * k2, by + (ey - by) * k2, COL_WHITE, 5, 0.5f);
-		const char *t = p->approval ? _("Compra enviada para aprobar") : p->pending ? _("Compra en camino") : _("¡Compra hecha!");
+		const char *t = p->approval ? _("Compra pendiente de aprobación") : p->pending ? _("Compra en proceso") : _("Compra completada");
 		ui_text(cx, 124, t, SZ_TITLE, COL_WHITE, AL_CENTER, 380);
 		char l[96];
 		snprintf(l, sizeof l, _("Total: %s"), p->receipt_total);
@@ -3411,9 +3411,9 @@ static void draw_pay_top(void)
 			snprintf(l, sizeof l, _("Código de compra: %s"), p->receipt_id);
 			ui_text(cx, 172, l, SZ_SMALL, COL_DIM, AL_CENTER, 380);
 		}
-		ui_text(cx, 192, p->approval ? _("Quien gestiona tu familia tiene que aprobarla en Steam.")
-			: p->pending ? _("Steam la está terminando: te llegará el recibo por correo.")
-			: _("Ya está en tu biblioteca. El recibo te llega por correo."), SZ_SMALL, COL_TXT, AL_CENTER, 380);
+		ui_text(cx, 192, p->approval ? _("El administrador de tu familia de Steam debe aprobarla.")
+			: p->pending ? _("Steam está procesando la compra. Recibirás el recibo por correo electrónico.")
+			: _("Ya está en tu biblioteca. Recibirás el recibo por correo electrónico."), SZ_SMALL, COL_TXT, AL_CENTER, 380);
 		return;
 	}
 	// Resumen del carrito
@@ -3422,7 +3422,7 @@ static void draw_pay_top(void)
 	float ph = 30 + shown_n * 19 + (c->n > 7 ? 19 : 0) + 30;
 	fx_glass(8, 22, TOP_W - 16, ph, 16, 1, 0);
 	ui_icon(IC_CART, 16, 29, 14, COL_ACC);
-	ui_text(38, 28, _("Pagar tu carrito"), SZ_LARGE, COL_WHITE, AL_LEFT, 300);
+	ui_text(38, 28, _("Pagar el carrito"), SZ_LARGE, COL_WHITE, AL_LEFT, 300);
 	ui_hline(16, 47, TOP_W - 32, C2D_Color32(0xff, 0xff, 0xff, 0x14));
 	float y = 54;
 	for (int i = 0; i < c->n && i < 7; i++, y += 19) {
@@ -3445,7 +3445,7 @@ static void draw_pay_top(void)
 		ui_text_wrap(16, SCR_H - 52, TOP_W - 32, _("Al pagar aceptas el Acuerdo de Suscriptor de Steam. Al ser contenido digital, la descarga puede empezar ya y renuncias al desistimiento de 14 días de la UE; el reembolso de Steam sigue valiendo (14 días y menos de 2 h jugadas)."),
 			SZ_TINY, COL_DIM, 3, 11);
 	else
-		ui_text(TOP_W / 2, SCR_H - 18, _("Los métodos de pago solo se cambian en la app de Steam"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		ui_text(TOP_W / 2, SCR_H - 18, _("Los métodos de pago solo se pueden cambiar en la app oficial de Steam"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
 }
 
 static void draw_pay_bottom(void)
@@ -3459,7 +3459,7 @@ static void draw_pay_bottom(void)
 	case PAY_LOADING:
 	case PAY_PREPARING:
 		ui_spinner(BOT_W / 2, 100, 9, COL_ACC);
-		ui_text(BOT_W / 2, 124, p->state == PAY_LOADING ? _("Abriendo el pago de Steam…") : _("Steam está calculando el total…"), SZ_BODY, COL_TXT, AL_CENTER, 300);
+		ui_text(BOT_W / 2, 124, p->state == PAY_LOADING ? _("Abriendo el pago…") : _("Calculando el total…"), SZ_BODY, COL_TXT, AL_CENTER, 300);
 		break;
 	case PAY_CHOOSE: {
 		ui_text(BOT_W / 2, 28, _("¿Cómo quieres pagar?"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
@@ -3472,20 +3472,20 @@ static void draw_pay_bottom(void)
 		else snprintf(t, sizeof t, "%s", _("Sin tarjeta guardada"));
 		draw_button_k(&B_PAYC, NULL, S.paysel == 1, IC_CARD, t, C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, p->card ? 1 : 0.4f, pc);
 		draw_button_k(&B_PAYQ, "X", S.paysel == 2, IC_PHONE, _("Pagar en el móvil (QR)"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PAYQ);
-		ui_text_wrap(16, 160, BOT_W - 32, _("Solo se usa lo que ya tienes en Steam. Para añadir o cambiar una tarjeta, usa la app oficial."), SZ_TINY, COL_DIM, 3, 11);
+		ui_text_wrap(16, 160, BOT_W - 32, _("Solo puedes usar los métodos de pago guardados en tu cuenta. Para añadir o cambiar una tarjeta, usa la app oficial de Steam."), SZ_TINY, COL_DIM, 3, 11);
 		break;
 	}
 	case PAY_REVIEW: {
-		if (p->method == PM_WALLET) snprintf(t, sizeof t, _("Con tu cartera · saldo %s"), p->wallet_fmt);
+		if (p->method == PM_WALLET) snprintf(t, sizeof t, _("Cartera de Steam · Saldo: %s"), p->wallet_fmt);
 		else snprintf(t, sizeof t, _("%s terminada en %s"), card_name(p->card_type), p->card_last4);
 		ui_text(BOT_W / 2, 30, t, SZ_SMALL, COL_DIM, AL_CENTER, 300);
 		ui_text(BOT_W / 2, 46, p->total_fmt, SZ_TITLE, COL_WHITE, AL_CENTER, 300);
 		if (p->short_wallet) {
-			ui_text_wrap(20, 92, BOT_W - 40, _("Tu saldo no llega para este total. Vuelve con B y elige la tarjeta, o paga en el móvil."), SZ_SMALL, C2D_Color32(0xff, 0x8a, 0x7a, 0xff), 3, 14);
+			ui_text_wrap(20, 92, BOT_W - 40, _("Tu saldo no cubre el total. Pulsa B para elegir otro método de pago o paga desde el móvil."), SZ_SMALL, C2D_Color32(0xff, 0x8a, 0x7a, 0xff), 3, 14);
 			break;
 		}
 		if (p->need_cvv) {
-			snprintf(t, sizeof t, "%s", p->cvv_set ? _("CVV escrito · cambiarlo") : _("Steam pide el CVV · escribirlo"));
+			snprintf(t, sizeof t, "%s", p->cvv_set ? _("CVV introducido · Cambiar") : _("Introduce el CVV"));
 			draw_button_k(&B_CVV, "Y", false, IC_LOCK, t, COL_BTN2, COL_BTN2, p->cvv_set ? COL_LIME : COL_ACC, 1, S.pressed == BT_CVV);
 		}
 		bool ready = !p->need_cvv || p->cvv_set;
@@ -3516,14 +3516,14 @@ static void draw_pay_bottom(void)
 		ui_text(BOT_W / 2, 104, _("Esperando a tu banco…"), SZ_LARGE, COL_WHITE, AL_CENTER, 0);
 		snprintf(t, sizeof t, "%d:%02d", secs / 60, secs % 60);
 		ui_text(BOT_W / 2, 128, t, SZ_BODY, COL_DIM, AL_CENTER, 0);
-		ui_text_wrap(20, 152, BOT_W - 40, _("Escanea el QR de arriba con el móvil. No hace falta tocar nada aquí."), SZ_SMALL, COL_TXT, 3, 14);
+		ui_text_wrap(20, 152, BOT_W - 40, _("Escanea el código QR de la pantalla superior con el móvil. Esta pantalla se actualizará automáticamente."), SZ_SMALL, COL_TXT, 3, 14);
 		break;
 	}
 	case PAY_DONE: {
 		fx_glass(30, 60, BOT_W - 60, 90, 18, 1, 0);
 		ui_icon(IC_PAD, BOT_W / 2 - 12, 74, 24, COL_LIME);
-		ui_text(BOT_W / 2, 106, _("¡Disfrútalo!"), SZ_LARGE, COL_WHITE, AL_CENTER, 0);
-		ui_text(BOT_W / 2, 128, _("A: ir a tu biblioteca"), SZ_SMALL, COL_DIM, AL_CENTER, 240);
+		ui_text(BOT_W / 2, 106, _("Gracias por tu compra"), SZ_LARGE, COL_WHITE, AL_CENTER, 0);
+		ui_text(BOT_W / 2, 128, _("Pulsa A para ir a tu biblioteca"), SZ_SMALL, COL_DIM, AL_CENTER, 240);
 		break;
 	}
 	case PAY_FAILED:
@@ -3594,8 +3594,8 @@ static void input_pay(u32 kd, u32 kh, u32 ku, touchPosition *tp, float dt)
 		if (key_repeat(kd, kh, KEY_DOWN)) S.paysel = (S.paysel + 1) % 3;
 		if (key_repeat(kd, kh, KEY_UP)) S.paysel = (S.paysel + 2) % 3;
 		if (kd & KEY_A) b = ids[S.paysel];
-		if (b == BT_PAYW) { if (p->wallet) pay_choose(PM_WALLET); else toast(_("No tienes saldo en la cartera")); }
-		if (b == BT_PAYC) { if (p->card) pay_choose(PM_CARD); else toast(_("Guarda una tarjeta desde la app de Steam")); }
+		if (b == BT_PAYW) { if (p->wallet) pay_choose(PM_WALLET); else toast(_("Tu cartera no tiene saldo")); }
+		if (b == BT_PAYC) { if (p->card) pay_choose(PM_CARD); else toast(_("Guarda una tarjeta desde la app oficial de Steam")); }
 		if (b == BT_PAYQ || (kd & KEY_X)) S.pay_qr = true;
 		return;
 	}
@@ -3609,7 +3609,7 @@ static void input_pay(u32 kd, u32 kh, u32 ku, touchPosition *tp, float dt)
 		if (!(kh & KEY_A) && !(kh & KEY_TOUCH)) S.pay_armed = true;
 		bool holding = S.pay_armed && ((kh & KEY_A) || ((kh & KEY_TOUCH) && hit(&B_PAYGO, tp->px, tp->py)));
 		if (holding && !ready) {
-			if (kd & (KEY_A | KEY_TOUCH)) toast(_("Primero escribe el CVV"));
+			if (kd & (KEY_A | KEY_TOUCH)) toast(_("Introduce primero el CVV"));
 			S.pay_hold = 0;
 		} else if (holding) {
 			S.pay_hold += dt / PAY_HOLD_S;
@@ -3711,7 +3711,7 @@ static void game_cart_button(const AppInfo *a)
 		return;
 	}
 	if (shop_busy()) {
-		toast(_("Un momento, estoy con lo anterior"));
+		toast(_("Espera a que termine la acción anterior"));
 		return;
 	}
 	int n = 0;
@@ -3723,9 +3723,9 @@ static void game_cart_button(const AppInfo *a)
 		open_account_list(TAB_CART);
 	} else if (!o) {
 		if (failed) shop_buyopts_load(a->appid);
-		toast(failed ? _("No se pudo saber cómo se compra: reintentando") : _("Un momento, mirando las ediciones…"));
+		toast(failed ? _("No se pudieron cargar las opciones de compra. Reintentando…") : _("Cargando las ediciones disponibles…"));
 	} else if (n == 0) {
-		toast(a->coming_soon ? _("Aún no se puede comprar: está por salir") : _("Steam no lo vende ahora mismo en tu país"));
+		toast(a->coming_soon ? _("Este juego aún no está disponible para comprar") : _("No está a la venta en tu país en este momento"));
 	} else if (n == 1) {
 		if (o[0].free) shop_free(a->appid, a->name);
 		else shop_cart_add(a->appid, &o[0]);
@@ -3812,13 +3812,13 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		game_cart_button(a);
 	} else if (b == BT_WISH) {
 		if (owned_app(a->appid)) toast(_("Ya está en tu biblioteca"));
-		else if (shop_busy()) toast(_("Un momento, estoy con lo anterior"));
+		else if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
 		else shop_wish(a->appid, a->name, !in_wishlist(a->appid));
 	} else if (b == BT_INST) {
-		toast(_("Instalar en el PC llega en la próxima actualización"));
+		toast(_("La instalación remota estará disponible en una próxima actualización"));
 	} else if (b == BT_DEMO) {
 		if (owned_app(a->demo)) toast(_("Ya está en tu biblioteca"));
-		else if (shop_busy()) toast(_("Un momento, estoy con lo anterior"));
+		else if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
 		else {
 			char dn[140];
 			snprintf(dn, sizeof dn, _("Demo de %s"), a->name);
@@ -3870,18 +3870,18 @@ static void input_shots(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 static const char *shop_err(int code)
 {
 	switch (code) {
-	case 2: return _("Steam dio un error, prueba otra vez");
-	case 15: return _("Steam no lo permite con esta cuenta");
-	case 25: case 41: return _("No caben más cosas");
-	case 29: return _("Ya estaba hecho");
-	case 84: return _("Demasiadas peticiones: espera un poco");
-	case 1009: return _("Ya lo tienes");
+	case 2: return _("Se produjo un error en Steam. Inténtalo de nuevo.");
+	case 15: return _("Esta acción no está permitida en esta cuenta");
+	case 25: case 41: return _("Se ha alcanzado el límite de artículos");
+	case 29: return _("No se requieren cambios");
+	case 84: return _("Demasiadas solicitudes. Inténtalo de nuevo en unos minutos.");
+	case 1009: return _("Ya está en tu biblioteca");
 	case 1013: case 1019: return _("No está disponible en tu país");
 	case 1024: return _("Necesitas el juego base");
-	case 1004: case 1008: return _("Steam está ocupado, prueba en un rato");
+	case 1004: case 1008: return _("Steam está ocupado. Inténtalo de nuevo más tarde.");
 	}
-	if (code < 0) return _("No hay conexión con Steam");
-	return _("Steam no lo aceptó");
+	if (code < 0) return _("No se puede conectar con Steam");
+	return _("Steam ha rechazado la solicitud");
 }
 
 static void shop_events(void)
@@ -3913,7 +3913,7 @@ static void shop_events(void)
 			if (ev.ok) {
 				note_added(ev.appid);
 				library_changed();
-				snprintf(t, sizeof t, _("¡Ya está en tu biblioteca! %s"), ev.what);
+				snprintf(t, sizeof t, _("Añadido a tu biblioteca: %s"), ev.what);
 			} else if (ev.code == 1009) {
 				snprintf(t, sizeof t, "%s", _("Ya está en tu biblioteca"));
 			} else {
@@ -4134,7 +4134,7 @@ int main(int argc, char **argv)
 			if (auth_info()->state == AUTH_IN && S.scene == SC_GAME) friends_request(S.app);
 			if (S.last_auth == AUTH_STARTING && auth_info()->state == AUTH_OUT && !strcmp(auth_info()->err, "expired"))
 			{
-				toast(_("Tu sesión de Steam caducó: vuelve a iniciarla"));
+				toast(_("Tu sesión ha caducado. Vuelve a iniciar sesión."));
 				account_lists_clear();
 			}
 			S.last_auth = auth_info()->state;

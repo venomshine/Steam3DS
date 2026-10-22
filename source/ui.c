@@ -593,6 +593,38 @@ void ui_icon(Icon ic, float x, float y, float s, u32 c)
 		}
 		seg(X(6), Y(0.8), X(6), Y(6), 1.7f * u, c);
 		break;
+	case IC_INFO:
+		// Círculo con la «i»
+		ring(X(6), Y(6), 5.2f * u, 1.2f * u, c);
+		ui_circle(X(6), Y(3.5), 0.95f * u, c);
+		seg(X(6), Y(5.4), X(6), Y(9), 1.4f * u, c);
+		break;
+	case IC_CODE:
+		// </>
+		seg(X(3.8), Y(2.8), X(0.8), Y(6), 1.3f * u, c);
+		seg(X(0.8), Y(6), X(3.8), Y(9.2), 1.3f * u, c);
+		seg(X(8.2), Y(2.8), X(11.2), Y(6), 1.3f * u, c);
+		seg(X(11.2), Y(6), X(8.2), Y(9.2), 1.3f * u, c);
+		seg(X(7), Y(1.8), X(5), Y(10.2), 1.2f * u, c);
+		break;
+	case IC_CHAT:
+		// Bocadillo con su pico y tres puntos
+		ui_rrect(X(0.6), Y(1.4), 10.8f * u, 7.4f * u, 2.2f * u, c);
+		tri(X(2.6), Y(8.4), X(5.4), Y(8.4), X(2.4), Y(11), c);
+		for (int k = 0; k < 3; k++) ui_circle(X(3.6 + k * 2.4f), Y(5.1), 0.8f * u, C2D_Color32(0, 0, 0, 0xa0));
+		break;
+	case IC_CUP:
+		// Taza de café con el asa y el vapor
+		ui_rrect(X(1.2), Y(4.4), 7.4f * u, 6.4f * u, 1.6f * u, c);
+		ring(X(9.2), Y(7.2), 1.7f * u, 1.0f * u, c);
+		seg(X(3.4), Y(0.8), X(3.8), Y(3.0), 0.9f * u, c);
+		seg(X(6.2), Y(0.8), X(6.6), Y(3.0), 0.9f * u, c);
+		break;
+	case IC_DOC:
+		// Hoja con renglones
+		ui_rrect(X(1.8), Y(0.6), 8.4f * u, 10.8f * u, 1.2f * u, c);
+		for (int k = 0; k < 4; k++) ui_rect(X(3.4), Y(2.8 + k * 2), (k == 3 ? 3.4f : 5.2f) * u, 0.9f * u, C2D_Color32(0, 0, 0, 0xa0));
+		break;
 	case IC_LOCK:
 		ring(X(6), Y(4.6), 2.8f * u, 1.3f * u, c);
 		ui_rrect(X(2), Y(5.4), 8 * u, 6.2f * u, 1 * u, c);

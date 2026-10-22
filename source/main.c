@@ -22,7 +22,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
@@ -179,7 +179,7 @@ static struct {
 
 static InfoEnt cache[CACHE];
 static u64 frame_no;
-static C2D_SpriteSheet sprites, splash_bg, wheel_sheet;
+static C2D_SpriteSheet sprites, splash_bg, wheel_sheet, ui_sheet;   // ui_sheet: el logo (no se libera)
 static int sprites_free_in = -1;   // fotogramas que faltan para liberar los sprites de la carga
 static C2D_TextBuf review_buf;
 static float splash_t, splash_out = -1;
@@ -2431,9 +2431,9 @@ static void draw_overlays_bottom(void)
 
 static bool key_repeat(u32 down, u32 held, u32 mask);
 
-enum { MI_LOGIN, MI_PROFILE, MI_LIBRARY, MI_WISHLIST, MI_CART, MI_LOGOUT, MI_REQS, MI_EXIT };
-#define MENU_ROW 26
-#define MENU_HEAD 42
+enum { MI_LOGIN, MI_PROFILE, MI_LIBRARY, MI_WISHLIST, MI_CART, MI_LOGOUT, MI_REQS, MI_ABOUT, MI_EXIT };
+#define MENU_ROW 24
+#define MENU_HEAD 38
 
 static int menu_items(int *out)
 {
@@ -2451,6 +2451,7 @@ static int menu_items(int *out)
 		out[n++] = MI_LOGOUT;
 	}
 	out[n++] = MI_REQS;
+	out[n++] = MI_ABOUT;
 	out[n++] = MI_EXIT;
 	return n;
 }
@@ -2458,7 +2459,7 @@ static int menu_items(int *out)
 static float menu_y(int n)
 {
 	// El panel llega hasta abajo (tapa la barra de botones): con sesión son siete opciones
-	return SCR_H - (MENU_HEAD + n * MENU_ROW + 10);
+	return SCR_H - (MENU_HEAD + n * MENU_ROW + 8);
 }
 
 static void open_login(void)
@@ -2600,6 +2601,299 @@ static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	}
 }
 
+// ---------------------------------------------------------------------------- Acerca de
+
+#define URL_GITHUB  "https://github.com/venomshine"
+#define URL_DISCORD "https://discord.com/invite/yVKp8JwV4e"
+#define URL_KOFI    "https://ko-fi.com/venomshine"
+#ifndef ABOUT_VARIANT
+#define ABOUT_VARIANT 1
+#endif
+
+enum { AB_APP, AB_GITHUB, AB_DISCORD, AB_KOFI, AB_CREDITS, AB_LEGAL, AB_COUNT };
+static Scene about_back;
+static int about_sel;
+static float about_t;
+
+static const char *const about_desc = "Explora la tienda de Steam, consulta ofertas y reseñas, gestiona tu lista de deseos y tu carrito, y compra con los métodos de pago de tu cuenta, todo desde la consola.";
+static const char *const about_legal = "Steam3DS es un proyecto independiente y no está afiliado, patrocinado ni respaldado por Valve Corporation ni por Nintendo. Steam y el logotipo de Steam son marcas comerciales o marcas registradas de Valve Corporation. Nintendo 3DS es una marca registrada de Nintendo.";
+
+// Créditos: lo que usa la app y sus licencias
+static const char *const about_credits[][2] = {
+	{"libctru · citro2d · citro3d", "zlib"},
+	{"libcurl", "curl"},
+	{"Mbed TLS", "Apache-2.0"},
+	{"zlib", "zlib"},
+	{"libjpeg-turbo", "IJG · BSD-3"},
+	{"cJSON", "MIT"},
+	{"QR Code generator (Nayuki)", "MIT"},
+	{"Certificados CA de Mozilla", "MPL-2.0"},
+	{"devkitPro · devkitARM", ""},
+};
+#define NCREDITS (int)(sizeof about_credits / sizeof *about_credits)
+
+static void open_about(void)
+{
+	about_back = S.scene == SC_ABOUT ? SC_STORE : S.scene;
+	about_sel = 0;
+	about_t = 0;
+	go_scene(SC_ABOUT, 1);
+}
+
+static void draw_logo(float cx, float cy, float size, float alpha)
+{
+	if (!ui_sheet) return;
+	C2D_Image img = C2D_SpriteSheetGetImage(ui_sheet, 0);
+	C2D_ImageTint tint;
+	C2D_AlphaImageTint(&tint, alpha);
+	float s = size / 96.0f;
+	C2D_DrawImageAt(img, cx - size / 2, cy - size / 2, 0.5f, &tint, s, s);
+}
+
+static const char *about_link_url(int i)
+{
+	return i == AB_GITHUB ? URL_GITHUB : i == AB_DISCORD ? URL_DISCORD : URL_KOFI;
+}
+
+static const char *about_link_name(int i)
+{
+	return i == AB_GITHUB ? "GitHub" : i == AB_DISCORD ? "Discord" : "Ko-fi";
+}
+
+static const char *about_link_desc(int i)
+{
+	return i == AB_GITHUB ? _("Código, novedades y avisos de errores. Si algo falla, abre un issue y lo reviso.")
+		: i == AB_DISCORD ? _("Únete a la comunidad: dudas, ayuda, ideas y anuncios de nuevas versiones.")
+		: _("Si te gusta Steam3DS, puedes invitarme a un café. Ayuda mucho a seguir con el proyecto.");
+}
+
+// La ficha de la app: logo, nombre, versión, autor y para qué sirve
+static void about_app_card(float x, float y, float w)
+{
+	draw_logo(x + 36, y + 36, 72, 1);
+	float tx = x + 84;
+	ui_text(tx, y + 6, "Steam3DS", SZ_TITLE, COL_WHITE, AL_LEFT, w - 84);
+	ui_text(tx, y + 32, _("La tienda de Steam en tu Nintendo 3DS"), SZ_SMALL, COL_ACC, AL_LEFT, w - 84);
+	char v[64];
+	snprintf(v, sizeof v, _("Versión %s · Hecho por VENOMSHiNE"), APP_VERSION);
+	ui_text(tx, y + 50, v, SZ_SMALL, COL_DIM, AL_LEFT, w - 84);
+}
+
+// Créditos que suben despacio en una ventana, con los bordes fundidos; al acabar, empiezan otra vez
+static void about_credits_roll(float x, float y, float w, float h, bool legal_at_end)
+{
+	const float LH = 15;
+	int nl = NCREDITS + 2 + (legal_at_end ? 4 : 0);
+	float total = nl * LH + h;
+	float off = fmodf(about_t * 14, total);
+	ui_scissor(GFX_BOTTOM, x, y, w, h);
+	float y0 = y + h - off;
+	ui_text(x + w / 2, y0, _("CRÉDITOS"), SZ_TINY, COL_ACC, AL_CENTER, 0);
+	for (int i = 0; i < NCREDITS; i++) {
+		float ly = y0 + (i + 1.5f) * LH;
+		if (ly < y - LH || ly > y + h) continue;
+		ui_text(x + 6, ly, about_credits[i][0], SZ_TINY, COL_TXT, AL_LEFT, w * 0.62f);
+		ui_text(x + w - 6, ly, about_credits[i][1], SZ_TINY, COL_DIM, AL_RIGHT, 0);
+	}
+	if (legal_at_end)
+		ui_text_wrap_center(x + w / 2, y0 + (NCREDITS + 2.5f) * LH, w - 16, _(about_legal), SZ_TINY, COL_DIM, 4, 12);
+	ui_scissor_off();
+	u32 bg = C2D_Color32(0x0e, 0x15, 0x21, 0xff), clear = col_alpha(bg, 0);
+	ui_vgrad(x, y, w, 12, bg, clear);
+	ui_vgrad(x, y + h - 12, w, 12, clear, bg);
+}
+
+// ------------------------------------------------------------ Opción 1: lista y panel (como Cloud3DS)
+
+static void about1_top(void)
+{
+	const float X = 16, W = TOP_W - 32;
+	if (about_sel >= AB_GITHUB && about_sel <= AB_KOFI) {
+		draw_qr_panel(about_link_url(about_sel), about_link_name(about_sel), about_link_desc(about_sel), NULL, about_link_url(about_sel) + 8, COL_ACC);
+	} else if (about_sel == AB_CREDITS) {
+		ui_text(X, 28, _("Créditos y licencias"), SZ_LARGE, COL_WHITE, AL_LEFT, W);
+		ui_rrect(X, 47, ui_text_w(_("Créditos y licencias"), SZ_LARGE), 2, 1, col_alpha(COL_ACC, 0.8f));
+		for (int i = 0; i < NCREDITS; i++) {
+			float y = 60 + i * 17;
+			ui_text(X, y, about_credits[i][0], SZ_SMALL, COL_TXT, AL_LEFT, W * 0.7f);
+			ui_text(X + W, y, about_credits[i][1], SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+		}
+		ui_text(X, 218, _("Datos de la tienda: Steam (Valve Corporation)"), SZ_SMALL, COL_DIM, AL_LEFT, W);
+	} else if (about_sel == AB_LEGAL) {
+		ui_text(X, 28, _("Aviso legal"), SZ_LARGE, COL_WHITE, AL_LEFT, W);
+		ui_rrect(X, 47, ui_text_w(_("Aviso legal"), SZ_LARGE), 2, 1, col_alpha(COL_ACC, 0.8f));
+		ui_text_wrap(X, 62, W, _(about_legal), SZ_SMALL, COL_TXT, 8, 15);
+	} else {
+		fx_glass(10, 26, TOP_W - 20, 84, 14, 1, 0);
+		about_app_card(16, 32, TOP_W - 32);
+		ui_text_wrap(X, 122, W, _(about_desc), SZ_SMALL, COL_TXT, 4, 15);
+		ui_text_wrap(X, 186, W, _("Si encuentras algún problema o tienes una sugerencia, escríbeme por GitHub o Discord."), SZ_SMALL, COL_ACC, 2, 15);
+	}
+}
+
+static void about1_bottom(void)
+{
+	fx_bar(0, 0, BOT_W, LIST_Y, true);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_icon(IC_INFO, 28, 6, 12, COL_ACC);
+	ui_text(46, 5, _("Acerca de Steam3DS"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
+	static const Icon ic[AB_COUNT] = {IC_PAD, IC_CODE, IC_CHAT, IC_CUP, IC_DOC, IC_DOC};
+	const u32 col[AB_COUNT] = {COL_ACC, C2D_Color32(0xc9, 0xd1, 0xd9, 0xff), C2D_Color32(0x7f, 0x8c, 0xff, 0xff),
+		C2D_Color32(0xff, 0x6e, 0x6b, 0xff), COL_DIM, COL_DIM};
+	char ver[48];
+	snprintf(ver, sizeof ver, "Steam3DS %s", APP_VERSION);
+	const char *title[AB_COUNT] = {ver, "GitHub", "Discord", "Ko-fi", _("Créditos y licencias"), _("Aviso legal")};
+	const char *sub[AB_COUNT] = {_("Gracias por usar Steam3DS"), _("Código y avisos de errores"), _("Comunidad y ayuda"),
+		_("Invítame a un café"), _("Librerías que usa la app"), _("Steam3DS no es una app oficial de Steam")};
+	const float RH = 32;
+	for (int i = 0; i < AB_COUNT; i++) {
+		float y = LIST_Y + 2 + i * RH;
+		if (i == about_sel) {
+			float br = 0.075f + 0.035f * sinf(g_time * 2.4f);
+			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
+			ui_rrect(3, y + 5, 2, RH - 10, 1, col_alpha(COL_ACC, 0.8f));
+		}
+		ui_icon(ic[i], 14, y + 10, 12, col[i]);
+		ui_text(36, y + 3, title[i], SZ_BODY - 0.02f, i == about_sel ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 60);
+		ui_text(36, y + 17, sub[i], SZ_TINY, COL_DIM, AL_LEFT, BOT_W - 60);
+		if (i >= AB_GITHUB && i <= AB_KOFI && i == about_sel) ui_icon(IC_PHONE, BOT_W - 24, y + 10, 12, COL_ACC);
+		if (i < AB_COUNT - 1) ui_hline(36, y + RH - 1, BOT_W - 44, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
+	}
+	static const char *h[] = {"↑↓", "Elegir", "B", "Volver"};
+	draw_hints(h, 2);
+}
+
+// ------------------------------------------------------------ Opción 2: como una ficha de la tienda
+
+static void about2_top(void)
+{
+	if (about_sel >= AB_GITHUB && about_sel <= AB_KOFI) {
+		draw_qr_panel(about_link_url(about_sel), about_link_name(about_sel), about_link_desc(about_sel), NULL, about_link_url(about_sel) + 8, COL_ACC);
+		return;
+	}
+	// Cabecera como la imagen de una ficha: degradado de la marca con el logo grande a la derecha
+	ui_vgrad(0, 18, TOP_W, 110, C2D_Color32(0x1b, 0x3a, 0x5c, 0xff), C2D_Color32(0x0e, 0x15, 0x21, 0xff));
+	draw_logo(TOP_W - 80, 70, 104, 0.9f);
+	ui_text(12, 82, "Steam3DS", SZ_TITLE, COL_WHITE, AL_LEFT, 260);
+	ui_text(12, 106, _("La tienda de Steam en tu Nintendo 3DS"), SZ_SMALL, COL_ACC, AL_LEFT, 260);
+	float x = 12;
+	draw_tag(&x, 132, "Homebrew");
+	draw_tag(&x, 132, "Nintendo 3DS");
+	char v[24];
+	snprintf(v, sizeof v, "v%s", APP_VERSION);
+	draw_tag(&x, 132, v);
+	ui_text(TOP_W - 12, 133, _("Hecho por VENOMSHiNE"), SZ_SMALL, COL_LIME, AL_RIGHT, 0);
+	if (about_sel == AB_LEGAL) {
+		ui_text_wrap(12, 156, TOP_W - 24, _(about_legal), SZ_SMALL, COL_TXT, 5, 14);
+	} else if (about_sel == AB_CREDITS) {
+		for (int i = 0; i < NCREDITS; i++) {
+			float cx = 12 + (i % 2) * 192, cy = 154 + (i / 2) * 15;
+			ui_text(cx, cy, about_credits[i][0], SZ_TINY, COL_TXT, AL_LEFT, 120);
+			ui_text(cx + 184, cy, about_credits[i][1], SZ_TINY, COL_DIM, AL_RIGHT, 0);
+		}
+	} else {
+		ui_text_wrap(12, 156, TOP_W - 24, _(about_desc), SZ_SMALL, COL_TXT, 3, 14);
+		ui_hline(12, 200, TOP_W - 24, C2D_Color32(0xff, 0xff, 0xff, 0x26));
+		ui_text_wrap(12, 206, TOP_W - 24, _("Si encuentras algún problema o tienes una sugerencia, escríbeme por GitHub o Discord."), SZ_SMALL, COL_DIM, 2, 14);
+	}
+}
+
+static const Box B_AB2[5] = {{12, 30, 96, 70}, {112, 30, 96, 70}, {212, 30, 96, 70}, {12, 112, 146, 34}, {162, 112, 146, 34}};
+
+static void about2_bottom(void)
+{
+	ui_text(BOT_W / 2, 8, _("Acerca de Steam3DS"), SZ_SMALL, COL_DIM, AL_CENTER, 300);
+	static const Icon ic[5] = {IC_CODE, IC_CHAT, IC_CUP, IC_DOC, IC_DOC};
+	const u32 tint[5] = {C2D_Color32(0x2d, 0x33, 0x3b, 0xff), C2D_Color32(0x4a, 0x55, 0xc8, 0xff), C2D_Color32(0xc8, 0x4a, 0x48, 0xff), 0, 0};
+	const char *lab[5] = {"GitHub", "Discord", "Ko-fi", _("Créditos y licencias"), _("Aviso legal")};
+	for (int i = 0; i < 5; i++) {
+		const Box *b = &B_AB2[i];
+		bool on = about_sel == i + 1;
+		FxButton fb = {tint[i], 1, false, on};
+		fx_button(b->x, b->y, b->w, b->h, i < 3 ? 14 : b->h / 2, &fb);
+		if (i < 3) {
+			ui_icon(ic[i], b->x + b->w / 2 - 10, b->y + 14, 20, COL_WHITE);
+			ui_text(b->x + b->w / 2, b->y + 44, lab[i], SZ_SMALL, COL_WHITE, AL_CENTER, b->w - 8);
+		} else {
+			float tw = ui_text_w(lab[i], SZ_SMALL) + 18;
+			float x = b->x + (b->w - tw) / 2;
+			ui_icon(ic[i], x, b->y + 11, 12, COL_ACC);
+			ui_text(x + 18, b->y + 10, lab[i], SZ_SMALL, COL_TXT, AL_LEFT, b->w - 30);
+		}
+	}
+	ui_text_wrap_center(BOT_W / 2, 158, 280, _("Gracias por usar Steam3DS"), SZ_BODY, COL_WHITE, 1, 14);
+	ui_text_wrap_center(BOT_W / 2, 178, 280, _("Elige un enlace y escanea su código con el móvil."), SZ_SMALL, COL_DIM, 2, 14);
+	static const char *h[] = {"← →", "Elegir", "B", "Volver"};
+	draw_hints(h, 2);
+}
+
+// ------------------------------------------------------------ Opción 3: presentación y créditos de cine
+
+static void about3_top(void)
+{
+	float br = 0.5f + 0.5f * sinf(g_time * 1.6f);
+	draw_logo(TOP_W / 2, 84, 112 + 2 * br, 1);
+	float w1 = ui_text_w("Steam", SZ_HUGE), w2 = ui_text_w("3DS", SZ_HUGE);
+	float x = (TOP_W - w1 - w2) / 2;
+	ui_text(x, 146, "Steam", SZ_HUGE, COL_WHITE, AL_LEFT, 0);
+	ui_text(x + w1 - 1, 146, "3DS", SZ_HUGE, COL_ACC, AL_LEFT, 0);
+	ui_text(TOP_W / 2, 180, _("La tienda de Steam en tu Nintendo 3DS"), SZ_SMALL, COL_TXT, AL_CENTER, 380);
+	char v[64];
+	snprintf(v, sizeof v, _("Versión %s · Hecho por VENOMSHiNE"), APP_VERSION);
+	ui_text(TOP_W / 2, 198, v, SZ_SMALL, COL_DIM, AL_CENTER, 380);
+}
+
+static void about3_bottom(void)
+{
+	static const Icon ic[3] = {IC_CODE, IC_CHAT, IC_CUP};
+	const u32 col[3] = {C2D_Color32(0xc9, 0xd1, 0xd9, 0xff), C2D_Color32(0x7f, 0x8c, 0xff, 0xff), C2D_Color32(0xff, 0x6e, 0x6b, 0xff)};
+	for (int i = 0; i < 3; i++) {
+		float qx = 18 + i * 100;
+		ui_qr(about_link_url(i + 1), qx, 14, 84);
+		float tw = ui_text_w(about_link_name(i + 1), SZ_SMALL) + 16;
+		ui_icon(ic[i], qx + 42 - tw / 2, 106, 11, col[i]);
+		ui_text(qx + 42 - tw / 2 + 16, 104, about_link_name(i + 1), SZ_SMALL, COL_TXT, AL_LEFT, 0);
+	}
+	about_credits_roll(10, 128, BOT_W - 20, 88, true);
+	static const char *h[] = {"B", "Volver"};
+	draw_hints(h, 1);
+}
+
+static void draw_about_top(void)
+{
+	if (ABOUT_VARIANT == 2) about2_top();
+	else if (ABOUT_VARIANT == 3) about3_top();
+	else about1_top();
+}
+
+static void draw_about_bottom(void)
+{
+	if (ABOUT_VARIANT == 2) about2_bottom();
+	else if (ABOUT_VARIANT == 3) about3_bottom();
+	else about1_bottom();
+}
+
+static void input_about(u32 kd, u32 kh, float dt)
+{
+	about_t += dt;
+	if (kd & KEY_B) {
+		go_scene(about_back, -1);
+		return;
+	}
+	if (ABOUT_VARIANT == 1) {
+		if (key_repeat(kd, kh, KEY_DOWN)) about_sel = (about_sel + 1) % AB_COUNT;
+		if (key_repeat(kd, kh, KEY_UP)) about_sel = (about_sel + AB_COUNT - 1) % AB_COUNT;
+	} else if (ABOUT_VARIANT == 2) {
+		// Cuadrícula: arriba GitHub, Discord y Ko-fi; abajo créditos y aviso legal (0 = nada elegido)
+		int s = about_sel;
+		if (kd & KEY_RIGHT) s = s == 0 ? 1 : s == 3 ? 3 : s == 5 ? 5 : s + 1;
+		if (kd & KEY_LEFT) s = s <= 1 ? 1 : s == 4 ? 4 : s - 1;
+		if (kd & KEY_DOWN) s = s == 0 ? 1 : s <= 2 ? 4 : s == 3 ? 5 : s;
+		if (kd & KEY_UP) s = s == 4 ? 1 : s == 5 ? 3 : s;
+		about_sel = s;
+	}
+}
+
 static void menu_choose(int item)
 {
 	S.menu_open = false;
@@ -2629,6 +2923,7 @@ static void menu_choose(int item)
 		S.menu_open = true;   // el menú se queda abierto para ver el cambio
 		toast(g_cfg.reqs_mac ? _("Se mostrarán los requisitos de macOS") : _("Se mostrarán los requisitos de Windows"));
 		break;
+	case MI_ABOUT: open_about(); break;
 	case MI_EXIT:
 		S.ask_exit = true;
 		S.exit_anim = 0;
@@ -2651,7 +2946,7 @@ static void draw_menu(void)
 	ui_rrect(BOT_W / 2 - 16, y0 + 6, 32, 3, 1.5f, col_alpha(COL_DIM, a * 0.6f));
 	// Cabecera: tu cuenta (o «sin sesión»)
 	const AuthInfo *ai = auth_info();
-	float hx = 18, hy = y0 + 12;
+	float hx = 18, hy = y0 + 11;
 	if (auth_logged()) {
 		const Pic *p = ai->avatar[0] ? img_get(ai->avatar, 64) : NULL;
 		ui_rect(hx - 1, hy - 1, 28, 28, col_alpha(COL_WHITE, 0.25f * a));
@@ -2680,6 +2975,7 @@ static void draw_menu(void)
 		[MI_CART] = {IC_CART, "Carrito"},
 		[MI_REQS] = {IC_WRENCH, "Requisitos"},
 		[MI_LOGOUT] = {IC_LOCK, "Cerrar sesión"},
+		[MI_ABOUT] = {IC_INFO, "Acerca de Steam3DS"},
 		[MI_EXIT] = {IC_POWER, "Salir de Steam3DS"},
 	};
 	for (int i = 0; i < n; i++) {
@@ -2687,17 +2983,17 @@ static void draw_menu(void)
 		bool on = i == S.menu_sel;
 		if (on) fx_select(12, y, BOT_W - 24, MENU_ROW - 2, 10, a);
 		u32 c = items[i] == MI_EXIT || items[i] == MI_LOGOUT ? C2D_Color32(0xff, 0x8a, 0x7a, 0xff) : COL_ACC;
-		ui_icon(info[items[i]].ic, 22, y + 6, 12, col_alpha(c, a));
-		ui_text(42, y + 4, _(info[items[i]].label), SZ_BODY - 0.02f, col_alpha(on ? COL_WHITE : COL_TXT, a), AL_LEFT, BOT_W - 60);
+		ui_icon(info[items[i]].ic, 22, y + 5, 12, col_alpha(c, a));
+		ui_text(42, y + 3, _(info[items[i]].label), SZ_BODY - 0.02f, col_alpha(on ? COL_WHITE : COL_TXT, a), AL_LEFT, BOT_W - 60);
 		if (items[i] == MI_REQS)
-			ui_text(BOT_W - 24, y + 5, g_cfg.reqs_mac ? "macOS" : "Windows", SZ_SMALL, col_alpha(COL_ACC, a), AL_RIGHT, 0);
+			ui_text(BOT_W - 24, y + 4, g_cfg.reqs_mac ? "macOS" : "Windows", SZ_SMALL, col_alpha(COL_ACC, a), AL_RIGHT, 0);
 		if (items[i] == MI_CART && shop_cart()->n) {
 			// Cuántos hay, en una píldora verde
 			char nc[8];
 			snprintf(nc, sizeof nc, "%d", shop_cart()->n);
 			float w = ui_text_w(nc, SZ_SMALL) + 12;
-			ui_rrect(BOT_W - 24 - w, y + 4, w, 16, 8, col_alpha(C2D_Color32(0x5c, 0x7e, 0x10, 0xff), a));
-			ui_text(BOT_W - 24 - w / 2, y + 5, nc, SZ_SMALL, col_alpha(COL_WHITE, a), AL_CENTER, 0);
+			ui_rrect(BOT_W - 24 - w, y + 3, w, 16, 8, col_alpha(C2D_Color32(0x5c, 0x7e, 0x10, 0xff), a));
+			ui_text(BOT_W - 24 - w / 2, y + 4, nc, SZ_SMALL, col_alpha(COL_WHITE, a), AL_CENTER, 0);
 		}
 	}
 }
@@ -4070,6 +4366,8 @@ int main(int argc, char **argv)
 	sprites = C2D_SpriteSheetLoad("romfs:/gfx/sprites.t3x");
 	splash_bg = C2D_SpriteSheetLoad("romfs:/gfx/splash_bg.t3x");
 	wheel_sheet = C2D_SpriteSheetLoad("romfs:/gfx/wheel3d.t3x");
+	ui_sheet = C2D_SpriteSheetLoad("romfs:/gfx/ui.t3x");
+	if (ui_sheet) C3D_TexSetFilter(C2D_SpriteSheetGetImage(ui_sheet, 0).tex, GPU_LINEAR, GPU_LINEAR);
 	if (sprites) {
 		for (int i = 0; i < 3; i++)
 			C3D_TexSetFilter(C2D_SpriteSheetGetImage(sprites, i).tex, GPU_LINEAR, GPU_LINEAR);
@@ -4194,6 +4492,7 @@ int main(int argc, char **argv)
 		case SC_SPLASH: splash_update(dt, kd); break;
 		case SC_LOGIN: input_login(kd, dt); break;
 		case SC_PROFILE: input_profile(kd, kh, ku, &tp); break;
+		case SC_ABOUT: input_about(kd, kh, dt); break;
 		case SC_PAY: input_pay(kd, kh, ku, &tp, dt); break;
 		}
 		auth_update();
@@ -4289,12 +4588,13 @@ int main(int argc, char **argv)
 		case SC_SPLASH: draw_splash_top(); break;
 		case SC_LOGIN: draw_login_top(); break;
 		case SC_PROFILE: draw_profile_top(); break;
+		case SC_ABOUT: draw_about_top(); break;
 		case SC_PAY: draw_pay_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -4314,6 +4614,7 @@ int main(int argc, char **argv)
 		case SC_SPLASH: draw_splash_bottom(); break;
 		case SC_LOGIN: draw_login_bottom(); break;
 		case SC_PROFILE: draw_profile_bottom(); break;
+		case SC_ABOUT: draw_about_bottom(); break;
 		case SC_PAY: draw_pay_bottom(); break;
 		}
 		C2D_ViewReset();
@@ -4382,6 +4683,7 @@ int main(int argc, char **argv)
 	if (sprites) C2D_SpriteSheetFree(sprites);
 	if (splash_bg) C2D_SpriteSheetFree(splash_bg);
 	if (wheel_sheet) C2D_SpriteSheetFree(wheel_sheet);
+	if (ui_sheet) C2D_SpriteSheetFree(ui_sheet);
 	C2D_TextBufDelete(review_buf);
 	img_exit();
 	auth_exit();

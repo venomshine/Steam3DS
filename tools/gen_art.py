@@ -8,6 +8,7 @@ reduce, para bordes suaves.
 Salida:
   meta/icon.png     48×48   icono del menú HOME
   meta/banner.png   256×128 banner del menú HOME
+  gfx/logo.png      96×96   el logo dentro de la app (Acerca de)
   gfx/wheel.png     128×128 rueda (pantalla de carga, gira)
   gfx/steam.png     128×128 nube de vapor (textura de ruido, para las partículas)
   gfx/glow.png      128×128 resplandor
@@ -338,6 +339,7 @@ if __name__ == "__main__":
     os.makedirs(os.path.join(ROOT, "gfx"), exist_ok=True)
     icon().save(os.path.join(ROOT, "meta", "icon.png"))
     banner().save(os.path.join(ROOT, "meta", "banner.png"))
+    down(valve_logo(96), (96, 96)).save(os.path.join(ROOT, "gfx", "logo.png"))   # dentro de la app (Acerca de)
     down(wheel(128, angle=0), (128, 128)).save(os.path.join(ROOT, "gfx", "wheel.png"))
     steam(128, 2026).save(os.path.join(ROOT, "gfx", "steam.png"))
     glow(128).save(os.path.join(ROOT, "gfx", "glow.png"))

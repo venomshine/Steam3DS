@@ -115,7 +115,13 @@ $(ROMFS)/gfx/wheel3d.t3x: gfx/wheel3d.t3s gfx/wheel_shadow.png $(wildcard gfx/w3
 	@cd gfx && $(DEVKITPRO)/tools/bin/tex3ds -i wheel3d.t3s -o ../$@
 	@echo built ... $(notdir $@)
 
-$(BUILD): $(ROMFS)/gfx/sprites.t3x $(ROMFS)/gfx/splash_bg.t3x $(ROMFS)/gfx/wheel3d.t3x
+# Imágenes que la app usa siempre (el logo)
+$(ROMFS)/gfx/ui.t3x: gfx/ui.t3s gfx/logo.png
+	@mkdir -p $(ROMFS)/gfx
+	@cd gfx && $(DEVKITPRO)/tools/bin/tex3ds -i ui.t3s -o ../$@
+	@echo built ... $(notdir $@)
+
+$(BUILD): $(ROMFS)/gfx/sprites.t3x $(ROMFS)/gfx/splash_bg.t3x $(ROMFS)/gfx/wheel3d.t3x $(ROMFS)/gfx/ui.t3x
 	@mkdir -p $@
 
 clean:

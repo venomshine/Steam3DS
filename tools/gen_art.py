@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Arte de Steam3DS: icono del HOME, banner y sprites de la pantalla de carga.
 
-El emblema es una rueda de válvula con vapor: recuerda a Steam/Valve sin
-copiar su logo. Todo se dibuja a 8× y se reduce, para bordes suaves.
+El emblema es el logo de Steam redibujado con nuestra rueda de válvula en el aro
+grande: de reojo es el mismo, al mirarlo bien es otro. Todo se dibuja a 8× y se
+reduce, para bordes suaves.
 
 Salida:
   meta/icon.png     48×48   icono del menú HOME
@@ -15,6 +16,8 @@ Salida:
 """
 import math
 import os
+
+import numpy as np
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -83,6 +86,89 @@ def wheel(size, angle=18.0, spokes=5, color_out=LIGHT, color_in=ACC):
     return out
 
 
+def valve_logo(size, angle=-90.0, spokes=5):
+    """El logo de Steam redibujado con nuestra válvula: de reojo es el mismo (el círculo con el
+    degradado, la biela y el brazo), pero el aro grande es una rueda de válvula, con sus radios,
+    el cubo y los agarres, y el pequeño lleva agarres en el aro.
+
+    La geometría está medida sobre el logo oficial en un lienzo de 1500: el aro grande y el pequeño
+    son huecos por los que se ve el degradado del círculo. Devuelve RGBA de size×size (a 8×)."""
+    s = size * K
+    f = s / 1500.0
+
+    def P(x, y):
+        return (x * f, y * f)
+
+    def disc(d, cx, cy, r, fill):
+        d.ellipse([(cx - r) * f, (cy - r) * f, (cx + r) * f, (cy + r) * f], fill=fill)
+
+    circle = Image.new("L", (s, s), 0)
+    disc(ImageDraw.Draw(circle), 749.5, 749.0, 688.0, 255)
+
+    white = Image.new("L", (s, s), 0)
+    d = ImageDraw.Draw(white)
+    BIG, SMALL = (975.5, 577.0), (538.0, 1015.0)
+    disc(d, *BIG, 261.0, 255)
+    disc(d, *SMALL, 190.5, 255)
+    d.polygon([P(713, 580), P(546, 825), P(729, 1010), P(969, 838)], fill=255)   # la biela
+
+    # El aro grande: la válvula (rueda oscura sobre el disco blanco)
+    dark = Image.new("L", (s, s), 0)
+    dd = ImageDraw.Draw(dark)
+    cx, cy = BIG
+    r_in, r_out = 131.0, 175.5
+    disc(dd, cx, cy, r_out, 255)
+    disc(dd, cx, cy, r_in, 0)
+    rim = (r_in + r_out) / 2
+    for i in range(spokes):
+        a = math.radians(angle + (i + 0.5) * 360 / spokes)
+        disc(dd, cx + math.cos(a) * r_out, cy + math.sin(a) * r_out, 30.0, 255)       # agarres
+    for i in range(spokes):
+        a = math.radians(angle + i * 360 / spokes)
+        dd.line([P(cx, cy), P(cx + math.cos(a) * rim, cy + math.sin(a) * rim)], fill=255, width=max(1, int(40 * f)))
+    disc(dd, cx, cy, 54.0, 255)                                                          # cubo
+    disc(dd, cx, cy, 20.0, 0)                                                            # y su agujero
+    # El aro pequeño: hueco con agarres; encima va el brazo con su punta redonda
+    cx2, cy2 = SMALL
+    disc(dd, cx2, cy2, 148.0, 255)
+    for i in range(spokes):
+        a = math.radians(angle + 36 + (i + 0.5) * 360 / spokes)
+        disc(dd, cx2 + math.cos(a) * 148.0, cy2 + math.sin(a) * 148.0, 20.0, 255)
+    white = Image.fromarray(np.minimum(np.array(white), 255 - np.array(dark)))
+
+    # El brazo: entra por la izquierda (cortado por el círculo) y acaba redondo dentro del aro pequeño
+    arm = Image.new("L", (s, s), 0)
+    ad = ImageDraw.Draw(arm)
+    ux, uy = math.cos(math.radians(22.4)), math.sin(math.radians(22.4))
+    nx, ny = -uy, ux
+    hw = 108.5
+    ex, ey = 530.0, 1013.0                       # centro de la punta redonda
+    far = 900.0
+    ad.polygon([P(ex + nx * hw, ey + ny * hw), P(ex - nx * hw, ey - ny * hw),
+                P(ex - nx * hw - ux * far, ey - ny * hw - uy * far), P(ex + nx * hw - ux * far, ey + ny * hw - uy * far)], fill=255)
+    disc(ad, ex, ey, hw, 255)
+    white = Image.fromarray(np.maximum(np.array(white), np.array(arm)))
+    white = Image.fromarray(np.minimum(np.array(white), np.array(circle)))
+
+    # Degradado del círculo, medido en el oficial: casi negro azulado arriba, azul Steam abajo
+    stops = [(0.0, (0x10, 0x1d, 0x2d)), (0.17, (0x0a, 0x1b, 0x33)), (0.35, (0x07, 0x19, 0x38)),
+             (0.6, (0x12, 0x2c, 0x60)), (0.75, (0x14, 0x4e, 0x81)), (0.86, (0x13, 0x64, 0x96)),
+             (1.0, (0x14, 0x86, 0xbb))]
+    t = np.clip((np.arange(s) / f - 60) / (1438 - 60), 0, 1)
+    col = np.zeros((s, 3))
+    for (t0, c0), (t1, c1) in zip(stops, stops[1:]):
+        m = (t >= t0) & (t <= t1)
+        k = ((t[m] - t0) / (t1 - t0))[:, None]
+        col[m] = np.array(c0) * (1 - k) + np.array(c1) * k
+    rgb = np.repeat(col[:, None, :], s, axis=1)
+    w = np.array(white, float)[..., None] / 255
+    rgb = rgb * (1 - w) + 255 * w
+    out = np.zeros((s, s, 4), dtype="uint8")
+    out[..., :3] = np.clip(rgb, 0, 255).astype("uint8")
+    out[..., 3] = np.array(circle)
+    return Image.fromarray(out, "RGBA")
+
+
 def glow(size):
     """Resplandor radial con caída suave y tramado en el alfa (sin escalones)."""
     import random
@@ -147,8 +233,8 @@ def icon():
     ImageDraw.Draw(mask).rounded_rectangle([1 * K, 1 * K, s - 1 * K, s - 1 * K], radius=9 * K, fill=255)
     im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     im.paste(bg, (0, 0), mask)
-    # La válvula sola y centrada por su forma real
-    im.alpha_composite(centered(wheel(46), s))
+    # El logo: el de Steam con nuestra válvula
+    im.alpha_composite(valve_logo(42), (3 * K, 3 * K))
     return down(im, (48, 48))
 
 
@@ -157,8 +243,7 @@ def banner():
     im = vgrad(W, H, (0x24, 0x3b, 0x50), NAVY_BOT)
     g = down(glow(128), (int(150 * K), int(150 * K)))
     im.alpha_composite(g, (int(-12 * K), int(-11 * K)))
-    w = centered(wheel(96), 100 * K)
-    im.alpha_composite(w, (int(4 * K), int(14 * K)))
+    im.alpha_composite(valve_logo(92), (int(6 * K), int(18 * K)))
     d = ImageDraw.Draw(im)
     x0, maxw = 102 * K, 144 * K
 

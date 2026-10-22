@@ -184,6 +184,7 @@ typedef struct {
 
 // POST a un servicio de la Web API con sesión (input_json en el cuerpo)
 Req *steam_post_service(const char *iface_method, cJSON *input, const char *token);
+Req *steam_get_service(const char *iface_method, cJSON *input, const char *token);   // los que solo van por GET
 bool steam_parse_cart(const char *json, CartInfo *c);           // respuesta con «cart»
 Req *steam_req_cart_names(const CartInfo *c);
 void steam_parse_cart_names(const char *json, CartInfo *c);     // nombres, precios y juego de cada línea

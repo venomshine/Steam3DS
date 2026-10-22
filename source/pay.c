@@ -97,8 +97,9 @@ void pay_open(void)
 	set_state(PAY_LOADING);
 	page_req = co_get("?accountcart=1");
 	char url[1300];
-	snprintf(url, sizeof url, "https://api.steampowered.com/IUserAccountService/GetClientWalletDetails/v1/?access_token=%s&include_formatted_balance=1", auth_token());
-	wallet_req = net_get(url, LANE_API);
+	// Solo por POST (por GET Steam responde 405)
+	snprintf(url, sizeof url, "https://api.steampowered.com/IUserAccountService/GetClientWalletDetails/v1/?access_token=%s", auth_token());
+	wallet_req = net_post(url, "include_formatted_balance=1");
 	memset(url, 0, sizeof url);
 }
 

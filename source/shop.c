@@ -95,7 +95,7 @@ static cJSON *country_input(void)
 void shop_cart_load(void)
 {
 	if (!auth_logged() || H.cart_req) return;
-	H.cart_req = steam_post_service("IAccountCartService/GetCart", country_input(), auth_token());
+	H.cart_req = steam_get_service("IAccountCartService/GetCart", country_input(), auth_token());   // por POST da 405
 }
 
 const CartInfo *shop_cart(void) { return &H.cart; }

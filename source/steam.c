@@ -960,6 +960,23 @@ int steam_parse_buyopts(const char *json, u32 appid, BuyOpt *out, int max)
 	return n;
 }
 
+// Lo mismo por GET: hay métodos que Steam solo acepta así (GetCart responde 405 a un POST)
+Req *steam_get_service(const char *iface_method, cJSON *input, const char *token)
+{
+	char *js = cJSON_PrintUnformatted(input);
+	char *esc = url_escape(js);
+	size_t n = strlen(esc) + strlen(token) + 160;
+	char *url = malloc(n);
+	snprintf(url, n, "https://api.steampowered.com/%s/v1/?access_token=%s&input_json=%s", iface_method, token, esc);
+	Req *r = net_get(url, LANE_API);
+	memset(url, 0, n);
+	free(url);
+	free(esc);
+	free(js);
+	cJSON_Delete(input);
+	return r;
+}
+
 Req *steam_post_service(const char *iface_method, cJSON *input, const char *token)
 {
 	char *js = cJSON_PrintUnformatted(input);

@@ -154,8 +154,6 @@ def cart_json():
 def fake_shop(path, body):
     form = dict(urllib.parse.parse_qsl(body))
     inp = json.loads(form.get("input_json", "{}") or "{}")
-    if path.endswith("IAccountCartService/GetCart/v1/"):
-        return {"response": {"cart": cart_json()}}
     if path.endswith("IAccountCartService/AddItemsToCart/v1/"):
         ids = []
         for it in inp.get("items", []):
@@ -193,8 +191,16 @@ def fake_shop(path, body):
     return None
 
 
+def wallet_json():
+    c = WALLET_CENTS[0]
+    return {"response": {"has_wallet": True, "user_country_code": "ES", "wallet_country_code": "ES", "balance": str(c),
+                         "currency_code": 3, "formatted_balance": "%d,%02d€" % (c // 100, c % 100)}}
+
+
 def fake_post_api(path, body):
     form = dict(urllib.parse.parse_qsl(body))
+    if path.endswith("GetClientWalletDetails/v1/"):
+        return wallet_json()
     if path.endswith("PollAuthSessionStatus/v1/"):
         n = polls.get(form.get("client_id"), 0) + 1
         polls[form.get("client_id")] = n
@@ -233,10 +239,8 @@ def fake_get(path, q):
     if path.endswith("GetWishlist/v1/"):
         return {"response": {"items": [{"appid": a, "priority": i + 1, "date_added": int(time.time()) - i * 86400 * 7}
                                        for i, a in enumerate(WISH)]}}
-    if path.endswith("GetClientWalletDetails/v1/"):
-        c = WALLET_CENTS[0]
-        return {"response": {"has_wallet": True, "user_country_code": "ES", "wallet_country_code": "ES", "balance": str(c),
-                             "currency_code": 3, "formatted_balance": "%d,%02d€" % (c // 100, c % 100)}}
+    if path.endswith("IAccountCartService/GetCart/v1/"):
+        return {"response": {"cart": cart_json()}}
     if path.endswith("GetFriendsGameplayInfo/v1/"):
         appid = int(q.get("appid", inp.get("appid", 0)) or 0)
         owned = [a for a, *_ in OWNED]
@@ -347,6 +351,13 @@ def fake_checkout(method, path, q, body, headers):
     return None
 
 
+# Métodos que Steam solo acepta de una forma (comprobado contra la API real: el otro da 405)
+METHOD_ONLY = {
+    "IAccountCartService/GetCart/v1/": "GET",
+    "IUserAccountService/GetClientWalletDetails/v1/": "POST",
+}
+
+
 class Relay(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -381,6 +392,14 @@ class Relay(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 sys.stderr.write("FAKE %s %s -> %d\n" % (method, path, st))
                 return
+        # Como Steam: hay métodos que solo admiten GET o solo POST (lo demás, 405)
+        only = METHOD_ONLY.get(path)
+        if host == "api.steampowered.com" and only and method != only:
+            self.send_response(405)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            sys.stderr.write("405 %s %s (solo %s)\n" % (method, path, only))
+            return
         fake, extra = None, []
         if FAKE and method == "POST":
             fake = fake_post(host, path, self.body)

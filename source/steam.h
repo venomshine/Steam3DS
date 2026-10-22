@@ -123,7 +123,8 @@ Req *steam_req_search(const char *term);
 bool steam_parse_rows(const char *json, RowList *list, bool append);
 
 // Ficha
-Req *steam_req_appdetails(u32 appid);
+Req *steam_req_appdetails(u32 appid);   // se lee en el hilo de red: recógela con steam_take_appdetails
+bool steam_take_appdetails(Req *r, AppInfo *out);
 bool steam_parse_appdetails(const char *json, u32 appid, AppInfo *out);
 Req *steam_req_items(const u32 *ids, int n, bool assets);   // assets: también el icono
 // URL del icono de 32×32 de una fila (vacía si Steam no lo da)

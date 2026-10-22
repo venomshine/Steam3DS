@@ -175,6 +175,7 @@ static void req_free(Req *r)
 		memset(r->login_cookie, 0, strlen(r->login_cookie));
 		free(r->login_cookie);
 	}
+	if (r->parse_out && r->parse_free) r->parse_free(r->parse_out);
 	free(r->data);
 	free(r->pixels);
 	free(r);
@@ -249,6 +250,20 @@ Req *net_get_jpeg(const char *url, int max_w)
 	r->jpeg = true;
 	r->jpeg_max_w = max_w;
 	lane_push(&lanes[LANE_IMG], r);
+	return r;
+}
+
+Req *net_get_parsed(const char *url, NetLane lane, bool (*parse)(Req *r), void *out, void (*out_free)(void *out))
+{
+	Req *r = req_new(url, lane);
+	if (!r) {
+		if (out && out_free) out_free(out);
+		return NULL;
+	}
+	r->parse = parse;
+	r->parse_out = out;
+	r->parse_free = out_free;
+	lane_push(&lanes[lane], r);
 	return r;
 }
 
@@ -384,10 +399,15 @@ static bool decode_jpeg(Req *r)
 	jpeg_mem_src(&ci, (const u8 *)r->data, r->len);
 	jpeg_read_header(&ci, TRUE);
 	ci.out_color_space = JCS_RGB;
-	ci.scale_num = 1;
-	ci.scale_denom = 1;
-	while (ci.scale_denom < 8 && (int)(ci.image_width / (ci.scale_denom * 2)) >= r->jpeg_max_w)
-		ci.scale_denom *= 2;
+	// Escala al decodificar en octavos (libjpeg-turbo): el ancho justo para lo que se muestra, no
+	// menos. Una captura de 600 para la pantalla de 400 sale a 450 (textura de 512 en vez de 1024:
+	// cuatro veces menos memoria y menos trabajo al subirla)
+	ci.scale_num = 8;
+	ci.scale_denom = 8;
+	if ((int)ci.image_width > r->jpeg_max_w && r->jpeg_max_w > 0) {
+		int n = (8 * r->jpeg_max_w + ci.image_width - 1) / ci.image_width;
+		ci.scale_num = n < 1 ? 1 : n > 8 ? 8 : n;
+	}
 	jpeg_start_decompress(&ci);
 	int w = ci.output_width, h = ci.output_height;
 	out = malloc((size_t)w * h * 3);
@@ -432,9 +452,71 @@ static bool decode_jpeg(Req *r)
 }
 
 // ----------------------------------------------------------------------------
+// Los últimos JPEG descargados, tal cual: la misma imagen se pide a veces en dos tamaños (la
+// captura grande y su miniatura) y así no se baja dos veces
+
+#define RAW_SLOTS 8
+#define RAW_MAX   (192 * 1024)
+static struct { char *url; char *data; size_t len; u32 used; } raw[RAW_SLOTS];
+static LightLock raw_lock;
+static u32 raw_tick;
+
+static bool raw_get(Req *r)
+{
+	bool hit = false;
+	LightLock_Lock(&raw_lock);
+	for (int i = 0; i < RAW_SLOTS; i++) {
+		if (!raw[i].url || strcmp(raw[i].url, r->url)) continue;
+		r->data = malloc(raw[i].len + 1);
+		if (r->data) {
+			memcpy(r->data, raw[i].data, raw[i].len + 1);
+			r->len = r->cap = raw[i].len;
+			raw[i].used = ++raw_tick;
+			hit = true;
+		}
+		break;
+	}
+	LightLock_Unlock(&raw_lock);
+	return hit;
+}
+
+static void raw_put(const Req *r)
+{
+	if (!r->data || r->len > RAW_MAX) return;
+	char *d = malloc(r->len + 1), *u = strdup(r->url);
+	if (!d || !u) {
+		free(d);
+		free(u);
+		return;
+	}
+	memcpy(d, r->data, r->len + 1);
+	LightLock_Lock(&raw_lock);
+	int k = 0;
+	for (int i = 0; i < RAW_SLOTS; i++) {
+		if (!raw[i].url) { k = i; break; }
+		if (raw[i].used < raw[k].used) k = i;
+	}
+	free(raw[k].url);
+	free(raw[k].data);
+	raw[k].url = u;
+	raw[k].data = d;
+	raw[k].len = r->len;
+	raw[k].used = ++raw_tick;
+	LightLock_Unlock(&raw_lock);
+}
 
 static void run_req(Lane *l, Req *r)
 {
+	if (r->jpeg && raw_get(r)) {
+		// Ya la teníamos: solo se decodifica a este tamaño
+		r->http = 200;
+		if (!decode_jpeg(r)) snprintf(r->err, sizeof r->err, "imagen no válida");
+		free(r->data);
+		r->data = NULL;
+		r->len = r->cap = 0;
+		r->state = r->err[0] ? REQ_FAILED : REQ_DONE;
+		return;
+	}
 	if (!wait_network(r)) {
 		snprintf(r->err, sizeof r->err, "cancelada");
 		r->state = REQ_FAILED;
@@ -453,7 +535,9 @@ static void run_req(Lane *l, Req *r)
 	curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
 	curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 1L);
 	curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 20L);
-	curl_easy_setopt(c, CURLOPT_MAXAGE_CONN, 30L);
+	// Abrir conexión cuesta ~1 s de TCP y ~0,6 s de TLS en la consola (net.log): se reutilizan más
+	curl_easy_setopt(c, CURLOPT_MAXAGE_CONN, 120L);
+	curl_easy_setopt(c, CURLOPT_IPRESOLVE, (long)CURL_IPRESOLVE_V4);
 	curl_easy_setopt(c, CURLOPT_TCP_KEEPALIVE, 1L);
 	curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 32768L);
 	curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
@@ -498,8 +582,11 @@ static void run_req(Lane *l, Req *r)
 		snprintf(r->err, sizeof r->err, "curl=%d %s", rc, curl_easy_strerror(rc));
 	} else if (r->http < 200 || r->http >= 300) {
 		snprintf(r->err, sizeof r->err, "HTTP %ld", r->http);
-	} else if (r->jpeg && !decode_jpeg(r)) {
-		snprintf(r->err, sizeof r->err, "imagen no válida");
+	} else if (r->jpeg) {
+		raw_put(r);
+		if (!decode_jpeg(r)) snprintf(r->err, sizeof r->err, "imagen no válida");
+	} else if (r->parse && !r->cancel && r->data) {
+		r->parsed = r->parse(r);
 	}
 
 	// La URL del registro, sin la consulta (puede ser larga)
@@ -562,6 +649,7 @@ void net_init(void)
 	LightLock_Init(&log_lock);
 	LightLock_Init(&soc_lock);
 	LightLock_Init(&ref_lock);
+	LightLock_Init(&raw_lock);
 	log_rotate();
 	LightEvent_Init(&log_wake, RESET_ONESHOT);
 	netlog("---- %s %s", APP_NAME, APP_VERSION);
@@ -598,6 +686,10 @@ void net_exit(void)
 		log_flush();
 	}
 	curl_global_cleanup();
+	for (int i = 0; i < RAW_SLOTS; i++) {
+		free(raw[i].url);
+		free(raw[i].data);
+	}
 	if (soc_ready) socExit();
 	acExit();
 }

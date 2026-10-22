@@ -281,12 +281,38 @@ Req *steam_req_country(void)
 // ----------------------------------------------------------------------------
 // Ficha
 
+// La ficha llega leída del hilo de red: un appdetails pesa 30-50 KB y leerlo (con el «acerca de»)
+// en el hilo de la interfaz se notaba como un tirón cada vez que cambiabas de juego
+static bool details_job(Req *r)
+{
+	AppInfo *a = r->parse_out;
+	return steam_parse_appdetails(r->data, a->appid, a);
+}
+
+static void details_free(void *p)
+{
+	appinfo_free(p);
+	free(p);
+}
+
 Req *steam_req_appdetails(u32 appid)
 {
 	char url[160];
 	snprintf(url, sizeof url, "https://store.steampowered.com/api/appdetails?appids=%lu&cc=%s&l=%s",
 		(unsigned long)appid, g_country, g_lang);
-	return net_get(url, LANE_API);
+	AppInfo *a = calloc(1, sizeof *a);
+	if (!a) return NULL;
+	a->appid = appid;
+	return net_get_parsed(url, LANE_API, details_job, a, details_free);
+}
+
+bool steam_take_appdetails(Req *r, AppInfo *out)
+{
+	if (!r || !r->parsed || !r->parse_out) return false;
+	*out = *(AppInfo *)r->parse_out;   // los punteros de dentro pasan a out
+	free(r->parse_out);
+	r->parse_out = NULL;
+	return true;
 }
 
 // Quita etiquetas HTML y entidades, y deja un salto de línea por <br> o </li>

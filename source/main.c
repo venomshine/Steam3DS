@@ -268,7 +268,7 @@ static void info_poll(void)
 	for (int i = 0; i < CACHE; i++) {
 		InfoEnt *e = &cache[i];
 		if (e->req && e->req->state >= REQ_DONE) {
-			if (e->req->state == REQ_DONE && steam_parse_appdetails(e->req->data, e->appid, &e->info)) e->done = true;
+			if (e->req->state == REQ_DONE && steam_take_appdetails(e->req, &e->info)) e->done = true;
 			else {
 				e->failed = true;
 				e->fail_at = osGetTime();
@@ -2285,7 +2285,7 @@ static void draw_shots_top(void)
 	ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, 0xff));
 	if (!e || !e->done || e->info.nshots == 0) return;
 	const char *url = e->info.shots[S.shot];
-	const Pic *p = img_get(url, 600);
+	const Pic *p = img_get(url, 400);   // la pantalla de arriba mide 400
 	// La nueva entra deslizándose desde el lado hacia el que vas
 	float se = ease_out_cubic(S.shot_anim);
 	if (p) {
@@ -2300,8 +2300,8 @@ static void draw_shots_top(void)
 		ui_spinner(TOP_W / 2, SCR_H / 2, 9, COL_DIM);
 	}
 	// Las de al lado, ya pedidas para que el cambio sea inmediato
-	if (S.shot + 1 < e->info.nshots) img_get(e->info.shots[S.shot + 1], 600);
-	if (S.shot > 0) img_get(e->info.shots[S.shot - 1], 600);
+	if (S.shot + 1 < e->info.nshots) img_get(e->info.shots[S.shot + 1], 400);
+	if (S.shot > 0) img_get(e->info.shots[S.shot - 1], 400);
 }
 
 #define THUMB_W 92
@@ -3958,6 +3958,8 @@ static void poll_country(void)
 
 int main(int argc, char **argv)
 {
+	// En la New 3DS: CPU a 804 MHz y la caché L2 (sin esto va a 268 MHz, como la vieja)
+	osSetSpeedupEnable(true);
 	gfxInitDefault();
 	romfsInit();
 	C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);

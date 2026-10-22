@@ -34,6 +34,14 @@ typedef struct Req {
 	char country[4];        // de la cookie steamCountry, si la manda
 	char *login_cookie;     // valor de la cookie steamLoginSecure, si la manda (se borra al soltar)
 
+	// Trabajo pesado que se hace en el hilo de red al terminar bien (leer un JSON grande): así la
+	// interfaz no pierde frames. parse deja el resultado en parse_out y dice si salió bien;
+	// parse_free suelta parse_out si nadie lo recoge (quien lo recoge pone parse_out a NULL)
+	bool (*parse)(struct Req *r);
+	void *parse_out;
+	void (*parse_free)(void *out);
+	bool parsed;
+
 	u8 *pixels;             // si jpeg: ya en el orden de la GPU (RGB8 en mosaico de tw×th)
 	int w, h;               // tamaño de la imagen
 	int tw, th;             // tamaño de la textura (potencias de 2)
@@ -49,6 +57,8 @@ Req *net_get(const char *url, NetLane lane);
 Req *net_get_jpeg(const char *url, int max_w);
 Req *net_head(const char *url);
 Req *net_post(const char *url, const char *body);
+// GET que además se lee en el hilo de red (ver parse en Req)
+Req *net_get_parsed(const char *url, NetLane lane, bool (*parse)(Req *r), void *out, void (*out_free)(void *out));
 // GET (body NULL) o POST con cabeceras extra separadas por '\n' ("Cookie: …", "Content-Type: …")
 Req *net_request(const char *url, const char *body, const char *headers);
 void net_release(Req *r);

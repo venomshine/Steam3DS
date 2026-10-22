@@ -610,16 +610,22 @@ static void search_start(const char *term)
 // ============================================================================
 // Dibujo común
 
+// Y del texto para que quede centrado en vertical dentro de una caja
+static float vc(float by, float bh, float sz)
+{
+	return by + (bh - ui_line_h(sz)) / 2;
+}
+
 static void draw_status(const char *user)
 {
 	fx_bar(0, 0, TOP_W, 18, true);
-	float ty = floorf((18 - ui_line_h(SZ_SMALL)) / 2) + 1;
+	float ty = vc(0, 17, SZ_SMALL);
 	// El logo (el volante) va delante del nombre y gira mientras se descarga algo
 	static float ang, spin;
 	bool busy = net_busy();
 	spin = approach(spin, busy ? 1 : 0, busy ? 8 : 2.5f);
 	ang += g_dt * 6.5f * spin;
-	ui_wheel(14, 9, 5.5f, ang, col_lerp(C2D_Color32(0xc7, 0xd5, 0xe0, 0xff), COL_ACC, spin));
+	ui_wheel(14, 8.5f, 5.5f, ang, col_lerp(C2D_Color32(0xc7, 0xd5, 0xe0, 0xff), COL_ACC, spin));
 	float nw = ui_text(25, ty, APP_NAME, SZ_SMALL, COL_WHITE, AL_LEFT, 0) + 17;
 
 	// Derecha: [usuario ·] fecha · hora   [Wi-Fi] [batería] 87 %
@@ -631,9 +637,9 @@ static void draw_status(const char *user)
 	snprintf(pct, sizeof pct, "%d%%", bat);
 	float r = TOP_W - 8;
 	r -= ui_text(r, ty, pct, SZ_SMALL, COL_DIM, AL_RIGHT, 0) + 4;
-	ui_battery(r - 22, 4, bat, chg);
+	ui_battery(r - 22, 3.5f, bat, chg);
 	r -= 22 + 8;
-	ui_wifi(r - 7, 14, net_wifi_ok() ? osGetWifiStrength() : -1);
+	ui_wifi(r - 7, 13.5f, net_wifi_ok() ? osGetWifiStrength() : -1);
 	r -= 14 + 8;
 	if (user) snprintf(right, sizeof right, "%s · %s", user, clock);
 	else snprintf(right, sizeof right, "%s", clock);
@@ -650,9 +656,9 @@ static float hint_key(float x, float y, const char *key, bool draw)
 		snprintf(first, sizeof first, "%.*s", (int)(plus - key), key);
 		float w = hint_key(x, y, first, draw);
 		float pw = ui_text_w("+", SZ_TINY);
-		if (draw) ui_text(x + w + 1, y + 4, "+", SZ_TINY, COL_DIM, AL_LEFT, 0);
+		if (draw) ui_text(x + w + 1, vc(y, 18, SZ_TINY), "+", SZ_TINY, COL_DIM, AL_LEFT, 0);
 		// La flecha de la cruceta, dibujada (no todas las fuentes traen ← → ↑ ↓)
-		float ax = x + w + 3 + pw, cx = ax + 4, cy = y + 10;
+		float ax = x + w + 3 + pw, cx = ax + 4, cy = y + 9;
 		if (draw) {
 			const char *d = plus + 1;
 			u32 c = COL_WHITE;
@@ -676,14 +682,14 @@ static float hint_key(float x, float y, const char *key, bool draw)
 	}
 	if (g[0]) {
 		float w = ui_text_w(g, SZ_SMALL);
-		if (draw) ui_text(x, y + 2, g, SZ_SMALL, COL_WHITE, AL_LEFT, 0);
+		if (draw) ui_text(x, vc(y, 18, SZ_SMALL), g, SZ_SMALL, COL_WHITE, AL_LEFT, 0);
 		return w;
 	}
 	float kw = ui_text_w(key, SZ_TINY) + 6;
 	if (kw < 11) kw = 11;
 	if (draw) {
-		ui_rrect(x, y + 4.5f, kw, 11, 5.5f, C2D_Color32(0xff, 0xff, 0xff, 0x2a));
-		ui_text(x + kw / 2, y + 4, key, SZ_TINY, COL_WHITE, AL_CENTER, 0);
+		ui_rrect(x, y + 3.5f, kw, 11, 5.5f, C2D_Color32(0xff, 0xff, 0xff, 0x2a));
+		ui_text(x + kw / 2, vc(y + 3.5f, 11, SZ_TINY), key, SZ_TINY, COL_WHITE, AL_CENTER, 0);
 	}
 	return kw;
 }
@@ -706,8 +712,8 @@ static void draw_hints(const char *const *pairs, int n)
 	if (gap < 6) gap = 6;
 	float x = (BOT_W - total - gap * (n - 1)) / 2;
 	for (int i = 0; i < n; i++) {
-		float kw = hint_key(x, y, pairs[i * 2], true);
-		ui_text(x + kw + 3, y + 4, _(pairs[i * 2 + 1]), SZ_TINY, COL_TXT, AL_LEFT, 0);
+		float kw = hint_key(x, y + 0.5f, pairs[i * 2], true);
+		ui_text(x + kw + 3, vc(y + 1, 17, SZ_TINY), _(pairs[i * 2 + 1]), SZ_TINY, COL_TXT, AL_LEFT, 0);
 		x += widths[i] + gap;
 	}
 }
@@ -730,7 +736,7 @@ static void draw_tag(float *x, float y, const char *t)
 {
 	float w = ui_text_w(t, SZ_TINY) + 14;
 	ui_rrect(*x, y, w, 14, 7, col_alpha(COL_ACC, 0.16f));
-	ui_text(*x + 7, y + 1.5f, t, SZ_TINY, COL_ACC, AL_LEFT, 0);
+	ui_text(*x + 7, vc(y, 14, SZ_TINY), t, SZ_TINY, COL_ACC, AL_LEFT, 0);
 	*x += w + 4;
 }
 
@@ -811,7 +817,7 @@ static float draw_feats(float x, float y, float w, const AppInfo *a, int max_row
 		ui_rrect(cx, cy, cw, 15, 7.5f, C2D_Color32(0xff, 0xff, 0xff, 0x14));
 		ui_rect(cx + 6, cy, cw - 12, 1, C2D_Color32(0xff, 0xff, 0xff, 0x1c));
 		ui_icon(ic[i], cx + 4, cy + 2, 11, COL_ACC);
-		ui_text(cx + 18, cy + 1.5f, lab[i], SZ_TINY, COL_TXT, AL_LEFT, 0);
+		ui_text(cx + 18, vc(cy, 15, SZ_TINY), lab[i], SZ_TINY, COL_TXT, AL_LEFT, 0);
 		cx += cw + 4;
 	}
 	return n ? (cy - y) + 15 : 0;
@@ -829,7 +835,7 @@ static void draw_price_right(float r, float y, float h, const StoreRow *row, flo
 		ui_price_box(r - wp, y, wp, h, row->orig, row->price, SZ_TINY, SZ_SMALL);
 	} else {
 		const char *p = row->free ? _("Gratis") : row->price[0] ? row->price : "";
-		ui_text(r - 4, y + (h - ui_line_h(SZ_SMALL)) / 2 + 1, p, SZ_SMALL, row->free ? COL_LIME : COL_TXT, AL_RIGHT, 0);
+		ui_text(r - 4, vc(y, h, SZ_SMALL), p, SZ_SMALL, row->free ? COL_LIME : COL_TXT, AL_RIGHT, 0);
 	}
 }
 
@@ -1078,7 +1084,7 @@ static void draw_subbar(void)
 	ui_rrect_bottom(x, y, w, h, 9, col_alpha(COL_WHITE, 0.05f));
 	ui_rect(x + 9, y + h - 1, w - 18, 1, col_alpha(COL_WHITE, 0.10f));
 	float sw = w / HOME_PARTS;
-	float lh = ui_line_h(SZ_TINY), ty = y + 3 + (h - 3 - lh) / 2;
+	float ty = vc(y + 4, h - 7, SZ_TINY);
 	// La elegida: un resplandor suave que respira, sin burbuja
 	float hx = x + S.sub_x * sw;
 	float br = 0.07f + 0.04f * sinf(g_time * 2.4f);
@@ -1126,7 +1132,7 @@ static void draw_tabs(void)
 	px += (5 - px) * se;
 	pw = right - px;
 	fx_select(px + 1, by + 2, pw - 2, bh - 4, (bh - 4) / 2.0f, 1);
-	float lh = ui_line_h(SZ_SMALL), ty = by + (bh - lh) / 2 + 1;
+	float ty = vc(by, bh, SZ_SMALL);
 	for (int t = 0; t < TAB_COUNT; t++) {
 		float x, tw;
 		tab_slot(t, &x, &tw);
@@ -1151,16 +1157,16 @@ static void draw_account_bar(void)
 {
 	fx_bar(0, 0, BOT_W, LIST_Y, true);
 	if (S.pressed == BT_BACKBAR) ui_rect(0, 0, BOT_W, LIST_Y, col_alpha(COL_WHITE, 0.08f));
-	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_text(10, vc(0, LIST_Y - 1, SZ_LARGE), "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
 	Tab *t = CUR;
 	char title[64];
 	if (S.tab == TAB_LIBRARY) snprintf(title, sizeof title, _("Biblioteca · %d juegos"), t->list.count);
 	else if (S.tab == TAB_CART) snprintf(title, sizeof title, _("Carrito · %d"), t->list.count);
 	else snprintf(title, sizeof title, _("Lista de deseos · %d"), t->list.total);
-	ui_icon(S.tab == TAB_LIBRARY ? IC_PAD : S.tab == TAB_CART ? IC_CART : IC_HEART, 28, 6, 12, COL_ACC);
+	ui_icon(S.tab == TAB_LIBRARY ? IC_PAD : S.tab == TAB_CART ? IC_CART : IC_HEART, 28, (LIST_Y - 1 - 12) / 2.0f, 12, COL_ACC);
 	if (S.tab == TAB_CART && shop_cart()->subtotal[0])
-		ui_text(BOT_W - 10, 5, shop_cart()->subtotal, SZ_SMALL, COL_LIME, AL_RIGHT, 0);
-	ui_text(46, 5, title, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
+		ui_text(BOT_W - 10, vc(0, LIST_Y - 1, SZ_SMALL), shop_cart()->subtotal, SZ_SMALL, COL_LIME, AL_RIGHT, 0);
+	ui_text(46, vc(0, LIST_Y - 1, SZ_SMALL), title, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
 }
 
 
@@ -1201,15 +1207,15 @@ static void draw_store_bottom(void)
 		if (r->header) {
 			// Título de apartado (Inicio)
 			ui_hline(8, y + ROW_H - 1, BOT_W - 16, C2D_Color32(0xff, 0xff, 0xff, 0x14));
-			ui_text(8, y + 7, r->name, SZ_SMALL, COL_ACC, AL_LEFT, BOT_W - 16);
+			ui_text(8, vc(y, ROW_H - 1, SZ_SMALL), r->name, SZ_SMALL, COL_ACC, AL_LEFT, BOT_W - 16);
 			continue;
 		}
 		bool on = i == t->sel;
 		ui_hline(8, y + ROW_H - 1, BOT_W - 16, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
 		if (r->appid == 0) {
 			// Búsqueda reciente
-			ui_icon(IC_SEARCH, 10, y + 9, 11, COL_DIM);
-			ui_text(28, y + 7, r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 40);
+			ui_icon(IC_SEARCH, 10, y + (ROW_H - 1 - 11) / 2, 11, COL_DIM);
+			ui_text(28, vc(y, ROW_H - 1, SZ_BODY - 0.02f), r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 40);
 			continue;
 		}
 		float pw = S.tab == TAB_LIBRARY ? 46 : r->disc > 0 ? 36 + 50 : 56;
@@ -1218,21 +1224,21 @@ static void draw_store_bottom(void)
 			// Etiqueta pequeña para demos y DLC (en Buscar salen mezclados)
 			const char *tag = r->type == 1 ? _("DEMO") : "DLC";
 			float tw = ui_text_w(tag, SZ_TINY) + 8;
-			ui_rect(nx, y + 8, tw, 13, COL_TAG);
-			ui_text(nx + 4, y + 8.5f, tag, SZ_TINY, COL_ACC, AL_LEFT, 0);
+			ui_rect(nx, y + 7.5f, tw, 13, COL_TAG);
+			ui_text(nx + 4, vc(y + 7.5f, 13, SZ_TINY), tag, SZ_TINY, COL_ACC, AL_LEFT, 0);
 			nx += tw + 5;
 		}
-		ui_text(nx, y + 7, r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 10 - nx - pw);
+		ui_text(nx, vc(y, ROW_H - 1, SZ_BODY - 0.02f), r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 10 - nx - pw);
 		if (S.tab == TAB_LIBRARY) {
 			char hrs[24];
 			if (r->minutes >= 60) snprintf(hrs, sizeof hrs, "%d h", (r->minutes + 30) / 60);
 			else if (r->minutes) snprintf(hrs, sizeof hrs, "%d min", r->minutes);
 			else snprintf(hrs, sizeof hrs, "–");
-			ui_text(BOT_W - 10, y + 8, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+			ui_text(BOT_W - 10, vc(y, ROW_H - 1, SZ_SMALL), hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
 		} else if (r->coming_soon && !r->price[0]) {
-			ui_text(BOT_W - 10, y + 8, _("Próximamente"), SZ_TINY, COL_DIM, AL_RIGHT, 0);
+			ui_text(BOT_W - 10, vc(y, ROW_H - 1, SZ_TINY), _("Próximamente"), SZ_TINY, COL_DIM, AL_RIGHT, 0);
 		} else {
-			draw_price_right(BOT_W - 6, y + 2, ROW_H - 5, r, 36, 50);
+			draw_price_right(BOT_W - 6, y + 3, ROW_H - 7, r, 36, 50);
 		}
 	}
 	C2D_ViewRestore(&row_view);
@@ -1719,7 +1725,7 @@ static void draw_reqs_top(const AppInfo *a)
 	// «Nombre requisitos del sistema (Windows)»: una sola frase, con el nombre más grande
 	bool mac = g_cfg.reqs_mac && a->mac;
 	float x = 12 + ui_text(12, 24, a->name, SZ_LARGE, COL_WHITE, AL_LEFT, 220);
-	ui_text(x + 6, 27, mac ? _("requisitos del sistema (macOS)") : _("requisitos del sistema (Windows)"), SZ_SMALL, COL_DIM, AL_LEFT, TOP_W - 18 - x);
+	ui_text(x + 6, 28, mac ? _("requisitos del sistema (macOS)") : _("requisitos del sistema (Windows)"), SZ_SMALL, COL_DIM, AL_LEFT, TOP_W - 18 - x);
 	const ReqLine *mn = mac ? a->mmin : a->rmin, *rc = mac ? a->mrec : a->rrec;
 	int nmn = mac ? a->nmmin : a->nmin, nrc = mac ? a->nmrec : a->nrec;
 	if (!nmn && !nrc) {
@@ -1762,10 +1768,10 @@ static void draw_reviews_top(const AppInfo *a)
 			bool on = i == S.rsel;
 			ui_rrect(12, y, TOP_W - 24, h, 10, col_alpha(COL_WHITE, on ? 0.10f + 0.035f * sinf(g_time * 2.4f) : 0.045f));
 			ui_icon(r->voted_up ? IC_THUMB_UP : IC_THUMB_DOWN, 18, y + 5, 11, r->voted_up ? COL_ACC : COL_NEG);
-			ui_text(34, y + 4, r->voted_up ? _("Recomendado") : _("No recomendado"), SZ_SMALL, COL_WHITE, AL_LEFT, 0);
+			ui_text(34, vc(y + 5, 11, SZ_SMALL), r->voted_up ? _("Recomendado") : _("No recomendado"), SZ_SMALL, COL_WHITE, AL_LEFT, 0);
 			char hrs[32];
 			snprintf(hrs, sizeof hrs, _("%d h jugadas"), r->hours);
-			ui_text(TOP_W - 18, y + 4, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+			ui_text(TOP_W - 18, vc(y + 5, 11, SZ_SMALL), hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
 			ui_block_draw(&S.rtext[i], 18, y + 20, SZ_TINY, COL_TXT, 12);
 		}
 		y += h + 5;
@@ -1797,15 +1803,16 @@ static void draw_list_top(const char *title, const RowList *l, const char *empty
 		if (r->type == 1 || r->type == 4) {
 			const char *tag = r->type == 1 ? _("DEMO") : "DLC";
 			float tw = ui_text_w(tag, SZ_TINY) + 8;
-			ui_rrect(nx, y + 5, tw, 12, 6, col_alpha(COL_ACC, 0.18f));
-			ui_text(nx + 4, y + 5, tag, SZ_TINY, COL_ACC, AL_LEFT, 0);
+			ui_rrect(nx, y + 4.5f, tw, 12, 6, col_alpha(COL_ACC, 0.18f));
+			ui_text(nx + 4, vc(y + 4.5f, 12, SZ_TINY), tag, SZ_TINY, COL_ACC, AL_LEFT, 0);
 			nx += tw + 5;
 		}
-		float nw = ui_text(nx, y + 4, r->name, SZ_SMALL, on ? COL_WHITE : COL_TXT, AL_LEFT, TOP_W - 20 - nx - pw) + nx - 20;
+		float nw = ui_text(nx, vc(y, rh - 1, SZ_SMALL), r->name, SZ_SMALL, on ? COL_WHITE : COL_TXT, AL_LEFT, TOP_W - 20 - nx - pw) + nx - 20;
 		if (r->review[0] && r->review_pct > 0 && 20 + nw + 20 < TOP_W - 40 - pw) {
 			char t[56];
 			snprintf(t, sizeof t, "· %s", r->review);
-			ui_text(26 + nw, y + 5, t, SZ_TINY, review_col(r->review_pct), AL_LEFT, TOP_W - 40 - pw - nw - 8);
+			// En la misma línea base que el nombre
+			ui_text(26 + nw, vc(y, rh - 1, SZ_SMALL) + 1.1f, t, SZ_TINY, review_col(r->review_pct), AL_LEFT, TOP_W - 40 - pw - nw - 8);
 		}
 		draw_price_right(TOP_W - 16, y + 1, rh - 3, r, 36, 52);
 	}
@@ -1919,7 +1926,7 @@ static void draw_button_k(const Box *b, const char *key, bool focus, Icon ic, co
 	float x = b->x + (b->w - tw) / 2;
 	u32 f = col_alpha(fg, alpha < 1 ? 0.5f : 1);
 	float dy = pressed ? 1 : 0;
-	float ty = b->y + (b->h - ui_line_h(SZ_SMALL)) / 2 + 1 + dy;
+	float ty = vc(b->y, b->h, SZ_SMALL) + dy;
 	if (key && alpha >= 1) hint_key(x, b->y + (b->h - 18) / 2 + dy, key, true);
 	x += kw;
 	ui_icon(ic, x, b->y + (b->h - 12) / 2 + dy, 12, f);
@@ -1952,7 +1959,7 @@ static void draw_pick(const AppInfo *a)
 	float y0 = pick_y(n) + (1 - an) * 60;
 	fx_panel(6, y0, BOT_W - 12, SCR_H - y0 + 16, 16, an);
 	ui_rrect(BOT_W / 2 - 16, y0 + 6, 32, 3, 1.5f, col_alpha(COL_DIM, an * 0.6f));
-	ui_text(18, y0 + 12, _("¿Qué quieres añadir al carrito?"), SZ_BODY, col_alpha(COL_WHITE, an), AL_LEFT, BOT_W - 36);
+	ui_text(18, y0 + 14, _("¿Qué quieres añadir al carrito?"), SZ_BODY, col_alpha(COL_WHITE, an), AL_LEFT, BOT_W - 36);
 	for (int i = 0; i < n; i++) {
 		float y = y0 + 34 + i * PICK_ROW;
 		bool on = i == S.pick_sel;
@@ -1963,8 +1970,8 @@ static void draw_pick(const AppInfo *a)
 		snprintf(pr.orig, sizeof pr.orig, "%s", o[i].orig);
 		pr.free = o[i].free;
 		float pw = pr.disc > 0 ? 36 + 50 : ui_text_w(pr.price, SZ_BODY) + 10;
-		ui_text(20, y + 8, o[i].name, SZ_BODY - 0.02f, col_alpha(on ? COL_WHITE : COL_TXT, an), AL_LEFT, BOT_W - 44 - pw);
-		if (an > 0.95f) draw_price_right(BOT_W - 18, y + 2, PICK_ROW - 7, &pr, 36, 50);
+		ui_text(20, vc(y, PICK_ROW - 3, SZ_BODY - 0.02f), o[i].name, SZ_BODY - 0.02f, col_alpha(on ? COL_WHITE : COL_TXT, an), AL_LEFT, BOT_W - 44 - pw);
+		if (an > 0.95f) draw_price_right(BOT_W - 18, y + 3, PICK_ROW - 9, &pr, 36, 50);
 	}
 }
 
@@ -1985,7 +1992,7 @@ static void draw_game_bottom(void)
 	for (int i = 0; i < SEC_COUNT; i++) {
 		float x = B_SEG.x + 2 + i * sw;
 		float on = 1 - clampf(fabsf(S.seg_x - i), 0, 1);
-		ui_text(x + sw / 2, B_SEG.y + (B_SEG.h - ui_line_h(SZ_TINY)) / 2 + 1, _(secs[i]), SZ_TINY, col_lerp(COL_DIM, COL_WHITE, on), AL_CENTER, sw - 4);
+		ui_text(x + sw / 2, vc(B_SEG.y, B_SEG.h, SZ_TINY), _(secs[i]), SZ_TINY, col_lerp(COL_DIM, COL_WHITE, on), AL_CENTER, sw - 4);
 	}
 
 	if (a) {
@@ -2007,7 +2014,7 @@ static void draw_game_bottom(void)
 			FxButton lb = {C2D_Color32(0x2b, 0x55, 0x1a, 0xff), 1, false, false};
 			fx_button(308 - w, 36, w, 32, 10, &lb);
 			ui_icon(IC_PAD, 308 - w + 10, 46, 12, COL_LIME);
-			ui_text(308 - 8, 45, hrs, SZ_SMALL, COL_LIME, AL_RIGHT, 0);
+			ui_text(308 - 8, vc(36, 32, SZ_SMALL), hrs, SZ_SMALL, COL_LIME, AL_RIGHT, 0);
 		} else if (a->disc > 0) {
 			ui_badge_disc(308 - 64 - 52, 36, 52, 32, a->disc, SZ_LARGE);
 			ui_price_box(308 - 64, 36, 64, 32, a->orig, a->price, SZ_SMALL, SZ_BODY + 0.05f);
@@ -2029,7 +2036,7 @@ static void draw_game_bottom(void)
 			const char *p = a->is_free ? _("Gratis") : a->has_price ? a->price : a->coming_soon ? _("Próximamente") : _("No disponible");
 			float w = ui_text_w(p, SZ_BODY + 0.05f) + 16;
 			ui_rect(308 - w, 36, w, 32, COL_SHADE);
-			ui_text(308 - 8, 44, p, SZ_BODY + 0.05f, a->is_free ? COL_LIME : COL_TXT, AL_RIGHT, 0);
+			ui_text(308 - 8, vc(36, 32, SZ_BODY + 0.05f), p, SZ_BODY + 0.05f, a->is_free ? COL_LIME : COL_TXT, AL_RIGHT, 0);
 		}
 		bool free = game_is_free(a, opts, nopt);
 		bool carted = in && !own && shop_in_cart(a->appid, opts, nopt);
@@ -2126,7 +2133,7 @@ static void draw_round_button(const Box *b, const char *key, const char *label, 
 	float tw = kw + ui_text_w(label, SZ_BODY);
 	float x = b->x + (b->w - tw) / 2, dy = pressed ? 1 : 0;
 	if (enabled) hint_key(x, b->y + (b->h - 18) / 2 + dy, key, true);
-	ui_text(x + kw, b->y + (b->h - ui_line_h(SZ_BODY)) / 2 + 1 + dy, label, SZ_BODY, col_alpha(COL_WHITE, enabled ? 1 : 0.4f), AL_LEFT, 0);
+	ui_text(x + kw, vc(b->y, b->h, SZ_BODY) + dy, label, SZ_BODY, col_alpha(COL_WHITE, enabled ? 1 : 0.4f), AL_LEFT, 0);
 }
 
 static void draw_shots_bottom(void)
@@ -2142,7 +2149,7 @@ static void draw_shots_bottom(void)
 		float w1 = ui_text_w(cur, SZ_TITLE), w2 = ui_text_w(tot, SZ_LARGE);
 		float x = (BOT_W - w1 - w2) / 2;
 		ui_text(x, 28, cur, SZ_TITLE, COL_WHITE, AL_LEFT, 0);
-		ui_text(x + w1, 32, tot, SZ_LARGE, COL_DIM, AL_LEFT, 0);
+		ui_text(x + w1, 31, tot, SZ_LARGE, COL_DIM, AL_LEFT, 0);   // en la misma línea base
 
 		// Tira de miniaturas: se desliza hasta la actual, que va marcada
 		for (int i = 0; i < a->nshots; i++) {
@@ -2197,10 +2204,10 @@ static void draw_exit_dialog(void)
 	bool pn = S.pressed == BT_EXIT_NO, py = S.pressed == BT_EXIT_YES;
 	FxButton bn = {0, a, pn, false};
 	fx_button(B_EXIT_NO.x, B_EXIT_NO.y, B_EXIT_NO.w, B_EXIT_NO.h, 17, &bn);
-	ui_text(B_EXIT_NO.x + B_EXIT_NO.w / 2, B_EXIT_NO.y + 9 + (pn ? 1 : 0), no, SZ_BODY, col_alpha(COL_WHITE, a), AL_CENTER, 104);
+	ui_text(B_EXIT_NO.x + B_EXIT_NO.w / 2, vc(B_EXIT_NO.y, B_EXIT_NO.h, SZ_BODY) + (pn ? 1 : 0), no, SZ_BODY, col_alpha(COL_WHITE, a), AL_CENTER, 104);
 	FxButton by = {C2D_Color32(0xd8, 0x44, 0x36, 0xff), a, py, false};
 	fx_button(B_EXIT_YES.x, B_EXIT_YES.y, B_EXIT_YES.w, B_EXIT_YES.h, 17, &by);
-	ui_text(B_EXIT_YES.x + B_EXIT_YES.w / 2, B_EXIT_YES.y + 9 + (py ? 1 : 0), yes, SZ_BODY, col_alpha(COL_WHITE, a), AL_CENTER, 104);
+	ui_text(B_EXIT_YES.x + B_EXIT_YES.w / 2, vc(B_EXIT_YES.y, B_EXIT_YES.h, SZ_BODY) + (py ? 1 : 0), yes, SZ_BODY, col_alpha(COL_WHITE, a), AL_CENTER, 104);
 	C2D_ViewRestore(&view);
 }
 
@@ -2228,8 +2235,8 @@ static void draw_overlays_bottom(void)
 		float x = (BOT_W - w) / 2, y = base + (1 - in) * 16;
 		fx_panel(x, y, w, th, 13, a);
 		if (S.toast_ic >= 0) ui_icon((Icon)S.toast_ic, x + 12, y + (th - 12) / 2, 12, col_alpha(COL_ACC, a));
-		if (two) ui_text_wrap(x + pad - 14, y + 6, w - pad, S.toast, SZ_SMALL, col_alpha(COL_WHITE, a), 2, 14);
-		else ui_text(x + pad - 14, y + 5, S.toast, SZ_SMALL, col_alpha(COL_WHITE, a), AL_LEFT, w - pad);
+		if (two) ui_text_wrap(x + pad - 14, y + (th - 14 - ui_line_h(SZ_SMALL)) / 2, w - pad, S.toast, SZ_SMALL, col_alpha(COL_WHITE, a), 2, 14);
+		else ui_text(x + pad - 14, vc(y, th, SZ_SMALL), S.toast, SZ_SMALL, col_alpha(COL_WHITE, a), AL_LEFT, w - pad);
 	}
 	if (S.exit_anim > 0.01f) draw_exit_dialog();
 }
@@ -2466,19 +2473,19 @@ static void draw_menu(void)
 		ui_rect(hx, hy, 26, 26, col_alpha(COL_BG, a));
 		if (p) img_draw_cover(p, hx, hy, 26, 26, 0.5f);
 		else ui_icon(IC_USER, hx + 5, hy + 5, 16, col_alpha(COL_DIM, a));
-		ui_text(hx + 34, hy, ai->persona, SZ_BODY, col_alpha(COL_WHITE, a), AL_LEFT, 200);
+		ui_text(hx + 34, hy + 0.5f, ai->persona, SZ_BODY, col_alpha(COL_WHITE, a), AL_LEFT, 200);
 		char lv[72];
 		if (ai->level) snprintf(lv, sizeof lv, _("Nivel %d"), ai->level);
 		else snprintf(lv, sizeof lv, "%s", ai->account);
-		ui_text(hx + 34, hy + 14, lv, SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
+		ui_text(hx + 34, hy + 14.5f, lv, SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
 	} else if (ai->state == AUTH_STARTING) {
 		ui_icon(IC_USER, hx + 3, hy + 4, 18, col_alpha(COL_DIM, a));
-		ui_text(hx + 34, hy, ai->account[0] ? ai->account : APP_NAME, SZ_BODY, col_alpha(COL_WHITE, a), AL_LEFT, 200);
-		ui_text(hx + 34, hy + 14, _("Conectando tu sesión de Steam…"), SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
+		ui_text(hx + 34, hy + 0.5f, ai->account[0] ? ai->account : APP_NAME, SZ_BODY, col_alpha(COL_WHITE, a), AL_LEFT, 200);
+		ui_text(hx + 34, hy + 14.5f, _("Conectando tu sesión de Steam…"), SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
 	} else {
 		ui_icon(IC_USER, hx + 3, hy + 4, 18, col_alpha(COL_DIM, a));
-		ui_text(hx + 34, hy, APP_NAME, SZ_BODY, col_alpha(COL_WHITE, a), AL_LEFT, 200);
-		ui_text(hx + 34, hy + 14, _("Sin iniciar sesión"), SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
+		ui_text(hx + 34, hy + 0.5f, APP_NAME, SZ_BODY, col_alpha(COL_WHITE, a), AL_LEFT, 200);
+		ui_text(hx + 34, hy + 14.5f, _("Sin iniciar sesión"), SZ_TINY, col_alpha(COL_DIM, a), AL_LEFT, 200);
 	}
 	static const struct { Icon ic; const char *label; } info[] = {
 		[MI_LOGIN] = {IC_PHONE, "Iniciar sesión con el móvil"},
@@ -2495,17 +2502,17 @@ static void draw_menu(void)
 		bool on = i == S.menu_sel;
 		if (on) fx_select(12, y, BOT_W - 24, MENU_ROW - 2, 10, a);
 		u32 c = items[i] == MI_EXIT || items[i] == MI_LOGOUT ? C2D_Color32(0xff, 0x8a, 0x7a, 0xff) : COL_ACC;
-		ui_icon(info[items[i]].ic, 22, y + 8, 12, col_alpha(c, a));
-		ui_text(42, y + 6, _(info[items[i]].label), SZ_BODY - 0.02f, col_alpha(on ? COL_WHITE : COL_TXT, a), AL_LEFT, BOT_W - 60);
+		ui_icon(info[items[i]].ic, 22, y + (MENU_ROW - 2 - 12) / 2, 12, col_alpha(c, a));
+		ui_text(42, vc(y, MENU_ROW - 2, SZ_BODY - 0.02f), _(info[items[i]].label), SZ_BODY - 0.02f, col_alpha(on ? COL_WHITE : COL_TXT, a), AL_LEFT, BOT_W - 60);
 		if (items[i] == MI_REQS)
-			ui_text(BOT_W - 24, y + 7, g_cfg.reqs_mac ? "macOS" : "Windows", SZ_SMALL, col_alpha(COL_ACC, a), AL_RIGHT, 0);
+			ui_text(BOT_W - 24, vc(y, MENU_ROW - 2, SZ_SMALL), g_cfg.reqs_mac ? "macOS" : "Windows", SZ_SMALL, col_alpha(COL_ACC, a), AL_RIGHT, 0);
 		if (items[i] == MI_CART && shop_cart()->n) {
 			// Cuántos hay, en una píldora verde
 			char nc[8];
 			snprintf(nc, sizeof nc, "%d", shop_cart()->n);
 			float w = ui_text_w(nc, SZ_SMALL) + 12;
 			ui_rrect(BOT_W - 24 - w, y + 6, w, 16, 8, col_alpha(C2D_Color32(0x5c, 0x7e, 0x10, 0xff), a));
-			ui_text(BOT_W - 24 - w / 2, y + 7, nc, SZ_SMALL, col_alpha(COL_WHITE, a), AL_CENTER, 0);
+			ui_text(BOT_W - 24 - w / 2, vc(y + 6, 16, SZ_SMALL), nc, SZ_SMALL, col_alpha(COL_WHITE, a), AL_CENTER, 0);
 		}
 	}
 }
@@ -2576,9 +2583,9 @@ static void draw_login_top(void)
 		char num[4];
 		snprintf(num, sizeof num, "%d", i + 1);
 		// El círculo, centrado en la primera línea del paso, y el número centrado en el círculo
-		float cy = y + ls * 0.55f;
+		float cy = y + ls / 2;
 		ui_circle(x + 7, cy, 7.5f, C2D_Color32(0xff, 0xff, 0xff, 0x1c));
-		ui_text(x + 7, cy - lt * 0.55f, num, SZ_TINY, COL_ACC, AL_CENTER, 0);
+		ui_text(x + 7, cy - lt / 2, num, SZ_TINY, COL_ACC, AL_CENTER, 0);
 		int nl = ui_text_wrap(x + 20, y, w - 20, _(steps[i]), SZ_SMALL, COL_TXT, 3, 13);
 		y += nl * 13 + 8;
 	}
@@ -2589,11 +2596,11 @@ static void draw_login_top(void)
 		float bh = 12 + 13 * nl;
 		FxButton ok = {C2D_Color32(0x2b, 0x55, 0x1a, 0xff), 1, false, false};
 		fx_button(x, sy + 26 - bh, w, bh, 10, &ok);
-		ui_text_wrap(x + 10, sy + 26 - bh + 6, w - 20, _("Escaneado: apruébalo en el móvil"), SZ_SMALL, COL_LIME, 2, 13);
+		ui_text_wrap(x + 10, sy + 26 - bh + 6.5f, w - 20, _("Escaneado: apruébalo en el móvil"), SZ_SMALL, COL_LIME, 2, 13);
 	} else {
 		float cy = sy + 13;
 		ui_spinner(x + 8, cy, 6, COL_DIM);
-		ui_text(x + 22, cy - ls * 0.55f, _("Esperando al móvil…"), SZ_SMALL, COL_DIM, AL_LEFT, w - 30);
+		ui_text(x + 22, cy - ls / 2, _("Esperando al móvil…"), SZ_SMALL, COL_DIM, AL_LEFT, w - 30);
 	}
 }
 
@@ -2607,7 +2614,7 @@ static void draw_login_bottom(void)
 	float content = 36 + 10 + 16 + 10 + nl * 14;
 	float y = py + (ph - content) / 2;
 	ui_circle(BOT_W / 2, y + 18, 18, C2D_Color32(0xff, 0xff, 0xff, 0x12));
-	ui_icon(IC_LOCK, BOT_W / 2 - 10, y + 18 - 10 - 2, 20, COL_ACC);
+	ui_icon(IC_LOCK, BOT_W / 2 - 10, y + 18 - 10 - 1, 20, COL_ACC);   // el candado tiene más peso abajo
 	y += 36 + 10;
 	ui_text(BOT_W / 2, y, _("Tu contraseña nunca pasa por la consola"), SZ_BODY, COL_WHITE, AL_CENTER, pw - 24);
 	y += 16 + 10;
@@ -3263,7 +3270,7 @@ static void draw_pay_bottom(void)
 {
 	const PayInfo *p = pay_info();
 	ui_rect(0, 0, BOT_W, LIST_Y, COL_BAR);
-	ui_text(12, 5, _("Pagar"), SZ_SMALL, COL_WHITE, AL_LEFT, 200);
+	ui_text(12, vc(0, LIST_Y - 1, SZ_SMALL), _("Pagar"), SZ_SMALL, COL_WHITE, AL_LEFT, 200);
 	ui_rect(0, LIST_Y - 1, BOT_W, 1, COL_LINE);
 	char t[128];
 	switch (p->state) {
@@ -3277,7 +3284,7 @@ static void draw_pay_bottom(void)
 		bool pw = S.pressed == BT_PAYW, pc = S.pressed == BT_PAYC;
 		draw_button_k(&B_PAYW, NULL, S.paysel == 0, IC_COIN, _("Cartera de Steam"), C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), COL_WHITE, p->wallet ? 1 : 0.4f, pw);
 		snprintf(t, sizeof t, _("Saldo: %s"), p->wallet_fmt[0] ? p->wallet_fmt : "–");
-		ui_text(B_PAYW.x + B_PAYW.w - 10, B_PAYW.y + 10, t, SZ_SMALL, col_alpha(COL_WHITE, p->wallet ? 1 : 0.5f), AL_RIGHT, 0);
+		ui_text(B_PAYW.x + B_PAYW.w - 10, vc(B_PAYW.y, B_PAYW.h, SZ_SMALL), t, SZ_SMALL, col_alpha(COL_WHITE, p->wallet ? 1 : 0.5f), AL_RIGHT, 0);
 		if (p->card && p->card_last4[0]) snprintf(t, sizeof t, _("%s terminada en %s"), card_name(p->card_type), p->card_last4);
 		else if (p->card) snprintf(t, sizeof t, "%s", card_name(p->card_type));
 		else snprintf(t, sizeof t, "%s", _("Sin tarjeta guardada"));
@@ -3313,7 +3320,7 @@ static void draw_pay_bottom(void)
 			ui_vgrad(b->x + 8, b->y + 2, fw - 16 > 0 ? fw - 16 : 0, b->h * 0.4f, col_alpha(COL_WHITE, 0.18f), col_alpha(COL_WHITE, 0));
 		}
 		snprintf(t, sizeof t, _("Mantén A para pagar %s"), p->total_fmt);
-		ui_text(b->x + b->w / 2, b->y + 9, t, SZ_BODY, col_alpha(COL_WHITE, ready ? 1 : 0.5f), AL_CENTER, b->w - 16);
+		ui_text(b->x + b->w / 2, vc(b->y, b->h, SZ_BODY), t, SZ_BODY, col_alpha(COL_WHITE, ready ? 1 : 0.5f), AL_CENTER, b->w - 16);
 		break;
 	}
 	case PAY_PAYING:
@@ -4004,6 +4011,32 @@ int main(int argc, char **argv)
 		float ce = ease_out_cubic(S.scene_anim);
 		C2D_ViewReset();
 		C2D_ViewTranslate(S.scene_dir * (1 - ce) * 26, 0);
+#ifdef DEV_RELAY
+		// Solo en pruebas: con sdmc:/3ds/Steam3DS/calib, una pantalla para medir dónde cae el texto
+		static int calib = -1;
+		if (calib < 0) {
+			FILE *cf = fopen(APP_DIR "/calib", "r");
+			calib = cf != NULL;
+			if (cf) fclose(cf);
+		}
+		if (calib) {
+			ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, 0xff));
+			static const float szs[] = {SZ_TINY, SZ_SMALL, SZ_BODY, SZ_LARGE, SZ_TITLE};
+			for (int i = 0; i < 5; i++) {
+				float y = 10 + i * 44;
+				ui_rect(0, y, TOP_W, 1, C2D_Color32(0xff, 0, 0, 0xff));
+				ui_rect(0, y + ui_line_h(szs[i]), TOP_W, 1, C2D_Color32(0, 0xff, 0, 0xff));
+				ui_text(10, y, "HEgy", szs[i], COL_WHITE, AL_LEFT, 0);
+				ui_text(120, y, "xaeo", szs[i], COL_WHITE, AL_LEFT, 0);
+				ui_icon(IC_CART, 220, y, 12, COL_WHITE);
+				ui_icon(IC_HEART, 250, y, 20, COL_WHITE);
+				const char *g = ui_button_glyph("A");
+				hint_key(290, y, "A", true);
+				if (g) ui_text(330, y, g, szs[i], COL_WHITE, AL_LEFT, 0);
+			}
+			goto calib_done;
+		}
+#endif
 		switch (S.scene) {
 		case SC_STORE: draw_store_top(); break;
 		case SC_GAME: draw_game_top(); break;
@@ -4013,6 +4046,9 @@ int main(int argc, char **argv)
 		case SC_PROFILE: draw_profile_top(); break;
 		case SC_PAY: draw_pay_top(); break;
 		}
+#ifdef DEV_RELAY
+	calib_done:
+#endif
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));

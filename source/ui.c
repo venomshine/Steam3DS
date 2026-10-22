@@ -94,6 +94,8 @@ float ui_line_h(float sz)
 	return line_feed * sz;
 }
 
+#define TEXT_DROP 0.13f
+
 static void draw_raw(float x, float y, const char *s, size_t n, float sz, u32 col)
 {
 	char tmp[512];
@@ -102,7 +104,10 @@ static void draw_raw(float x, float y, const char *s, size_t n, float sz, u32 co
 	tmp[n] = 0;
 	C2D_Text t;
 	C2D_TextFontParse(&t, g_font, tbuf, tmp);
-	C2D_DrawText(&t, C2D_WithColor, x, y, 0.5f, sz, sz, col);
+	// La fuente deja más aire arriba que abajo: medido (con la fuente de la consola y con la libre),
+	// las mayúsculas quedaban ~13 % de la línea por encima del centro de su caja. Se baja aquí para
+	// que el texto quede centrado en la caja [y, y + ui_line_h()] en toda la app
+	C2D_DrawText(&t, C2D_WithColor, x, y + line_feed * sz * TEXT_DROP, 0.5f, sz, sz, col);
 }
 
 static void draw_n(float x, float y, const char *s, size_t n, float sz, u32 col)
@@ -334,7 +339,7 @@ void ui_block_parse(TextBlock *b, C2D_TextBuf buf, const char *s, float sz, floa
 
 void ui_block_draw(const TextBlock *b, float x, float y, float sz, u32 col, float lh)
 {
-	for (int i = 0; i < b->n; i++) C2D_DrawText(&b->line[i], C2D_WithColor, x, y + i * lh, 0.5f, sz, sz, col);
+	for (int i = 0; i < b->n; i++) C2D_DrawText(&b->line[i], C2D_WithColor, x, y + i * lh + line_feed * sz * TEXT_DROP, 0.5f, sz, sz, col);
 }
 
 // fontGlyphIndexFromCodePoint recorre la tabla de la fuente para cada carácter que no es ASCII
@@ -465,9 +470,6 @@ static void ring(float cx, float cy, float r, float th, u32 c)
 void ui_icon(Icon ic, float x, float y, float s, u32 c)
 {
 	float u = s / 12.0f;   // los íconos están pensados en una rejilla de 12×12
-	// El texto de la fuente tiene su centro visual algo por debajo de su caja: los iconos se bajan
-	// lo mismo para quedar alineados con el texto que llevan al lado
-	y += s * 0.11f;
 #define X(v) (x + (v) * u)
 #define Y(v) (y + (v) * u)
 	switch (ic) {
@@ -610,7 +612,7 @@ void ui_badge_disc(float x, float y, float w, float h, int disc, float sz)
 	char t[12];
 	snprintf(t, sizeof t, "-%d%%", disc);
 	ui_rect(x, y, w, h, COL_DGREEN);
-	ui_text(x + w / 2, y + (h - ui_line_h(sz)) / 2 + 1, t, sz, COL_LIME, AL_CENTER, 0);
+	ui_text(x + w / 2, y + (h - ui_line_h(sz)) / 2, t, sz, COL_LIME, AL_CENTER, 0);
 }
 
 void ui_price_box(float x, float y, float w, float h, const char *orig, const char *price, float sz_old, float sz_new)
@@ -619,12 +621,13 @@ void ui_price_box(float x, float y, float w, float h, const char *orig, const ch
 	float r = x + w - 4;
 	if (orig && *orig) {
 		float lo = ui_line_h(sz_old), ln = ui_line_h(sz_new);
-		float oy = y + (h - lo * 0.78f - ln * 0.86f) / 2 - lo * 0.06f;
+		// Centra el bloque visible (las mayúsculas ocupan ~55 % del alto de línea)
+		float oy = y + h / 2 - lo * 0.5025f - ln * 0.3875f;
 		float ow = ui_text(r, oy, orig, sz_old, COL_OLD, AL_RIGHT, 0);
 		ui_rect(floorf(r - ow), floorf(oy + lo * 0.50f), ceilf(ow), 1, COL_OLD);
 		ui_text(r, oy + lo * 0.78f, price, sz_new, COL_LIME, AL_RIGHT, 0);
 	} else {
-		ui_text(r, y + (h - ui_line_h(sz_new)) / 2 + 1, price, sz_new, COL_TXT, AL_RIGHT, 0);
+		ui_text(r, y + (h - ui_line_h(sz_new)) / 2, price, sz_new, COL_TXT, AL_RIGHT, 0);
 	}
 }
 

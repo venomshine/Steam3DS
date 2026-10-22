@@ -1768,13 +1768,6 @@ static void draw_reqs_top(const AppInfo *a)
 		if (nmn) draw_req_col(12, 46, nrc ? 182 : 376, _("MÍNIMO"), mn, nmn);
 		if (nrc) draw_req_col(nmn ? 206 : 12, 46, nmn ? 182 : 376, _("RECOMENDADO"), rc, nrc);
 	}
-	// Abajo: en qué más sistemas va, y cómo ver los de macOS (es un ajuste del menú START)
-	const char *t = NULL;
-	if (a->mac && !mac) t = a->lnx ? _("También en macOS y Linux · para ver los de macOS: START › Requisitos")
-		: _("También en macOS · para ver sus requisitos: START › Requisitos");
-	else if (mac) t = _("Mostrando macOS · para Windows: START › Requisitos");
-	else if (a->lnx) t = _("También en Linux");
-	if (t) ui_text(12, SCR_H - 18, t, SZ_SMALL, COL_DIM, AL_LEFT, TOP_W - 24);
 }
 static void draw_reviews_top(const AppInfo *a)
 {

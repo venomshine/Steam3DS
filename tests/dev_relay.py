@@ -318,7 +318,7 @@ def fake_checkout(method, path, q, body, headers):
         c = t["total"]
         return js({"success": 1, "total": c, "formattedTotal": "%d,%02d€" % (c // 100, c % 100),
                    "steamAccountBalance": WALLET_CENTS[0], "providerpaymentmethod": 0 if t["method"] == "steamaccount" else 2,
-                   "requirecvv": t["method"] == "visa"})
+                   "requirecvv": 1 if t["method"] == "visa" else 0})
     if path == "checkout/canceltransaction/":
         TRANS.pop(form.get("transid"), None)
         return js({"success": 1})

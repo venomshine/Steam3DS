@@ -3545,7 +3545,6 @@ static const char *card_name(const char *type)
 	return _("Tarjeta");
 }
 
-// Por qué no se pudo pagar, en palabras normales (EPurchaseResultDetail)
 // Las casillas que Steam obliga a marcar antes de pagar, como en su web
 static const char *pay_ssa_text(const PayInfo *p)
 {
@@ -3581,6 +3580,7 @@ static bool pay_accepted(const PayInfo *p)
 	return S.pay_ssa && (!p->withdrawal || S.pay_wd);
 }
 
+// Por qué no se pudo pagar, en palabras normales (EPurchaseResultDetail)
 static const char *pay_err_text(const PayInfo *p)
 {
 	if (p->maybe_paid) return _("No se pudo confirmar el cobro. Revisa tu correo o el historial de compras de Steam antes de volver a intentarlo.");

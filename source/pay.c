@@ -315,7 +315,15 @@ void pay_update(void)
 			if (root && jint(root, "success") == 1) {
 				P.total_cents = jll(root, "total");
 				jcopy(P.total_fmt, sizeof P.total_fmt, root, "formattedTotal");
-				P.need_cvv = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "requirecvv")) || !strcmp(page.card_type, "cartebleue");
+				// Como la web de Steam, cualquier valor «verdadero» vale (true, 1, "1"): con un booleano
+				// estricto, una tarjeta que pedía el código de seguridad (American Express) se pagaba sin él
+				const cJSON *rc = cJSON_GetObjectItemCaseSensitive(root, "requirecvv");
+				bool req_cvv = cJSON_IsTrue(rc) || (cJSON_IsNumber(rc) && rc->valuedouble != 0) ||
+					(cJSON_IsString(rc) && rc->valuestring[0] && strcmp(rc->valuestring, "0") && strcmp(rc->valuestring, "false"));
+				char *rc_txt = rc ? cJSON_PrintUnformatted(rc) : NULL;
+				netlog("pago: requirecvv=%s", rc_txt ? rc_txt : "(no viene)");
+				free(rc_txt);
+				P.need_cvv = req_cvv || !strcmp(page.card_type, "cartebleue");
 				if (P.method != PM_CARD) P.need_cvv = false;
 				long long bal = jll(root, "steamAccountBalance");
 				if (bal) P.wallet_cents = bal;

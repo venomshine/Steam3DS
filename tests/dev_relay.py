@@ -279,6 +279,11 @@ CHECKOUT_PAGE = """<html><body>
 <input type="hidden" id="stored_card_id" name="stored_card_id" value="776655">
 <input type="hidden" id="stored_card_number" value="************4821">
 <input type="hidden" id="billing_country" value="ES">
+<div class="checkout_tab" id="purchase_confirm_ssa"><input type="checkbox" id="accept_ssa" name="accept_ssa">
+<label for="accept_ssa">Acepto las condiciones del <a href="#">Acuerdo de Suscriptor a Steam</a> (última actualización: 26 SEP 2024).</label></div>
+<div class="checkout_tab" id="purchase_confirm_right_withdrawal"><input type="checkbox" id="accept_right_withdrawal">
+<label for="accept_right_withdrawal">Acepto que el contenido se ponga a mi disposición de inmediato y reconozco que, por ello,
+pierdo mi derecho de desistimiento.</label></div>
 </body></html>"""
 
 

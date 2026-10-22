@@ -3,6 +3,7 @@
 
 # Textos que llegan a _() a través de una variable (pestañas, apartados, pistas, clasificaciones)
 INDIRECT = [
+    "Marcar", "Mantener para pagar",
     "Explora la tienda de Steam, consulta ofertas y reseñas, gestiona tu lista de deseos y tu carrito, y compra con los métodos de pago de tu cuenta, todo desde la consola.",
     "Steam3DS es un proyecto independiente y no está afiliado, patrocinado ni respaldado por Valve Corporation ni por Nintendo. Steam y el logotipo de Steam son marcas comerciales o marcas registradas de Valve Corporation. Nintendo 3DS es una marca registrada de Nintendo.",
     "Inicio", "Ofertas", "Demos", "Betas",
@@ -252,7 +253,6 @@ TR = {
     '%s terminada en %s': ('%s ending in %s', '%s（末尾 %s）'),
     'Abriendo el pago…': ('Opening checkout…', '支払い画面を開いています…'),
     'Aceptar': ('OK', 'OK'),
-    'Al pagar aceptas el Acuerdo de Suscriptor de Steam. Al ser contenido digital, la descarga puede empezar ya y renuncias al desistimiento de 14 días de la UE; el reembolso de Steam sigue valiendo (14 días y menos de 2 h jugadas).': ("By paying you accept the Steam Subscriber Agreement. As it's digital content, the download can start right away and you waive the EU 14-day withdrawal right; Steam refunds still apply (14 days and under 2 h played).", '支払うとSteam利用規約に同意したことになります。デジタルコンテンツのためすぐにダウンロードが始まり、EUの14日間の撤回権は放棄されます。Steamの返金（14日以内・プレイ2時間未満）は引き続き有効です。'),
     'Algún artículo del carrito no está disponible en tu país.': ("An item in your cart isn't available in your country.", 'カート内に、お住まいの国で購入できないアイテムがあります。'),
     'CVV (3 o 4 dígitos, en el reverso de la tarjeta)': ('CVV (3 or 4 digits, on the back of the card)', 'CVV（カード裏面の3桁または4桁）'),
     'Cartera de Steam': ('Steam Wallet', 'Steamウォレット'),
@@ -366,4 +366,10 @@ TR = {
     'Únete a la comunidad: dudas, ayuda, ideas y anuncios de nuevas versiones.': ('Join the community: questions, help, ideas and new release announcements.', 'コミュニティに参加：質問、サポート、アイデア、新バージョンのお知らせ。'),
     'Explora la tienda de Steam, consulta ofertas y reseñas, gestiona tu lista de deseos y tu carrito, y compra con los métodos de pago de tu cuenta, todo desde la consola.': ("Browse the Steam store, check deals and reviews, manage your wishlist and cart, and buy with your account's payment methods, all from your console.", 'Steamストアを見て、セールやレビューを確認し、ウィッシュリストとカートを管理し、アカウントの支払い方法で購入できます。すべて本体から。'),
     'Steam3DS es un proyecto independiente y no está afiliado, patrocinado ni respaldado por Valve Corporation ni por Nintendo. Steam y el logotipo de Steam son marcas comerciales o marcas registradas de Valve Corporation. Nintendo 3DS es una marca registrada de Nintendo.': ('Steam3DS is an independent project and is not affiliated with, sponsored or endorsed by Valve Corporation or Nintendo. Steam and the Steam logo are trademarks or registered trademarks of Valve Corporation. Nintendo 3DS is a registered trademark of Nintendo.', 'Steam3DSは独立したプロジェクトであり、Valve CorporationおよびNintendoとは提携・後援・承認の関係にありません。SteamおよびSteamのロゴはValve Corporationの商標または登録商標です。ニンテンドー3DSは任天堂の登録商標です。'),
+    'Acepto que el contenido digital esté disponible de inmediato y renuncio a mi derecho de desistimiento.': ('I agree that the digital content is made available immediately and I waive my right of withdrawal.', 'デジタルコンテンツがすぐに提供されることに同意し、撤回権を放棄します。'),
+    'Los reembolsos de Steam siguen disponibles: 14 días desde la compra y menos de 2 horas de juego.': ('Steam refunds still apply: within 14 days of purchase and under 2 hours of playtime.', 'Steamの返金は引き続き利用できます：購入から14日以内、プレイ時間2時間未満。'),
+    'Acepto las condiciones del Acuerdo de Suscriptor a Steam.': ('I agree to the terms of the Steam Subscriber Agreement.', 'Steam利用規約に同意します。'),
+    'Acepta las condiciones para continuar': ('Accept the terms to continue', '続行するには規約に同意してください'),
+    'Marcar': ('Check', 'チェック'),
+    'Mantener para pagar': ('Hold to pay', '長押しで支払い'),
 }

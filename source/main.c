@@ -127,6 +127,8 @@ static struct {
 	bool want_cvv;               // abrir el teclado del CVV (fuera del frame)
 	float pay_hold;              // A mantenido para confirmar (0..1)
 	bool pay_armed;              // hay que soltar A antes de poder mantenerlo
+	bool pay_ssa, pay_wd;        // casillas marcadas: Acuerdo de Suscriptor y renuncia al desistimiento
+	int pay_focus;               // en el resumen: 0 casilla del acuerdo, 1 la del desistimiento, 2 pagar
 	int paysel;                  // método elegido con la cruceta
 	int home_sub;                // Inicio: subcategoría (lo más vendido, novedades, próximamente, gratis)
 	float sub_x, sub_anim;       // píldora de la subcategoría y la barra que sale al estar en Inicio
@@ -3659,8 +3661,8 @@ static void game_set_sec(int sec)
 static const Box B_PAYW = {12, 44, 296, 34};
 static const Box B_PAYC = {12, 84, 296, 34};
 static const Box B_PAYQ = {12, 124, 296, 28};
-static const Box B_CVV = {12, 76, 296, 28};
-static const Box B_PAYGO = {12, 150, 296, 34};
+static const Box B_CVV = {12, 72, 296, 26};
+static const Box B_PAYGO = {12, 184, 296, 32};
 #define PAY_HOLD_S 1.4f
 
 static void open_pay(void)
@@ -3694,6 +3696,41 @@ static const char *card_name(const char *type)
 }
 
 // Por qué no se pudo pagar, en palabras normales (EPurchaseResultDetail)
+// Las casillas que Steam obliga a marcar antes de pagar, como en su web
+static const char *pay_ssa_text(const PayInfo *p)
+{
+	return p->ssa_text[0] ? p->ssa_text : _("Acepto las condiciones del Acuerdo de Suscriptor a Steam.");
+}
+
+static const char *pay_wd_text(const PayInfo *p)
+{
+	return p->withdrawal_text[0] ? p->withdrawal_text
+		: _("Acepto que el contenido digital esté disponible de inmediato y renuncio a mi derecho de desistimiento.");
+}
+
+// Caja de cada casilla (k: 0 acuerdo, 1 desistimiento); false si esa no se pide
+static bool pay_check_box(const PayInfo *p, int k, Box *out)
+{
+	if (k == 1 && !p->withdrawal) return false;
+	float y = p->need_cvv ? 102 : 78;
+	for (int i = 0; i <= k; i++) {
+		int nl = ui_text_lines(i == 0 ? pay_ssa_text(p) : pay_wd_text(p), SZ_TINY, BOT_W - 52);
+		if (nl > 4) nl = 4;
+		float h = 8 + nl * 11;
+		if (i == k) {
+			*out = (Box){8, y, BOT_W - 16, h};
+			return true;
+		}
+		y += h + 3;
+	}
+	return false;
+}
+
+static bool pay_accepted(const PayInfo *p)
+{
+	return S.pay_ssa && (!p->withdrawal || S.pay_wd);
+}
+
 static const char *pay_err_text(const PayInfo *p)
 {
 	if (p->maybe_paid) return _("No se pudo confirmar el cobro. Revisa tu correo o el historial de compras de Steam antes de volver a intentarlo.");
@@ -3743,6 +3780,8 @@ static void pay_events(void)
 	if (p->state == PAY_REVIEW) {
 		S.pay_hold = 0;
 		S.pay_armed = false;
+		S.pay_ssa = S.pay_wd = false;   // se marcan en cada compra, como en la web
+		S.pay_focus = 0;
 	}
 	if (p->state == PAY_CHOOSE) S.paysel = p->wallet ? 0 : p->card ? 1 : 2;
 	last = p->state;
@@ -3832,8 +3871,7 @@ static void draw_pay_top(void)
 	ui_text(16, y + 6, _("Total"), SZ_BODY, COL_WHITE, AL_LEFT, 0);
 	ui_text(TOP_W - 26, y + 4, tot, SZ_LARGE, COL_LIME, AL_RIGHT, 0);
 	if (p->state == PAY_REVIEW)
-		ui_text_wrap(16, SCR_H - 52, TOP_W - 32, _("Al pagar aceptas el Acuerdo de Suscriptor de Steam. Al ser contenido digital, la descarga puede empezar ya y renuncias al desistimiento de 14 días de la UE; el reembolso de Steam sigue valiendo (14 días y menos de 2 h jugadas)."),
-			SZ_TINY, COL_DIM, 3, 11);
+		ui_text_wrap(16, SCR_H - 40, TOP_W - 32, _("Los reembolsos de Steam siguen disponibles: 14 días desde la compra y menos de 2 horas de juego."), SZ_TINY, COL_DIM, 2, 11);
 	else
 		ui_text(TOP_W / 2, SCR_H - 18, _("Los métodos de pago solo se pueden cambiar en la app oficial de Steam"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
 }
@@ -3878,11 +3916,22 @@ static void draw_pay_bottom(void)
 			snprintf(t, sizeof t, "%s", p->cvv_set ? _("CVV introducido · Cambiar") : _("Introduce el CVV"));
 			draw_button_k(&B_CVV, "Y", false, IC_LOCK, t, COL_BTN2, COL_BTN2, p->cvv_set ? COL_LIME : COL_ACC, 1, S.pressed == BT_CVV);
 		}
-		bool ready = !p->need_cvv || p->cvv_set;
+		// Las casillas: hay que marcarlas, como en la web de Steam
+		for (int k = 0; k < 2; k++) {
+			Box cb;
+			if (!pay_check_box(p, k, &cb)) continue;
+			bool on = k == 0 ? S.pay_ssa : S.pay_wd;
+			if (S.pay_focus == k) ui_rrect(cb.x, cb.y, cb.w, cb.h, 6, col_alpha(COL_WHITE, 0.075f + 0.035f * sinf(g_time * 2.4f)));
+			ui_rrect(cb.x + 6, cb.y + 4, 14, 14, 3, on ? COL_ACC : col_alpha(COL_WHITE, 0.14f));
+			if (!on) ui_rrect(cb.x + 7, cb.y + 5, 12, 12, 2, C2D_Color32(0x16, 0x20, 0x2e, 0xff));
+			else ui_icon(IC_CHECK, cb.x + 8, cb.y + 5, 10, COL_WHITE);
+			ui_text_wrap(cb.x + 28, cb.y + 4, cb.w - 34, k == 0 ? pay_ssa_text(p) : pay_wd_text(p), SZ_TINY, on ? COL_WHITE : COL_TXT, 4, 11);
+		}
+		bool ready = (!p->need_cvv || p->cvv_set) && pay_accepted(p);
 		// El botón se llena mientras mantienes A (o el dedo): así no se paga por un toque sin querer
 		float f = clampf(S.pay_hold, 0, 1);
 		const Box *b = &B_PAYGO;
-		FxButton gb = {C2D_Color32(0x2b, 0x45, 0x12, 0xff), ready ? 1 : 0.4f, false, false};
+		FxButton gb = {C2D_Color32(0x2b, 0x45, 0x12, 0xff), ready ? 1 : 0.4f, false, S.pay_focus == 2 && ready};
 		fx_button(b->x, b->y, b->w, b->h, b->h / 2, &gb);
 		if (f > 0) {
 			// Se llena de verde vivo mientras mantienes A
@@ -3892,7 +3941,7 @@ static void draw_pay_bottom(void)
 			ui_vgrad(b->x + 8, b->y + 2, fw - 16 > 0 ? fw - 16 : 0, b->h * 0.4f, col_alpha(COL_WHITE, 0.18f), col_alpha(COL_WHITE, 0));
 		}
 		snprintf(t, sizeof t, _("Mantén A para pagar %s"), p->total_fmt);
-		ui_text(b->x + b->w / 2, b->y + 9, t, SZ_BODY, col_alpha(COL_WHITE, ready ? 1 : 0.5f), AL_CENTER, b->w - 16);
+		ui_text(b->x + b->w / 2, b->y + 8, t, SZ_BODY, col_alpha(COL_WHITE, ready ? 1 : 0.5f), AL_CENTER, b->w - 16);
 		break;
 	}
 	case PAY_PAYING:
@@ -3941,6 +3990,10 @@ static void draw_pay_bottom(void)
 	} else if (p->state == PAY_CHOOSE) {
 		static const char *h[] = {"↑↓", "Elegir", "A", "Aceptar", "B", "Volver"};
 		draw_hints(h, 3);
+	} else if (p->state == PAY_REVIEW && !p->short_wallet) {
+		static const char *hc[] = {"↑↓", "Elegir", "A", "Marcar", "B", "Volver"};
+		static const char *hp[] = {"↑↓", "Elegir", "A", "Mantener para pagar", "B", "Volver"};
+		draw_hints(S.pay_focus == 2 ? hp : hc, 3);
 	} else if (!pay_busy() && p->state != PAY_LOADING && p->state != PAY_PREPARING) {
 		static const char *h[] = {"B", "Volver"};
 		draw_hints(h, 1);
@@ -3994,12 +4047,28 @@ static void input_pay(u32 kd, u32 kh, u32 ku, touchPosition *tp, float dt)
 			static const int ids[] = {BT_CVV};
 			if (press_update(kd, kh, ku, tp, ids, 1) == BT_CVV || (kd & KEY_Y)) S.want_cvv = true;
 		}
-		bool ready = !p->need_cvv || p->cvv_set;
+		// Cruceta: casillas y botón de pagar; A marca la casilla elegida. También se marcan tocándolas
+		int last = p->withdrawal ? 1 : 0;
+		if (key_repeat(kd, kh, KEY_DOWN)) S.pay_focus = S.pay_focus >= last ? 2 : S.pay_focus + 1;
+		if (key_repeat(kd, kh, KEY_UP)) S.pay_focus = S.pay_focus == 2 ? last : S.pay_focus > 0 ? S.pay_focus - 1 : 0;
+		for (int k = 0; k < 2; k++) {
+			Box cb;
+			if (!pay_check_box(p, k, &cb)) continue;
+			bool tap = (kd & KEY_TOUCH) && hit(&cb, tp->px, tp->py);
+			if (tap || (S.pay_focus == k && (kd & KEY_A))) {
+				if (k == 0) S.pay_ssa = !S.pay_ssa;
+				else S.pay_wd = !S.pay_wd;
+				S.pay_focus = k;
+				S.pay_armed = false;
+			}
+		}
+		bool ready = (!p->need_cvv || p->cvv_set) && pay_accepted(p);
 		// Hay que soltar A una vez dentro del resumen (el A que te trajo aquí no cuenta)
 		if (!(kh & KEY_A) && !(kh & KEY_TOUCH)) S.pay_armed = true;
-		bool holding = S.pay_armed && ((kh & KEY_A) || ((kh & KEY_TOUCH) && hit(&B_PAYGO, tp->px, tp->py)));
+		bool holding = S.pay_armed && ((S.pay_focus == 2 && (kh & KEY_A)) || ((kh & KEY_TOUCH) && hit(&B_PAYGO, tp->px, tp->py)));
 		if (holding && !ready) {
-			if (kd & (KEY_A | KEY_TOUCH)) toast(_("Introduce primero el CVV"));
+			if (kd & (KEY_A | KEY_TOUCH))
+				toast(!pay_accepted(p) ? _("Acepta las condiciones para continuar") : _("Introduce primero el CVV"));
 			S.pay_hold = 0;
 		} else if (holding) {
 			S.pay_hold += dt / PAY_HOLD_S;

@@ -37,6 +37,9 @@ typedef struct {
 	bool short_wallet;          // la cartera no llega para el total
 	bool need_cvv, cvv_set;
 
+	char ssa_text[200];         // casilla del Acuerdo de Suscriptor (texto de Steam; vacío = el de la app)
+	bool withdrawal;            // casilla de renuncia al desistimiento (UE)
+	char withdrawal_text[480];
 	char bank_url[160];         // dónde se verifica la compra (en el QR)
 	char receipt_total[24], receipt_id[32];
 	bool approval;              // la compra quedó esperando aprobación (cuentas familiares)

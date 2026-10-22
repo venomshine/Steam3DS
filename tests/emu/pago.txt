@@ -29,6 +29,15 @@ shot q01_elegir
 touch 160 61
 wait 200
 shot q02_resumen_cartera
+# Las dos casillas (acuerdo y desistimiento) y luego el botón de pagar
+press A
+wait 20
+press DOWN
+press A
+wait 20
+shot q02b_casillas
+press DOWN
+wait 20
 hold A
 wait 50
 shot q03_manteniendo
@@ -63,6 +72,14 @@ shot q06_resumen_tarjeta
 touch 160 90
 wait 120
 shot q07_cvv_escrito
+press A
+wait 20
+press DOWN
+press A
+wait 20
+shot q07b_casillas
+press DOWN
+wait 20
 hold A
 wait 100
 release A

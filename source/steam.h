@@ -203,6 +203,9 @@ typedef struct {
 	char card_gid[32];          // id de la tarjeta guardada (gidPaymentID)
 	char card_last4[8];         // los cuatro últimos números
 	char country[4];            // país de facturación
+	char ssa_text[200];         // la casilla del Acuerdo de Suscriptor, como la escribe Steam (con la fecha)
+	bool withdrawal;            // Steam pide además renunciar al desistimiento (UE)
+	char withdrawal_text[480];  // y su texto
 } CheckoutPage;
 bool steam_parse_checkout_page(const char *html, CheckoutPage *out);
 

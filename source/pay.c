@@ -277,6 +277,9 @@ void pay_update(void)
 			P.card = page.card;
 			snprintf(P.card_type, sizeof P.card_type, "%s", page.card_type);
 			snprintf(P.card_last4, sizeof P.card_last4, "%s", page.card_last4);
+			snprintf(P.ssa_text, sizeof P.ssa_text, "%s", page.ssa_text);
+			P.withdrawal = page.withdrawal;
+			snprintf(P.withdrawal_text, sizeof P.withdrawal_text, "%s", page.withdrawal_text);
 			set_state(PAY_CHOOSE);
 		} else {
 			fail(0, page_req->state == REQ_DONE ? "pagina de pago no reconocida" : page_req->err);

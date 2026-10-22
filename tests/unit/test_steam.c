@@ -151,6 +151,13 @@ int main(void) {
 	WalletInfo wi;
 	CHECK(steam_parse_wallet("{\"response\":{\"has_wallet\":true,\"balance\":\"3210\",\"formatted_balance\":\"32,10€\",\"wallet_country_code\":\"ES\"}}", &wi));
 	CHECK(wi.has_wallet && wi.balance == 3210 && !strcmp(wi.formatted, "32,10€") && !strcmp(wi.country, "ES"));
+	// Página de pago: las casillas que hay que marcar, con el texto que da Steam
+	CheckoutPage cb;
+	CHECK(steam_parse_checkout_page("<input id=\"payment_method\"><input type=\"checkbox\" id=\"accept_ssa\">"
+		"<label for=\"accept_ssa\">Acepto las condiciones del <a href=\"#\">Acuerdo de Suscriptor a Steam</a>\n (última actualización: 26 SEP 2024).</label>", &cb));
+	CHECK(!strcmp(cb.ssa_text, "Acepto las condiciones del Acuerdo de Suscriptor a Steam (última actualización: 26 SEP 2024).") && !cb.withdrawal);
+	CHECK(steam_parse_checkout_page("<input id=\"payment_method\"><input id=\"accept_right_withdrawal\"><label for=\"accept_right_withdrawal\">Renuncio&nbsp;al desistimiento.</label>", &cb));
+	CHECK(cb.withdrawal && !strcmp(cb.withdrawal_text, "Renuncio al desistimiento.") && !cb.ssa_text[0]);
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

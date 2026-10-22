@@ -625,6 +625,10 @@ void ui_icon(Icon ic, float x, float y, float s, u32 c)
 		ui_rrect(X(1.8), Y(0.6), 8.4f * u, 10.8f * u, 1.2f * u, c);
 		for (int k = 0; k < 4; k++) ui_rect(X(3.4), Y(2.8 + k * 2), (k == 3 ? 3.4f : 5.2f) * u, 0.9f * u, C2D_Color32(0, 0, 0, 0xa0));
 		break;
+	case IC_CHECK:
+		seg(X(1.6), Y(6.4), X(4.6), Y(9.4), 1.8f * u, c);
+		seg(X(4.6), Y(9.4), X(10.6), Y(2.8), 1.8f * u, c);
+		break;
 	case IC_LOCK:
 		ring(X(6), Y(4.6), 2.8f * u, 1.3f * u, c);
 		ui_rrect(X(2), Y(5.4), 8 * u, 6.2f * u, 1 * u, c);

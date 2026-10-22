@@ -1113,6 +1113,33 @@ void steam_parse_cart_names(const char *json, CartInfo *c)
 // Pago: la página del checkout es HTML; se buscan los elementos por su id
 
 // El valor de un atributo dentro de la etiqueta que tiene id="<id>"
+// El texto de la etiqueta <label for="id"> de una casilla, sin etiquetas HTML y con los espacios juntos
+static void label_text(const char *html, const char *id, char *out, size_t n)
+{
+	char key[64];
+	snprintf(key, sizeof key, "for=\"%s\"", id);
+	out[0] = 0;
+	const char *s = strstr(html, key);
+	if (!s || !(s = strchr(s, '>'))) return;
+	const char *end = strstr(++s, "</label>");
+	if (!end) return;
+	size_t k = 0;
+	bool tag = false;
+	for (; s < end && k < n - 1; s++) {
+		if (*s == '<') { tag = true; continue; }
+		if (*s == '>') { tag = false; continue; }
+		if (tag) continue;
+		char ch = *s == '\n' || *s == '\t' || *s == '\r' ? ' ' : *s;
+		if (!strncmp(s, "&nbsp;", 6)) { ch = ' '; s += 5; }
+		else if (!strncmp(s, "&amp;", 5)) { ch = '&'; s += 4; }
+		if (ch == ' ' && (k == 0 || out[k - 1] == ' ')) continue;
+		out[k++] = ch;
+	}
+	while (k && out[k - 1] == ' ') k--;
+	out[k] = 0;
+	tidy_utf8(out);
+}
+
 static bool html_attr(const char *html, const char *id, const char *attr, char *out, size_t n)
 {
 	char key[48];
@@ -1172,6 +1199,10 @@ bool steam_parse_checkout_page(const char *html, CheckoutPage *o)
 	}
 	char c[8] = "";
 	if (html_attr(html, "billing_country", "value", c, sizeof c) && strlen(c) == 2) memcpy(o->country, c, 3);
+	// Las casillas que la web obliga a marcar antes de pagar: se copian sus textos tal cual
+	label_text(html, "accept_ssa", o->ssa_text, sizeof o->ssa_text);
+	o->withdrawal = strstr(html, "accept_right_withdrawal") != NULL;
+	if (o->withdrawal) label_text(html, "accept_right_withdrawal", o->withdrawal_text, sizeof o->withdrawal_text);
 	return true;
 }
 

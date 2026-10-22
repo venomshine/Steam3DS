@@ -87,12 +87,13 @@ def wheel(size, angle=18.0, spokes=5, color_out=LIGHT, color_in=ACC):
 
 
 def valve_logo(size, angle=-90.0, spokes=5):
-    """El logo de Steam redibujado con nuestra válvula: de reojo es el mismo (el círculo con el
-    degradado, la biela y el brazo), pero el aro grande es una rueda de válvula, con sus radios,
-    el cubo y los agarres, y el pequeño lleva agarres en el aro.
+    """El logo de Steam redibujado con nuestras válvulas: de reojo es el mismo (el círculo con el
+    degradado, la biela, el brazo y los dos aros), pero cada aro blanco es una rueda de válvula
+    entera (aro, radios, cubo y agarres) y los círculos de dentro desaparecen. La biela y el brazo
+    quedan detrás y la válvula delante, separada por una raya fina del color del fondo.
 
-    La geometría está medida sobre el logo oficial en un lienzo de 1500: el aro grande y el pequeño
-    son huecos por los que se ve el degradado del círculo. Devuelve RGBA de size×size (a 8×)."""
+    La geometría está medida sobre el logo oficial en un lienzo de 1500. Devuelve RGBA de
+    size×size (a 8×)."""
     s = size * K
     f = s / 1500.0
 
@@ -102,53 +103,54 @@ def valve_logo(size, angle=-90.0, spokes=5):
     def disc(d, cx, cy, r, fill):
         d.ellipse([(cx - r) * f, (cy - r) * f, (cx + r) * f, (cy + r) * f], fill=fill)
 
-    circle = Image.new("L", (s, s), 0)
-    disc(ImageDraw.Draw(circle), 749.5, 749.0, 688.0, 255)
+    def layer():
+        im = Image.new("L", (s, s), 0)
+        return im, ImageDraw.Draw(im)
 
-    white = Image.new("L", (s, s), 0)
-    d = ImageDraw.Draw(white)
+    def valve(cx, cy, R, rot):
+        """Rueda de válvula blanca de radio exterior R (con los agarres un poco por fuera)."""
+        im, d = layer()
+        th = R * 0.19
+        rr = R - th * 0.35                   # los agarres sobresalen un poco del aro
+        disc(d, cx, cy, rr, 255)
+        disc(d, cx, cy, rr - th, 0)
+        for i in range(spokes):
+            a = math.radians(rot + (i + 0.5) * 360 / spokes)
+            disc(d, cx + math.cos(a) * (rr - th / 2), cy + math.sin(a) * (rr - th / 2), th * 0.85, 255)
+        mid = rr - th / 2
+        for i in range(spokes):
+            a = math.radians(rot + i * 360 / spokes)
+            d.line([P(cx, cy), P(cx + math.cos(a) * mid, cy + math.sin(a) * mid)], fill=255, width=max(1, int(R * 0.16 * f)))
+        disc(d, cx, cy, R * 0.30, 255)
+        disc(d, cx, cy, R * 0.11, 0)
+        return im
+
+    circle, cd = layer()
+    disc(cd, 749.5, 749.0, 688.0, 255)
+
+    # Detrás: la biela y el brazo (entra por la izquierda, cortado por el círculo)
+    back, bd = layer()
     BIG, SMALL = (975.5, 577.0), (538.0, 1015.0)
-    disc(d, *BIG, 261.0, 255)
-    disc(d, *SMALL, 190.5, 255)
-    d.polygon([P(713, 580), P(546, 825), P(729, 1010), P(969, 838)], fill=255)   # la biela
-
-    # El aro grande: la válvula (rueda oscura sobre el disco blanco)
-    dark = Image.new("L", (s, s), 0)
-    dd = ImageDraw.Draw(dark)
-    cx, cy = BIG
-    r_in, r_out = 131.0, 175.5
-    disc(dd, cx, cy, r_out, 255)
-    disc(dd, cx, cy, r_in, 0)
-    rim = (r_in + r_out) / 2
-    for i in range(spokes):
-        a = math.radians(angle + (i + 0.5) * 360 / spokes)
-        disc(dd, cx + math.cos(a) * r_out, cy + math.sin(a) * r_out, 30.0, 255)       # agarres
-    for i in range(spokes):
-        a = math.radians(angle + i * 360 / spokes)
-        dd.line([P(cx, cy), P(cx + math.cos(a) * rim, cy + math.sin(a) * rim)], fill=255, width=max(1, int(40 * f)))
-    disc(dd, cx, cy, 54.0, 255)                                                          # cubo
-    disc(dd, cx, cy, 20.0, 0)                                                            # y su agujero
-    # El aro pequeño: hueco con agarres; encima va el brazo con su punta redonda
-    cx2, cy2 = SMALL
-    disc(dd, cx2, cy2, 148.0, 255)
-    for i in range(spokes):
-        a = math.radians(angle + 36 + (i + 0.5) * 360 / spokes)
-        disc(dd, cx2 + math.cos(a) * 148.0, cy2 + math.sin(a) * 148.0, 20.0, 255)
-    white = Image.fromarray(np.minimum(np.array(white), 255 - np.array(dark)))
-
-    # El brazo: entra por la izquierda (cortado por el círculo) y acaba redondo dentro del aro pequeño
-    arm = Image.new("L", (s, s), 0)
-    ad = ImageDraw.Draw(arm)
+    bd.polygon([P(713, 580), P(546, 825), P(729, 1010), P(969, 838)], fill=255)
     ux, uy = math.cos(math.radians(22.4)), math.sin(math.radians(22.4))
     nx, ny = -uy, ux
-    hw = 108.5
-    ex, ey = 530.0, 1013.0                       # centro de la punta redonda
-    far = 900.0
-    ad.polygon([P(ex + nx * hw, ey + ny * hw), P(ex - nx * hw, ey - ny * hw),
+    hw, ex, ey, far = 108.5, 530.0, 1013.0, 900.0
+    bd.polygon([P(ex + nx * hw, ey + ny * hw), P(ex - nx * hw, ey - ny * hw),
                 P(ex - nx * hw - ux * far, ey - ny * hw - uy * far), P(ex + nx * hw - ux * far, ey + ny * hw - uy * far)], fill=255)
-    disc(ad, ex, ey, hw, 255)
-    white = Image.fromarray(np.maximum(np.array(white), np.array(arm)))
-    white = Image.fromarray(np.minimum(np.array(white), np.array(circle)))
+    disc(bd, ex, ey, hw, 255)
+    white = np.array(back)
+
+    # Delante: las dos válvulas, cada una con una raya del color del fondo alrededor
+    gap = max(2, int(16 * f)) | 1
+    for (cx, cy), R, rot in ((BIG, 261.0, angle), (SMALL, 190.5, angle + 36)):
+        v = valve(cx, cy, R, rot)
+        # Lo de detrás no asoma entre los radios: la válvula lo tapa entera
+        inner, idr = layer()
+        disc(idr, cx, cy, R * (1 - 0.19 * 0.35), 255)
+        halo = np.maximum(np.array(v.filter(ImageFilter.MaxFilter(gap))), np.array(inner))
+        white = np.minimum(white, 255 - halo)
+        white = np.maximum(white, np.array(v))
+    white = np.minimum(white, np.array(circle))
 
     # Degradado del círculo, medido en el oficial: casi negro azulado arriba, azul Steam abajo
     stops = [(0.0, (0x10, 0x1d, 0x2d)), (0.17, (0x0a, 0x1b, 0x33)), (0.35, (0x07, 0x19, 0x38)),
@@ -161,7 +163,7 @@ def valve_logo(size, angle=-90.0, spokes=5):
         k = ((t[m] - t0) / (t1 - t0))[:, None]
         col[m] = np.array(c0) * (1 - k) + np.array(c1) * k
     rgb = np.repeat(col[:, None, :], s, axis=1)
-    w = np.array(white, float)[..., None] / 255
+    w = white.astype(float)[..., None] / 255
     rgb = rgb * (1 - w) + 255 * w
     out = np.zeros((s, s, 4), dtype="uint8")
     out[..., :3] = np.clip(rgb, 0, 255).astype("uint8")

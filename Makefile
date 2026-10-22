@@ -109,7 +109,13 @@ $(ROMFS)/gfx/splash_bg.t3x: gfx/splash_bg.t3s gfx/bg_top.png gfx/bg_bot.png
 	@cd gfx && $(DEVKITPRO)/tools/bin/tex3ds -i splash_bg.t3s -o ../$@
 	@echo built ... $(notdir $@)
 
-$(BUILD): $(ROMFS)/gfx/sprites.t3x $(ROMFS)/gfx/splash_bg.t3x
+# La válvula 3D de la pantalla de carga (tools/gen_wheel3d.py), en su propia hoja: no cabe con lo demás
+$(ROMFS)/gfx/wheel3d.t3x: gfx/wheel3d.t3s gfx/wheel_shadow.png $(wildcard gfx/w3d/*.png)
+	@mkdir -p $(ROMFS)/gfx
+	@cd gfx && $(DEVKITPRO)/tools/bin/tex3ds -i wheel3d.t3s -o ../$@
+	@echo built ... $(notdir $@)
+
+$(BUILD): $(ROMFS)/gfx/sprites.t3x $(ROMFS)/gfx/splash_bg.t3x $(ROMFS)/gfx/wheel3d.t3x
 	@mkdir -p $@
 
 clean:

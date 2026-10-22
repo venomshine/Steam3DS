@@ -179,7 +179,7 @@ static struct {
 
 static InfoEnt cache[CACHE];
 static u64 frame_no;
-static C2D_SpriteSheet sprites, splash_bg;
+static C2D_SpriteSheet sprites, splash_bg, wheel_sheet;
 static int sprites_free_in = -1;   // fotogramas que faltan para liberar los sprites de la carga
 static C2D_TextBuf review_buf;
 static float splash_t, splash_out = -1;
@@ -2827,6 +2827,38 @@ static void input_login(u32 kd, float dt)
 
 enum { SPR_WHEEL, SPR_STEAM, SPR_GLOW, SPR_FLIP };   // SPR_FLIP..+23: flipbook del vapor
 #define FLIP_FRAMES 24
+// La válvula en 3D (tools/gen_wheel3d.py): su sombra y 24 fotogramas de giro (3° cada uno) con la
+// luz del bombillo en cada extremo del balanceo
+// (en su propia hoja, wheel3d.t3x)
+enum { W3D_SHADOW, W3D_A, W3D_B = W3D_A + 24 };
+#define W3D_SIZE    112.0f
+#define WHEEL_PX    100.0f      // tamaño de la válvula en pantalla
+#define WHEEL_R     46.0f       // radio del aro en pantalla
+
+// El bombillo: flojo, cálido, fuera de la pantalla arriba a la derecha. Se balancea despacio (la
+// luz va de 22° a 68° sobre la horizontal) y de vez en cuando flojea. Lo usan la válvula, su
+// sombra, el charco de luz en la pared, el polvo y el vapor
+static struct { float swing, lx, ly, power; } bulb;
+
+static void bulb_update(float t)
+{
+	bulb.swing = 0.5f + 0.5f * sinf(t * 2 * (float)M_PI / 4.0f);
+	float th = (22 + 46 * bulb.swing) * (float)M_PI / 180;
+	bulb.lx = cosf(th);
+	bulb.ly = -sinf(th);
+	// Tiembla un poco siempre y, a ratos, pierde fuerza un instante (a veces dos seguidos)
+	float f = 0.96f + 0.04f * sinf(t * 23);
+	const float period = 2.7f;
+	u32 n = (u32)(t / period);
+	float in = t - n * period;
+	float h = ((n * 2654435761u) >> 8 & 0xffff) / 65535.0f;
+	if (h > 0.35f) {
+		float at = 0.4f + h * 1.6f, depth = 0.25f + 0.25f * h;
+		if (in >= at && in < at + 0.07f) f -= depth;
+		if (h > 0.7f && in >= at + 0.12f && in < at + 0.17f) f -= depth * 0.6f;
+	}
+	bulb.power = f;
+}
 
 
 
@@ -2907,6 +2939,11 @@ static void draw_puff(const Puff *pf, float cx, float cy, float a, bool back)
 	float near = clampf(1 - hypotf(pf->x, pf->y) / 90, 0, 1);
 	c = col_lerp(c, C2D_Color32(0x8c, 0xcc, 0xf5, 0xff), near * 0.35f);
 	if (back) c = col_lerp(c, C2D_Color32(0x5a, 0x70, 0x88, 0xff), 0.4f);
+	// En penumbra: el lado que mira al bombillo recoge su luz cálida
+	float d = hypotf(pf->x, pf->y);
+	float side = d > 1 ? clampf((pf->x * bulb.lx + pf->y * bulb.ly) / d, 0, 1) : 0;
+	c = col_lerp(c, C2D_Color32(0x1a, 0x22, 0x2e, 0xff), 0.42f - 0.12f * bulb.power);
+	c = col_lerp(c, C2D_Color32(0xe8, 0xc0, 0x90, 0xff), (0.10f + 0.22f * side) * bulb.power);
 	float al = pf->alpha * a * (back ? 0.30f : 0.42f);
 	float st = pf->stretch > 0 ? pf->stretch : 1;
 	draw_sprite_ex(SPR_FLIP + pf->frame, cx + pf->x, cy + pf->y, pf->scale / sqrtf(st), pf->scale * st, pf->angle,
@@ -2955,60 +2992,103 @@ static bool splash_ready(void)
 	return CUR->list.count > 0 || CUR->list.err[0] || net_status_text()[0];
 }
 
+// Una voluta del chorro, repartida entre detrás y delante de la válvula: mientras está dentro
+// del aro va por detrás (se ve por los huecos entre los radios) y al salir pasa por delante, así
+// el vapor atraviesa la válvula
+static float puff_front(const Puff *pf, float oy)
+{
+	float r = hypotf(pf->x, pf->y + oy);
+	return clampf((r - WHEEL_R * 0.8f) / (WHEEL_R * 0.45f), 0, 1);
+}
+
+// La válvula: el fotograma del giro con la luz de cada extremo del balanceo, mezclados según
+// dónde esté el bombillo, y girada lo que falte entre fotograma y fotograma
+static void draw_wheel3d(float cx, float cy, float scale, float spin, float alpha)
+{
+	if (!wheel_sheet || alpha <= 0) return;
+	float deg = spin * 180 / (float)M_PI;
+	float step = roundf(deg / 3);
+	int k = ((int)step % 24 + 24) % 24;
+	float rest = (deg - step * 3) * (float)M_PI / 180;
+	float s = scale * WHEEL_PX / W3D_SIZE;
+	C2D_ImageTint tint;
+	// La sombra en la pared, al lado contrario de la luz (más larga cuanto más de lado viene)
+	float off = (11 + 4 * (1 + bulb.ly)) * scale;
+	C2D_AlphaImageTint(&tint, clampf(0.85f * alpha * (0.7f + 0.3f * bulb.power), 0, 1));
+	C2D_DrawImageAtRotated(C2D_SpriteSheetGetImage(wheel_sheet, W3D_SHADOW), cx - bulb.lx * off, cy - bulb.ly * off, 0.5f, spin, &tint, s, s);
+	// Los dos fotogramas, oscurecidos cuando el bombillo flojea
+	float dark = 1 - bulb.power;
+	C2D_PlainImageTint(&tint, C2D_Color32(0, 0, 0, (u8)(255 * clampf(alpha, 0, 1))), dark);
+	C2D_DrawImageAtRotated(C2D_SpriteSheetGetImage(wheel_sheet, W3D_A + k), cx, cy, 0.5f, rest, &tint, s, s);
+	C2D_PlainImageTint(&tint, C2D_Color32(0, 0, 0, (u8)(255 * clampf(alpha * bulb.swing, 0, 1))), dark);
+	C2D_DrawImageAtRotated(C2D_SpriteSheetGetImage(wheel_sheet, W3D_B + k), cx, cy, 0.5f, rest, &tint, s, s);
+}
+
 static void draw_splash_top(void)
 {
 	float t = splash_t;
+	bulb_update(t);
 	draw_splash_bg(0, TOP_W, SCR_H);
+	// Sala en penumbra y el charco de luz cálida del bombillo, que se balancea
+	ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, 0x58));
 	float cx = TOP_W / 2, cy = 100;
-	draw_ambient(t, TOP_W, SCR_H, cx, cy, clampf(t / 0.8f, 0, 1));
+	float px = cx + bulb.lx * 210, py = cy + bulb.ly * 210;
+	draw_sprite_ex(SPR_GLOW, px, py, 4.7f, 4.7f, 0, C2D_Color32(0xff, 0xc4, 0x82, (u8)(0x70 * bulb.power)), 1);
+	draw_ambient(t, TOP_W, SCR_H, px, py, clampf(t / 0.8f, 0, 1));
 	float pop = ease_out_back(clampf(t / 0.55f, 0, 1));
 	const float t0 = 0.62f;      // la válvula se abre
 	float flash = t > t0 ? expf(-(t - t0) * 3.0f) : 0;
-	draw_sprite(SPR_GLOW, cx, cy, (1.7f + 0.08f * sinf(t * 2.4f) + 0.5f * flash) * pop, 0, (0.55f + 0.35f * flash) * pop);
+	draw_sprite(SPR_GLOW, cx, cy, (1.9f + 0.08f * sinf(t * 2.4f) + 0.5f * flash) * pop, 0, (0.20f + 0.25f * flash) * pop * bulb.power);
 
 	// Neblina muy tenue alrededor: ambiente
 	if (t > t0) {
 		float hz = clampf((t - t0) / 1.2f, 0, 1);
 		for (int i = 0; i < 3; i++) {
-			float a = hz * (0.10f + 0.04f * sinf(t * 0.7f + i * 2));
+			float a = hz * (0.08f + 0.03f * sinf(t * 0.7f + i * 2)) * bulb.power;
 			draw_sprite_ex(SPR_STEAM, cx + (i - 1) * 70 + sinf(t * 0.3f + i) * 12, cy + 30 - i * 18, 2.6f, 1.6f, t * 0.05f * (i - 1),
-				C2D_Color32(0xc0, 0xd4, 0xe8, (u8)(255 * a)), 0.6f);
+				C2D_Color32(0xa8, 0xb4, 0xc0, (u8)(255 * a)), 0.6f);
 		}
 	}
-	// Capa de atrás del chorro (por detrás de la válvula): da profundidad
+	// El chorro sale de detrás de la válvula (del vástago): las volutas pares van siempre detrás,
+	// para dar fondo; las impares la atraviesan (detrás dentro del aro, delante al salir)
 	const int JET = 38;
 	const float every = JET_LIFE / JET;
 	float ramp = clampf((t - t0) / 0.35f, 0, 1);
-	for (int j = 0; j < JET; j += 2) {
+	for (int j = 0; j < JET; j++) {
 		Puff pf;
-		if (jet_puff(j, t - t0 - 0.08f - j * every, &pf)) draw_puff(&pf, cx, cy - 4, ramp, true);
+		if (!jet_puff(j, t - t0 - 0.08f - j * every, &pf)) continue;
+		if (j % 2 == 0) draw_puff(&pf, cx, cy - 4, ramp, true);
+		else draw_puff(&pf, cx, cy - 4, ramp * (1 - puff_front(&pf, -4)), false);
 	}
-
-	// Como una válvula que se abre: arranca despacio y coge velocidad
-	float spin = t < 0.8f ? 0.9f * t * t : 0.576f + 1.44f * (t - 0.8f);
-	draw_sprite(SPR_WHEEL, cx, cy, 0.62f * pop, spin, pop);
-
+	// Bocanada al abrirse: volutas hacia los lados que frenan y se deshacen
+	Puff burst[12];
+	int nb = 0;
 	if (t > t0) {
-		// Bocanada al abrirse: volutas hacia los lados que frenan y se deshacen
 		for (int i = 0; i < 12; i++) {
 			float age = t - t0 - i * 0.02f;
 			const float life = 2.4f;
 			if (age < 0 || age > life) continue;
 			float p = age / life, ang = i * 0.5236f + hrand(i, 9) * 0.4f;
 			float dist = 18 + 70 * (1 - expf(-age * 2.0f));
-			Puff pf = {
+			burst[nb++] = (Puff){
 				cosf(ang) * dist, sinf(ang) * dist * 0.7f - 14 * age * age,
 				0.35f + 1.5f * (1 - expf(-age * 1.4f)), hrand(i, 5) * 6.28f + age * 0.3f,
 				clampf(age / 0.12f, 0, 1) * powf(1 - p, 1.4f),
 				(int)(p * (FLIP_FRAMES - 1)), clampf(p * 1.4f, 0, 1), 1, 0.75f + 0.25f * hrand(i, 6),
 			};
-			draw_puff(&pf, cx, cy, 0.9f, false);
 		}
-		// Capa de delante del chorro
-		for (int j = 1; j < JET; j += 2) {
-			Puff pf;
-			if (jet_puff(j, t - t0 - 0.08f - j * every, &pf)) draw_puff(&pf, cx, cy - 4, ramp, false);
-		}
+	}
+	for (int i = 0; i < nb; i++) draw_puff(&burst[i], cx, cy, 0.9f * (1 - puff_front(&burst[i], 0)), false);
+
+	// Como una válvula que se abre: arranca despacio y coge velocidad
+	float spin = t < 0.8f ? 0.9f * t * t : 0.576f + 1.44f * (t - 0.8f);
+	draw_wheel3d(cx, cy, pop, spin, pop);
+
+	// Lo que ya ha salido del aro, por delante
+	for (int i = 0; i < nb; i++) draw_puff(&burst[i], cx, cy, 0.9f * puff_front(&burst[i], 0), false);
+	for (int j = 1; j < JET; j += 2) {
+		Puff pf;
+		if (jet_puff(j, t - t0 - 0.08f - j * every, &pf)) draw_puff(&pf, cx, cy - 4, ramp * puff_front(&pf, -4), false);
 	}
 	float ta = clampf((t - 0.25f) / 0.4f, 0, 1);
 	u8 a8 = (u8)(255 * ta);
@@ -3030,7 +3110,8 @@ static void draw_splash_top(void)
 static void draw_splash_bottom(void)
 {
 	draw_splash_bg(1, BOT_W, SCR_H);
-	draw_ambient(splash_t + 3.1f, BOT_W, SCR_H, BOT_W / 2, -60, clampf(splash_t / 0.8f, 0, 1));
+	ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, 0x70));   // abajo llega aún menos luz
+	draw_ambient(splash_t + 3.1f, BOT_W, SCR_H, BOT_W + 40, -120, clampf(splash_t / 0.8f, 0, 1));
 	float ta = clampf((splash_t - 0.5f) / 0.5f, 0, 1);
 	u8 a8 = (u8)(255 * ta);
 	ui_text(BOT_W / 2, 104, _("hecho por VENOMSHiNE"), SZ_BODY, C2D_Color32(0xc7, 0xd5, 0xe0, a8), AL_CENTER, 0);
@@ -3986,10 +4067,12 @@ int main(int argc, char **argv)
 	S.scene_anim = S.sec_anim = S.shot_anim = 1;
 	sprites = C2D_SpriteSheetLoad("romfs:/gfx/sprites.t3x");
 	splash_bg = C2D_SpriteSheetLoad("romfs:/gfx/splash_bg.t3x");
+	wheel_sheet = C2D_SpriteSheetLoad("romfs:/gfx/wheel3d.t3x");
 	if (sprites) {
 		for (int i = 0; i < 3; i++)
 			C3D_TexSetFilter(C2D_SpriteSheetGetImage(sprites, i).tex, GPU_LINEAR, GPU_LINEAR);
 	}
+	if (wheel_sheet) C3D_TexSetFilter(C2D_SpriteSheetGetImage(wheel_sheet, 0).tex, GPU_LINEAR, GPU_LINEAR);
 	// Primero el país (para los precios en tu moneda); si no responde, el último guardado
 	S.country_req = steam_req_country();
 
@@ -4272,7 +4355,8 @@ int main(int argc, char **argv)
 		if (sprites_free_in >= 0 && sprites_free_in-- == 0) {
 			if (sprites) C2D_SpriteSheetFree(sprites);
 			if (splash_bg) C2D_SpriteSheetFree(splash_bg);
-			sprites = splash_bg = NULL;
+			if (wheel_sheet) C2D_SpriteSheetFree(wheel_sheet);
+			sprites = splash_bg = wheel_sheet = NULL;
 		}
 	}
 
@@ -4295,6 +4379,7 @@ int main(int argc, char **argv)
 	}
 	if (sprites) C2D_SpriteSheetFree(sprites);
 	if (splash_bg) C2D_SpriteSheetFree(splash_bg);
+	if (wheel_sheet) C2D_SpriteSheetFree(wheel_sheet);
 	C2D_TextBufDelete(review_buf);
 	img_exit();
 	auth_exit();

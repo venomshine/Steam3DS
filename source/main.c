@@ -2379,21 +2379,22 @@ static void draw_profile_top(void)
 	}
 	char st[64];
 	snprintf(st, sizeof st, _("%d juegos · %ld h jugadas"), lib->list.count, (total + 30) / 60);
-	fx_glass(8, 116, TOP_W - 16, 118, 14, 1, 0);
-	ui_text(16, 122, st, SZ_BODY, COL_TXT, AL_LEFT, 380);
-	ui_text(16, 144, _("LO MÁS JUGADO"), SZ_TINY, COL_ACC, AL_LEFT, 0);
-	int maxm = top3[0] >= 0 ? lib->list.rows[top3[0]].minutes : 1;
+	fx_glass(8, 120, TOP_W - 16, 114, 14, 1, 0);
+	ui_text(18, 128, st, SZ_BODY, COL_TXT, AL_LEFT, 380);
+	ui_text(18, 150, _("LO MÁS JUGADO"), SZ_TINY, COL_ACC, AL_LEFT, 0);
+	int maxm = top3[0] >= 0 ? lib->list.rows[top3[0]].minutes : 0;
+	if (!maxm) ui_text(TOP_W / 2, vc(162, 72, SZ_SMALL), _("Aún no hay horas de juego en tu cuenta"), SZ_SMALL, COL_DIM, AL_CENTER, 360);
 	for (int k = 0; k < 3; k++) {
 		if (top3[k] < 0 || !lib->list.rows[top3[k]].minutes) break;
 		const StoreRow *r = &lib->list.rows[top3[k]];
-		float y = 160 + k * 24;
+		float y = 166 + k * 22;
 		char hrs[16];
 		snprintf(hrs, sizeof hrs, "%d h", (r->minutes + 30) / 60);
-		ui_text(16, y, r->name, SZ_SMALL, COL_WHITE, AL_LEFT, 250);
-		ui_text(TOP_W - 16, y, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
-		float bw = (TOP_W - 32) * r->minutes / (float)(maxm ? maxm : 1);
-		ui_rrect(16, y + 15, TOP_W - 32, 4, 2, C2D_Color32(0xff, 0xff, 0xff, 0x14));
-		ui_rrect(16, y + 15, bw, 4, 2, COL_ACC);
+		ui_text(18, y, r->name, SZ_SMALL, COL_WHITE, AL_LEFT, 250);
+		ui_text(TOP_W - 18, y, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+		float bw = (TOP_W - 36) * r->minutes / (float)maxm;
+		ui_rrect(18, y + 14, TOP_W - 36, 4, 2, C2D_Color32(0xff, 0xff, 0xff, 0x14));
+		ui_rrect(18, y + 14, bw, 4, 2, COL_ACC);
 	}
 }
 

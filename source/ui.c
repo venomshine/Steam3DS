@@ -217,7 +217,7 @@ static bool is_connector(const char *w, size_t n)
 }
 
 // Última línea de un texto que no cabe entero: solo palabras completas. Si hay un final de frase
-// en la segunda mitad de la línea, se corta ahí sin «…»; si no, en la última palabra con sentido
+// en el último cuarto de la línea, se corta ahí sin «…»; si no, en la última palabra con sentido
 // (sin conectores ni comas al final) y con «…».
 static void last_line(float x, float y, float w, const char *s, float sz, u32 col)
 {
@@ -243,8 +243,8 @@ static void last_line(float x, float y, float w, const char *s, float sz, u32 co
 		ui_text(x, y, t, sz, col, AL_LEFT, w);   // una sola palabra larguísima
 		return;
 	}
-	// ¿Un final de frase en la segunda mitad?
-	for (size_t k = fit; k > fit / 2; k--) {
+	// ¿Un final de frase justo al final de la línea? (si queda lejos, mejor llenar la línea)
+	for (size_t k = fit; k > fit * 3 / 4; k--) {
 		char c = t[k - 1];
 		if (c == '.' || c == '!' || c == '?') {
 			draw_n(x, y, t, k, sz, col);

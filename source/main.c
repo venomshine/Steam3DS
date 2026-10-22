@@ -1022,7 +1022,16 @@ static void draw_preview(const StoreRow *row)
 		// Sin descripción (algunas demos no tienen): la clasificación y las características suben a su sitio
 		float ry = 177;
 		if (a->desc) {
-			ui_text_wrap(12, 128, TOP_W - 24, a->desc, SZ_SMALL, COL_TXT, 3, 13);
+			// En un solo párrafo: un salto de línea dejaría la línea a medias
+			char d[480];
+			size_t dn = 0;
+			for (const char *q = a->desc; *q && dn < sizeof d - 1; q++) {
+				char c = *q == '\n' ? ' ' : *q;
+				if (c == ' ' && (dn == 0 || d[dn - 1] == ' ')) continue;
+				d[dn++] = c;
+			}
+			d[dn] = 0;
+			ui_text_wrap(12, 128, TOP_W - 24, d, SZ_SMALL, COL_TXT, 3, 13);
 			ui_hline(12, 172, TOP_W - 24, C2D_Color32(0xff, 0xff, 0xff, 0x26));
 		} else {
 			ry = 132;

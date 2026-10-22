@@ -63,7 +63,10 @@ static void tidy_utf8(char *s)
 		else if ((r[0] & 0xF0) == 0xE0 && r[1] && r[2]) { cp = ((r[0] & 0x0F) << 12) | ((r[1] & 0x3F) << 6) | (r[2] & 0x3F); len = 3; }
 		bool space = cp == 0xA0 || (cp >= 0x2000 && cp <= 0x200A) || cp == 0x202F || cp == 0x205F || cp == 0x3000;
 		bool gone = cp == 0xAD || (cp >= 0x200B && cp <= 0x200D) || cp == 0x2060 || cp == 0xFEFF;
+		// Guiones que no están en la fuente de la consola (Counter‑Strike con el guion que no parte)
+		bool dash = cp == 0x2010 || cp == 0x2011;
 		if (space) { *w++ = ' '; r += len; continue; }
+		if (dash) { *w++ = '-'; r += len; continue; }
 		if (gone) { r += len; continue; }
 		*w++ = *r++;
 	}

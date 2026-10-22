@@ -223,6 +223,9 @@ def fake_get(path, q):
     if path.endswith("GetSteamLevel/v1/"):
         return {"response": {"player_level": 23}}
     if path.endswith("GetOwnedGames/v1/"):
+        # RELAY_EMPTY_OWNED=1: como le pasó en la consola, Steam no devuelve juegos (prueba el plan B)
+        if os.environ.get("RELAY_EMPTY_OWNED") == "1":
+            return {"response": {}}
         now = int(time.time())
         return {"response": {"game_count": len(OWNED), "games": [
             {"appid": a, "name": n, "playtime_forever": m, "rtime_last_played": now - d * 86400, "img_icon_url": ""}
@@ -355,6 +358,17 @@ class Relay(BaseHTTPRequestHandler):
         url = "https://%s/%s" % (host, rest)
         path, _, query = rest.partition("?")
         q = dict(urllib.parse.parse_qsl(query))
+        if FAKE and host == "store.steampowered.com" and path == "dynamicstore/userdata/":
+            ck = cookies_of(self.headers)
+            ok = ck.get("steamLoginSecure", "").startswith(str(FAKE_ID))
+            body = json.dumps({"rgWishlist": WISH, "rgOwnedPackages": [], "rgOwnedApps": [a for a, *_ in OWNED]} if ok else {}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            sys.stderr.write("FAKE GET userdata\n")
+            return
         if FAKE and host == "checkout.steampowered.com" and path.startswith("checkout/"):
             r = fake_checkout(method, path, q, self.body, self.headers)
             if r is not None:

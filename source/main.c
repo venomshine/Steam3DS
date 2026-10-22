@@ -133,10 +133,13 @@ static struct {
 	bool search_focus;           // Buscar: el foco está en la píldora de búsqueda (no en la lista)
 	float search_x;              // la píldora se estira sobre las pestañas (0..1)
 	int pfocus;                  // botón elegido con la cruceta en el perfil
+	bool has_demo_btn;           // la ficha tiene el botón de la demo
+	float oscroll, oscroll_t;    // Resumen: desplazamiento del texto (actual y destino)
+	float ocontent;              // alto de todo el Resumen
 } S;
 
 enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
-	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO };
+	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO };
 
 // Pestañas de la tienda
 #define HOME_PARTS 4
@@ -153,6 +156,7 @@ typedef struct {
 	int nwish, wish_next;
 	bool wish_loaded;
 	float anim_t;                // cuándo empezaron a entrar las filas (lista animada)
+	int lib_stage;               // Biblioteca: 0 GetOwnedGames, 1 userdata de la tienda, 2 nombres por tandas
 	int anim_count;
 } Tab;
 static Tab tabs[TAB_ALL];
@@ -306,7 +310,8 @@ static const char *home_title[HOME_PARTS] = {"Lo más vendido", "Novedades popul
 
 static bool tab_paged(int t)
 {
-	return t == TAB_OFFERS || t == TAB_DEMOS || t == TAB_BETAS || t == TAB_WISHLIST || t >= TAB_H0;
+	return t == TAB_OFFERS || t == TAB_DEMOS || t == TAB_BETAS || t == TAB_WISHLIST || t >= TAB_H0 ||
+		(t == TAB_LIBRARY && tabs[TAB_LIBRARY].lib_stage == 2);
 }
 
 static int cur_ti(void)
@@ -334,8 +339,18 @@ static void tab_more(int ti)
 		if (t->list.end) return;
 		t->list.req = steam_req_query(home_q[ti - TAB_H0], t->list.count, PAGE);
 	} else if (ti == TAB_LIBRARY) {
-		if (!auth_logged() || t->list.count) return;
-		t->list.req = steam_req_owned(auth_info()->steamid, auth_token());
+		if (!auth_logged()) return;
+		if (t->lib_stage == 2) {
+			// Plan B: los juegos que dice la tienda, con sus nombres de 50 en 50
+			if (t->wish_next >= t->nwish) return;
+			int n = t->nwish - t->wish_next;
+			if (n > 50) n = 50;
+			t->list.req = steam_req_items(t->wish + t->wish_next, n);
+			t->wish_next += n;
+		} else {
+			if (t->list.count) return;
+			t->list.req = steam_req_owned(auth_info()->steamid, auth_token());
+		}
 	} else if (ti == TAB_WISHLIST) {
 		if (!auth_logged()) return;
 		if (!t->wish_loaded) {
@@ -373,8 +388,53 @@ static void owned_poll(Tab *t)
 {
 	Req *r = t->list.req;
 	if (!r || r->state < REQ_DONE) return;
-	if (r->state == REQ_DONE) steam_parse_owned(r->data, &t->list);
-	else snprintf(t->list.err, sizeof t->list.err, "%s", r->err);
+	if (t->lib_stage == 2) {
+		list_poll(&t->list, true);
+		t->list.total = t->nwish;
+		t->list.end = t->wish_next >= t->nwish;
+		return;
+	}
+	if (t->lib_stage == 0) {
+		bool ok = r->state == REQ_DONE && steam_parse_owned(r->data, &t->list);
+		netlog("biblioteca: GetOwnedGames %s (HTTP %ld, eresult %d, %d juegos)", ok ? "ok" : "mal", r->http, r->eresult, t->list.count);
+		if (!ok || t->list.count == 0) {
+			if (r->state == REQ_DONE && r->data) netlog("biblioteca: respuesta %.120s", r->data);
+			// Plan B: lo que la tienda sabe que tienes (la misma lista con la que marca «En la biblioteca»)
+			char ck[1200];
+			net_release(r);
+			t->list.req = NULL;
+			if (auth_web_cookies("store.steampowered.com", ck, sizeof ck)) {
+				t->list.req = net_request("https://store.steampowered.com/dynamicstore/userdata/", NULL, ck);
+				t->lib_stage = 1;
+				t->list.err[0] = 0;
+			} else if (!ok) {
+				snprintf(t->list.err, sizeof t->list.err, "%s", "json");
+			}
+			memset(ck, 0, sizeof ck);
+			return;
+		}
+	} else {
+		u32 *ids = NULL;
+		int n = r->state == REQ_DONE ? steam_parse_userdata_owned(r->data, &ids) : -1;
+		netlog("biblioteca: userdata de la tienda: %d juegos (HTTP %ld)", n, r->http);
+		net_release(r);
+		t->list.req = NULL;
+		if (n < 0) {
+			snprintf(t->list.err, sizeof t->list.err, "%s", "json");
+			free(ids);
+			return;
+		}
+		free(t->wish);
+		t->wish = ids;
+		t->nwish = n;
+		t->wish_loaded = true;
+		t->wish_next = 0;
+		t->list.total = n;
+		t->list.end = n == 0;
+		t->lib_stage = 2;
+		tab_more(TAB_LIBRARY);
+		return;
+	}
 	net_release(r);
 	t->list.req = NULL;
 	t->sel_changed = osGetTime();
@@ -472,10 +532,14 @@ static void library_changed(void)
 	Tab *t = &tabs[TAB_LIBRARY];
 	if (t->list.req) net_release(t->list.req);
 	rowlist_free(&t->list);
+	free(t->wish);
+	t->wish = NULL;
+	t->nwish = t->wish_next = 0;
+	t->wish_loaded = false;
+	t->lib_stage = 0;
 	t->started = false;
 	t->sel = 0;
 }
-
 
 // Buscar: las recientes se guardan en la SD, la última primero
 static void recents_load(void)
@@ -550,13 +614,13 @@ static void draw_status(const char *user)
 {
 	fx_bar(0, 0, TOP_W, 18, true);
 	float ty = floorf((18 - ui_line_h(SZ_SMALL)) / 2) + 1;
-	float nw = ui_text(8, ty, APP_NAME, SZ_SMALL, COL_WHITE, AL_LEFT, 0);
-	// El logo (el volante) gira mientras se descarga algo y se para despacio al acabar
+	// El logo (el volante) va delante del nombre y gira mientras se descarga algo
 	static float ang, spin;
 	bool busy = net_busy();
 	spin = approach(spin, busy ? 1 : 0, busy ? 8 : 2.5f);
 	ang += g_dt * 6.5f * spin;
-	ui_wheel(8 + nw + 10, 9, 5.5f, ang, col_lerp(C2D_Color32(0xc7, 0xd5, 0xe0, 0xff), COL_ACC, spin));
+	ui_wheel(14, 9, 5.5f, ang, col_lerp(C2D_Color32(0xc7, 0xd5, 0xe0, 0xff), COL_ACC, spin));
+	float nw = ui_text(25, ty, APP_NAME, SZ_SMALL, COL_WHITE, AL_LEFT, 0) + 17;
 
 	// Derecha: [usuario ·] fecha · hora   [Wi-Fi] [batería] 87 %
 	char clock[48], right[128];
@@ -579,6 +643,26 @@ static void draw_status(const char *user)
 // Tecla de una pista: el glifo del sistema si la fuente lo tiene; si no, una tecla dibujada
 static float hint_key(float x, float y, const char *key, bool draw)
 {
+	// Combinación «X+→»: la tecla, un «+» y la flecha
+	const char *plus = strchr(key, '+');
+	if (plus && plus != key && plus[1]) {
+		char first[8];
+		snprintf(first, sizeof first, "%.*s", (int)(plus - key), key);
+		float w = hint_key(x, y, first, draw);
+		float pw = ui_text_w("+", SZ_TINY);
+		if (draw) ui_text(x + w + 1, y + 4, "+", SZ_TINY, COL_DIM, AL_LEFT, 0);
+		// La flecha de la cruceta, dibujada (no todas las fuentes traen ← → ↑ ↓)
+		float ax = x + w + 3 + pw, cx = ax + 4, cy = y + 10;
+		if (draw) {
+			const char *d = plus + 1;
+			u32 c = COL_WHITE;
+			if (!strcmp(d, "→")) C2D_DrawTriangle(cx + 4, cy, c, cx - 3, cy - 4, c, cx - 3, cy + 4, c, 0.5f);
+			else if (!strcmp(d, "←")) C2D_DrawTriangle(cx - 4, cy, c, cx + 3, cy - 4, c, cx + 3, cy + 4, c, 0.5f);
+			else if (!strcmp(d, "↓")) C2D_DrawTriangle(cx, cy + 4, c, cx - 4, cy - 3, c, cx + 4, cy - 3, c, 0.5f);
+			else C2D_DrawTriangle(cx, cy - 4, c, cx - 4, cy + 3, c, cx + 4, cy + 3, c, 0.5f);
+		}
+		return w + 3 + pw + 9;
+	}
 	char g[16] = "";
 	if (!strcmp(key, "L R")) {
 		const char *l = ui_button_glyph("L"), *r = ui_button_glyph("R");
@@ -592,36 +676,41 @@ static float hint_key(float x, float y, const char *key, bool draw)
 	}
 	if (g[0]) {
 		float w = ui_text_w(g, SZ_SMALL);
-		if (draw) ui_text(x, y + 1, g, SZ_SMALL, COL_WHITE, AL_LEFT, 0);
+		if (draw) ui_text(x, y + 2, g, SZ_SMALL, COL_WHITE, AL_LEFT, 0);
 		return w;
 	}
 	float kw = ui_text_w(key, SZ_TINY) + 6;
 	if (kw < 11) kw = 11;
 	if (draw) {
-		ui_rrect(x, y + 3.5f, kw, 11, 5.5f, C2D_Color32(0xff, 0xff, 0xff, 0x2a));
-		ui_text(x + kw / 2, y + 3.5f, key, SZ_TINY, COL_WHITE, AL_CENTER, 0);
+		ui_rrect(x, y + 4.5f, kw, 11, 5.5f, C2D_Color32(0xff, 0xff, 0xff, 0x2a));
+		ui_text(x + kw / 2, y + 4, key, SZ_TINY, COL_WHITE, AL_CENTER, 0);
 	}
 	return kw;
 }
 
+// Barra de botones: ocupa todo el borde de abajo y explica cada tecla que hace algo en la pantalla
+// (las que ya van dibujadas en un botón táctil no hace falta repetirlas)
 static void draw_hints(const char *const *pairs, int n)
 {
-	float y = SCR_H - 19;
+	float y = SCR_H - 18;
+	ui_rect(0, y, BOT_W, 18, C2D_Color32(0x0c, 0x12, 0x1b, 0xf2));
+	ui_rect(0, y, BOT_W, 1, col_alpha(COL_WHITE, 0.10f));
 	float total = 0, widths[8];
 	for (int i = 0; i < n; i++) {
 		widths[i] = hint_key(0, y, pairs[i * 2], false) + 3 + ui_text_w(_(pairs[i * 2 + 1]), SZ_TINY);
-		total += widths[i] + (i ? 12 : 0);
+		total += widths[i];
 	}
-	float x = (BOT_W - total) / 2;
-	// Las pistas van en una cápsula de cristal que flota sobre el contenido
-	fx_panel(x - 10, y + 1, total + 20, 17, 8.5f, 0.9f);
+	// Repartidas a lo ancho, con el mismo hueco entre ellas
+	float gap = n > 1 ? (BOT_W - 16 - total) / (n - 1) : 0;
+	if (gap > 22) gap = 22;
+	if (gap < 6) gap = 6;
+	float x = (BOT_W - total - gap * (n - 1)) / 2;
 	for (int i = 0; i < n; i++) {
 		float kw = hint_key(x, y, pairs[i * 2], true);
-		ui_text(x + kw + 3, y + 3.5f, _(pairs[i * 2 + 1]), SZ_TINY, COL_DIM, AL_LEFT, 0);
-		x += widths[i] + 12;
+		ui_text(x + kw + 3, y + 4, _(pairs[i * 2 + 1]), SZ_TINY, COL_TXT, AL_LEFT, 0);
+		x += widths[i] + gap;
 	}
 }
-
 static void draw_net_wait(float cx, float cy, const char *what)
 {
 	const char *st = net_status_text();
@@ -778,11 +867,9 @@ static void footer_text(char *out, size_t n)
 {
 	Tab *t = CUR;
 	switch (S.tab) {
-	case TAB_HOME:
-		snprintf(out, n, "%s · %d / %d", _(home_title[S.home_sub]), t->sel + 1, t->list.total);
-		break;
-	case TAB_OFFERS: snprintf(out, n, _("Oferta %d de %d"), t->sel + 1, t->list.total); break;
-	case TAB_DEMOS: snprintf(out, n, _("Demo %d de %d"), t->sel + 1, t->list.total); break;
+	case TAB_HOME: snprintf(out, n, "%s", _(home_title[S.home_sub])); break;
+	case TAB_OFFERS: snprintf(out, n, "%s", _("Ofertas")); break;
+	case TAB_DEMOS: snprintf(out, n, "%s", _("Demos")); break;
 	case TAB_BETAS: snprintf(out, n, "%s", _("Acceso anticipado")); break;   // el total de Steam cuenta también los que ya salieron
 	case TAB_LIBRARY: {
 		const StoreRow *r = cur_row();
@@ -791,7 +878,7 @@ static void footer_text(char *out, size_t n)
 		else out[0] = 0;
 		break;
 	}
-	case TAB_WISHLIST: snprintf(out, n, _("Deseado %d de %d"), t->sel + 1, t->list.total); break;
+	case TAB_WISHLIST: snprintf(out, n, "%s", _("Lista de deseos")); break;
 	case TAB_CART:
 		if (shop_cart()->subtotal[0]) snprintf(out, n, _("Total del carrito: %s"), shop_cart()->subtotal);
 		else out[0] = 0;
@@ -811,7 +898,8 @@ static void draw_review_line(float x, float y, float w, const char *label, int p
 {
 	char lab[64], tail[48];
 	snprintf(lab, sizeof lab, "%s", label);
-	snprintf(tail, sizeof tail, " · %d %%", pct);
+	if (pct > 0) snprintf(tail, sizeof tail, " · %d %%", pct);
+	else tail[0] = 0;   // «No hay reseñas»: sin porcentaje
 	float tw = ui_text_w(tail, SZ_SMALL);
 	if (ui_text_w(lab, SZ_SMALL) + tw > w) {
 		char *sp = strchr(lab, ' ');
@@ -888,14 +976,20 @@ static void draw_preview(const StoreRow *row)
 
 	if (a) {
 		// Descripción en tres líneas, una raya fina y la clasificación con las características
-		if (a->desc) ui_text_wrap(12, 128, TOP_W - 24, a->desc, SZ_SMALL, COL_TXT, 3, 13);
-		ui_hline(12, 172, TOP_W - 24, C2D_Color32(0xff, 0xff, 0xff, 0x26));
+		// Sin descripción (algunas demos no tienen): la clasificación y las características suben a su sitio
+		float ry = 177;
+		if (a->desc) {
+			ui_text_wrap(12, 128, TOP_W - 24, a->desc, SZ_SMALL, COL_TXT, 3, 13);
+			ui_hline(12, 172, TOP_W - 24, C2D_Color32(0xff, 0xff, 0xff, 0x26));
+		} else {
+			ry = 132;
+		}
 		float fx = 12;
 		if (a->rating[0]) {
-			draw_rating(12, 177, 28, a);
+			draw_rating(12, ry, 28, a);
 			fx = 48;
 		}
-		draw_feats(fx, 178, TOP_W - 12 - fx, a, 2);
+		draw_feats(fx, ry + 1, TOP_W - 12 - fx, a, a->desc ? 2 : 4);
 	} else if (e && e->failed) {
 		ui_text(12, 140, _("No se pudo cargar la ficha"), SZ_SMALL, COL_DIM, AL_LEFT, 0);
 	} else {
@@ -971,7 +1065,7 @@ static void draw_store_top(void)
 	}
 }
 
-static const char *home_sub_name[HOME_PARTS] = {"Lo más vendido", "Novedades", "Próximamente", "Gratis"};
+static const char *home_sub_name[HOME_PARTS] = {"Más vendidos", "Novedades", "Próximamente", "Gratis"};
 
 // Subcategorías de Inicio: una barra que cuelga de la de pestañas (recta arriba, redonda abajo)
 static void draw_subbar(void)
@@ -983,37 +1077,63 @@ static void draw_subbar(void)
 	ui_rrect_bottom(x, y, w, h, 9, col_alpha(C2D_Color32(0x1c, 0x28, 0x3a, 0xff), 0.96f));
 	ui_rrect_bottom(x, y, w, h, 9, col_alpha(COL_WHITE, 0.05f));
 	ui_rect(x + 9, y + h - 1, w - 18, 1, col_alpha(COL_WHITE, 0.10f));
-	float sw = (w - 4) / HOME_PARTS;
-	fx_select(x + 2 + S.sub_x * sw, y + 3, sw, h - 6, (h - 6) / 2, e);
-	float lh = ui_line_h(SZ_TINY);
+	float sw = w / HOME_PARTS;
+	float lh = ui_line_h(SZ_TINY), ty = y + 3 + (h - 3 - lh) / 2;
+	// La elegida: un resplandor suave que respira, sin burbuja
+	float hx = x + S.sub_x * sw;
+	float br = 0.07f + 0.04f * sinf(g_time * 2.4f);
+	ui_rrect(hx + 6, y + 4, sw - 12, h - 7, (h - 7) / 2, col_alpha(COL_WHITE, br * e));
 	for (int i = 0; i < HOME_PARTS; i++) {
 		float on = 1 - clampf(fabsf(S.sub_x - i), 0, 1);
-		ui_text(x + 2 + sw * i + sw / 2, y + 3 + (h - 6 - lh) / 2 + 0.5f, _(home_sub_name[i]), SZ_TINY,
-			col_alpha(col_lerp(COL_DIM, COL_WHITE, on), e), AL_CENTER, sw - 4);
+		ui_text(x + sw * i + sw / 2, ty, _(home_sub_name[i]), SZ_TINY, col_alpha(col_lerp(COL_DIM, COL_WHITE, on), e), AL_CENTER, sw - 8);
+		if (i) ui_rect(x + sw * i, y + 6, 1, h - 11, col_alpha(COL_WHITE, 0.16f * e));   // la «|» entre ellas
 	}
 	ui_scissor_off();
+}
+// Huecos de las pestañas dentro de la cápsula: cuatro iguales para el texto y uno más estrecho
+// para la lupa. Los textos se centran en su hueco y la píldora va de hueco en hueco
+#define TAB_SLOT_W 64.0f
+static void tab_slot(float t, float *x, float *w)
+{
+	float x0 = 5, last = TAB_COUNT - 1;
+	float sw_last = BOT_W - 10 - last * TAB_SLOT_W;
+	if (t <= last - 1) {
+		*x = x0 + t * TAB_SLOT_W;
+		*w = TAB_SLOT_W;
+	} else {
+		float f = t - (last - 1);   // entre Betas y la lupa
+		*x = x0 + t * TAB_SLOT_W;
+		*w = TAB_SLOT_W + (sw_last - TAB_SLOT_W) * f;
+	}
+}
+
+static int tab_at(float x)
+{
+	int t = (int)((x - 5) / TAB_SLOT_W);
+	return t < 0 ? 0 : t >= TAB_COUNT ? TAB_COUNT - 1 : t;
 }
 
 static void draw_tabs(void)
 {
 	// Control segmentado: una cápsula de cristal y, dentro, la píldora de la pestaña que se desliza.
-	// En Buscar, con el foco arriba, la píldora se estira sobre las demás y es la barra de búsqueda.
+	// En Buscar, con el foco arriba, la píldora (ya pegada a la lupa) se estira hacia la izquierda
 	const float by = 2, bh = LIST_Y - 4;
 	fx_glass(3, by, BOT_W - 6, bh, bh / 2, 1, 0);
-	float w = BOT_W / 4.6f;
-	float sx = S.tab_x * w, sw = S.tab_x > TAB_COUNT - 1.5f ? BOT_W - sx : w;
-	float px = sx < 5 ? 5 : sx, pw = (sx + sw > BOT_W - 5 ? BOT_W - 5 : sx + sw) - px;
+	float px, pw;
+	tab_slot(S.tab_x, &px, &pw);
 	float se = ease_out_cubic(S.search_x);
+	float right = px + pw;
 	px += (5 - px) * se;
-	pw += (BOT_W - 10 - pw) * se;
+	pw = right - px;
 	fx_select(px + 1, by + 2, pw - 2, bh - 4, (bh - 4) / 2.0f, 1);
 	float lh = ui_line_h(SZ_SMALL), ty = by + (bh - lh) / 2 + 1;
 	for (int t = 0; t < TAB_COUNT; t++) {
-		float x = t * w, tw = t == TAB_SEARCH ? BOT_W - x : w;
+		float x, tw;
+		tab_slot(t, &x, &tw);
 		float on = 1 - clampf(fabsf(S.tab_x - t), 0, 1);
 		u32 c = col_alpha(col_lerp(COL_DIM, COL_WHITE, on), 1 - se);
 		if (t == TAB_SEARCH) ui_icon(IC_SEARCH, x + tw / 2 - 6, by + (bh - 12) / 2, 12, c);
-		else if (se < 0.99f) ui_text(x + tw / 2, ty, tab_name(t), SZ_SMALL, c, AL_CENTER, tw - 4);
+		else if (se < 0.99f) ui_text(x + tw / 2, ty, tab_name(t), SZ_SMALL, c, AL_CENTER, tw - 6);
 	}
 	if (se > 0.05f) {
 		// Dentro de la píldora estirada: la lupa a la izquierda, lo buscado y la tecla Y
@@ -1044,10 +1164,12 @@ static void draw_account_bar(void)
 }
 
 
-// Fila elegida: una cápsula de cristal claro con el reflejo de color en el borde
+// Fila elegida: un resaltado suave que respira (sin burbuja)
 static void draw_row_sel(float hy)
 {
-	fx_select(3, hy + 1, BOT_W - 8, ROW_H - 2, 8, 1);
+	float br = 0.075f + 0.035f * sinf(g_time * 2.4f);
+	ui_rrect(3, hy + 1, BOT_W - 8, ROW_H - 2, 6, col_alpha(COL_WHITE, br));
+	ui_rrect(3, hy + 4, 2, ROW_H - 8, 1, col_alpha(COL_ACC, 0.8f));
 }
 
 static void draw_store_bottom(void)
@@ -1136,37 +1258,35 @@ static void draw_store_bottom(void)
 		ui_rrect(BOT_W - 4, y + 2, 3, hh - 4, 1.5f, C2D_Color32(0xff, 0xff, 0xff, 0x55));
 	}
 	if (S.tab == TAB_CART) {
-		static const char *hc[] = {"A", "Ficha", "Y", "Quitar", "X", "Pagar", "B", "Volver"};
-		static const char *hb[] = {"B", "Volver"};
-		if (t->list.count) draw_hints(hc, 4);
-		else draw_hints(hb, 1);
+		static const char *hc[] = {"A", "Ficha", "↑↓", "Elegir", "Y", "Quitar", "X", "Pagar", "B", "Volver"};
+		static const char *hb[] = {"B", "Volver", "START", "Menú"};
+		if (t->list.count) draw_hints(hc, 5);
+		else draw_hints(hb, 2);
 	} else if (S.tab >= TAB_COUNT) {
-		static const char *ha[] = {"A", "Ficha", "B", "Volver", "START", "Menú"};
-		draw_hints(ha, 3);
+		static const char *ha[] = {"A", "Ficha", "↑↓", "Elegir", "B", "Volver", "START", "Menú"};
+		draw_hints(ha, 4);
 	} else if (S.tab == TAB_SEARCH) {
 		if (S.search_focus) {
-			static const char *hs[] = {"A", "Escribir", "↑↓", "Resultados", "L R", "Pestaña"};
-			draw_hints(hs, t->list.count ? 3 : 1);
-			if (!t->list.count) {
-				static const char *h1[] = {"L R", "Pestaña"};
-				draw_hints(h1, 1);
-			}
+			static const char *hs[] = {"A", "Escribir", "↓", "Resultados", "L R", "Pestaña", "START", "Menú"};
+			static const char *h1[] = {"A", "Escribir", "L R", "Pestaña", "START", "Menú"};
+			if (t->list.count) draw_hints(hs, 4);
+			else draw_hints(h1, 3);
 		} else if (t->term[0]) {
-			static const char *hs[] = {"A", "Ficha", "↑", "Buscar", "B", "Borrar", "L R", "Pestaña"};
-			draw_hints(hs, 4);
+			static const char *hs[] = {"A", "Ficha", "↑↓", "Elegir", "Y", "Buscar", "B", "Borrar", "L R", "Pestaña"};
+			draw_hints(hs, 5);
 		} else {
-			static const char *hs[] = {"A", "Buscar esto", "↑", "Escribir", "L R", "Pestaña"};
-			draw_hints(hs, 3);
+			static const char *hs[] = {"A", "Buscar esto", "↑↓", "Elegir", "Y", "Escribir", "L R", "Pestaña"};
+			draw_hints(hs, 4);
 		}
-	} else if (S.tab == TAB_HOME && !(t->list.err[0] && !t->list.req && !t->list.count)) {
-		static const char *hh4[] = {"A", "Ficha", "← →", "Categoría", "L R", "Pestaña"};
-		draw_hints(hh4, 3);
 	} else if (t->list.err[0] && !t->list.req && !t->list.count) {
 		static const char *hh3[] = {"A", "Reintentar", "L R", "Pestaña", "START", "Menú"};
 		draw_hints(hh3, 3);
+	} else if (S.tab == TAB_HOME) {
+		static const char *hh4[] = {"A", "Ficha", "↑↓", "Elegir", "← →", "Categoría", "L R", "Pestaña", "START", "Menú"};
+		draw_hints(hh4, 5);
 	} else {
-		static const char *hh2[] = {"A", "Ficha", "L R", "Pestaña", "START", "Menú"};
-		draw_hints(hh2, 3);
+		static const char *hh2[] = {"A", "Ficha", "↑↓", "Elegir", "← →", "Saltar", "L R", "Pestaña", "START", "Menú"};
+		draw_hints(hh2, 5);
 	}
 }
 
@@ -1211,6 +1331,17 @@ static const StoreRow *owned_row(u32 appid)
 	for (int i = 0; i < t->list.count; i++)
 		if (t->list.rows[i].appid == appid) return &t->list.rows[i];
 	return NULL;
+}
+
+// ¿Es tuyo? Por la biblioteca, o por la lista de la tienda cuando se usa el plan B
+static bool owned_app(u32 appid)
+{
+	if (owned_row(appid)) return true;
+	Tab *t = &tabs[TAB_LIBRARY];
+	if (t->lib_stage == 2)
+		for (int i = 0; i < t->nwish; i++)
+			if (t->wish[i] == appid) return true;
+	return false;
 }
 
 static bool in_wishlist(u32 appid)
@@ -1341,6 +1472,7 @@ static void open_game(u32 appid, bool push)
 	S.sec = SEC_SUMMARY;
 	S.show_qr = false;
 	S.pick_open = false;
+	S.oscroll = S.oscroll_t = 0;
 	for (int i = 0; i < S.nreviews; i++) free(S.reviews[i].text);
 	S.nreviews = 0;
 	S.rcursor[0] = 0;
@@ -1410,7 +1542,14 @@ static void game_poll(const AppInfo *a)
 		S.dlc_for = a->appid;
 		// En un DLC, Extras enseña el juego base que hace falta para usarlo
 		if (a->fullgame) S.dlc.req = steam_req_items(&a->fullgame, 1);
-		else if (a->ndlc) S.dlc.req = steam_req_items(a->dlc, a->ndlc > 50 ? 50 : a->ndlc);
+		else if (a->ndlc || a->demo) {
+			// La demo (si la hay) va primero, y luego el contenido descargable
+			u32 ids[51];
+			int n = 0;
+			if (a->demo) ids[n++] = a->demo;
+			for (int i = 0; i < a->ndlc && n < 51; i++) ids[n++] = a->dlc[i];
+			S.dlc.req = steam_req_items(ids, n > 50 ? 50 : n);
+		}
 	}
 	if (S.sec == SEC_SIMILAR && S.similar_for != a->appid) {
 		rowlist_free(&S.similar);
@@ -1421,33 +1560,91 @@ static void game_poll(const AppInfo *a)
 	list_poll(&S.similar, false);
 }
 
+// «Acerca de este juego» partido en líneas una sola vez (luego solo se dibujan las que se ven)
+typedef struct { const char *p; u16 len; u8 kind; } ALine;   // kind: 0 texto, 1 título, 2 hueco
+#define MAX_ALINES 700
+static ALine alines[MAX_ALINES];
+static int nalines;
+static u32 alines_for;
+
+static void about_add(const char *p, size_t len, int kind)
+{
+	if (nalines < MAX_ALINES) alines[nalines++] = (ALine){p, (u16)len, (u8)kind};
+}
+
+static void about_wrap(const char *p, size_t n, float sz, int kind, float w)
+{
+	char buf[1024];
+	while (n > 0) {
+		// ui_next_line necesita el texto terminado en '\0': se mide sobre una copia del párrafo
+		size_t take = n < sizeof buf - 1 ? n : sizeof buf - 1;
+		memcpy(buf, p, take);
+		buf[take] = 0;
+		size_t len, used = ui_next_line(buf, sz, w, &len);
+		if (!used) break;
+		about_add(p, len, kind);
+		p += used;
+		n -= used;
+	}
+}
+
+static void about_layout(const AppInfo *a)
+{
+	if (alines_for == a->appid) return;
+	alines_for = a->appid;
+	nalines = 0;
+	float w = TOP_W - 24;
+	if (a->desc) {
+		about_wrap(a->desc, strlen(a->desc), SZ_SMALL, 0, w);
+		about_add(NULL, 0, 2);
+	}
+	if (!a->about) return;
+	about_add(NULL, 0, 2);
+	const char *p = a->about;
+	while (*p) {
+		const char *e = strchr(p, '\n');
+		size_t len = e ? (size_t)(e - p) : strlen(p);
+		if (!len) {
+			if (nalines && alines[nalines - 1].kind != 2) about_add(NULL, 0, 2);
+		} else if (p[0] == '\x01') {
+			if (nalines && alines[nalines - 1].kind != 2) about_add(NULL, 0, 2);
+			about_wrap(p + 1, len - 1, SZ_BODY, 1, w);
+		} else {
+			about_wrap(p, len, SZ_SMALL, 0, w);
+		}
+		p += len + (e ? 1 : 0);
+	}
+}
+
 static void draw_summary_top(const AppInfo *a)
 {
+	about_layout(a);
+	// Todo el Resumen se desplaza: imagen, nombre, etiquetas, clasificación, descripción y «acerca de»
+	ui_scissor(GFX_TOP, 0, 18, TOP_W, SCR_H - 18);
+	float oy = -floorf(S.oscroll);
 	const Pic *p = img_get(a->header, 460);
-	if (p) img_draw_cover(p, 0, 18, TOP_W, 110, 0.3f);
-	else ui_rect(0, 18, TOP_W, 110, COL_PANEL);
+	if (p) img_draw_cover(p, 0, 18 + oy, TOP_W, 110, 0.3f);
+	else ui_rect(0, 18 + oy, TOP_W, 110, COL_PANEL);
 	// La imagen se funde con el fondo (sin línea de corte)
-	ui_vgrad(0, 60, TOP_W, 69, C2D_Color32(0x0c, 0x13, 0x1f, 0x00), C2D_Color32(0x0c, 0x13, 0x1f, 0xe0));
-	ui_text(12, 100, a->name, SZ_TITLE, COL_WHITE, AL_LEFT, TOP_W - 24);
+	ui_vgrad(0, 60 + oy, TOP_W, 69, C2D_Color32(0x0c, 0x13, 0x1f, 0x00), C2D_Color32(0x0c, 0x13, 0x1f, 0xe0));
+	ui_text(12, 104 + oy, a->name, SZ_TITLE, COL_WHITE, AL_LEFT, TOP_W - 24);
 
-	float x = 12, y = 126;
-	for (int i = 0; i < a->ngenres; i++) draw_tag(&x, y, a->genres[i]);
-	if (a->review_label[0]) {
-		x += 2;
-		x += ui_text(x, y, _("Reseñas: "), SZ_SMALL, COL_DIM, AL_LEFT, 0);
-		x += ui_text(x, y, a->review_label, SZ_SMALL, review_col(a->review_pct), AL_LEFT, TOP_W - 12 - x);
-		if (a->review_pct) {
-			char t[16];
-			snprintf(t, sizeof t, " (%d %%)", a->review_pct);
-			ui_text(x, y, t, SZ_SMALL, COL_DIM, AL_LEFT, 0);
-		}
+	// Debajo de la imagen: géneros y reseñas en la misma línea
+	float x = 12, y = 134 + oy;
+	for (int i = 0; i < a->ngenres; i++) {
+		float tw = ui_text_w(a->genres[i], SZ_TINY) + 14;
+		if (x + tw > TOP_W / 2) break;
+		draw_tag(&x, y, a->genres[i]);
 	}
+	if (a->review_label[0]) draw_review_line(x + 4, y + 0.5f, TOP_W - 12 - x - 4, a->review_label, a->review_pct, a->metacritic);
 
-	y = 148;
+	y = 156 + oy;
 	float fx = 12;
+	float block = y;
 	if (a->rating[0]) {
 		draw_rating(12, y, 32, a);
 		fx = 52;
+		block = y + 32 * 1.2f;
 	}
 	if (a->ndesc) {
 		char d[160] = "";
@@ -1458,21 +1655,50 @@ static void draw_summary_top(const AppInfo *a)
 		ui_text(fx, y, d, SZ_TINY, COL_DIM, AL_LEFT, TOP_W - 12 - fx);
 		y += 15;
 	}
-	draw_feats(fx, y, TOP_W - 12 - fx, a, a->ndesc ? 2 : 3);
+	y += draw_feats(fx, y, TOP_W - 12 - fx, a, 3);
+	if (y < block) y = block;
+	y += 6;
 
-	char t[112];
+	// Fecha · estudio, y qué amigos lo tienen
+	char t[112], fr[160];
 	snprintf(t, sizeof t, "%s%s%s", a->release, a->release[0] && a->developer[0] ? " · " : "", a->developer);
-	char fr[160];
 	if (friends_text(fr, sizeof fr)) {
-		// Con amigos: la línea de amigos a la izquierda y la fecha a la derecha
-		ui_icon(IC_USERS, 12, SCR_H - 17, 12, FR.playing ? COL_LIME : COL_ACC);
-		float fw = ui_text(28, SCR_H - 18, fr, SZ_SMALL, FR.playing ? COL_LIME : COL_TXT, AL_LEFT, 230);
-		ui_text(TOP_W - 12, SCR_H - 18, t, SZ_SMALL, COL_DIM, AL_RIGHT, TOP_W - 52 - fw);
+		ui_icon(IC_USERS, 12, y, 12, FR.playing ? COL_LIME : COL_ACC);
+		float fw = ui_text(28, y, fr, SZ_SMALL, FR.playing ? COL_LIME : COL_TXT, AL_LEFT, 230);
+		ui_text(TOP_W - 12, y, t, SZ_SMALL, COL_DIM, AL_RIGHT, TOP_W - 52 - fw);
 	} else {
-		ui_text(TOP_W - 12, SCR_H - 18, t, SZ_SMALL, COL_DIM, AL_RIGHT, TOP_W - 24);
+		ui_text(12, y, t, SZ_SMALL, COL_DIM, AL_LEFT, TOP_W - 24);
+	}
+	y += 18;
+	ui_hline(12, y, TOP_W - 24, C2D_Color32(0xff, 0xff, 0xff, 0x26));
+	y += 8;
+
+	// Descripción y «acerca de este juego» (solo las líneas que se ven)
+	for (int i = 0; i < nalines; i++) {
+		const ALine *l = &alines[i];
+		float lh = l->kind == 1 ? 17 : l->kind == 2 ? 7 : 13;
+		if (y + lh > 18 && y < SCR_H && l->kind != 2) {
+			char buf[512];
+			size_t n = l->len < sizeof buf - 1 ? l->len : sizeof buf - 1;
+			memcpy(buf, l->p, n);
+			buf[n] = 0;
+			if (l->kind == 1) ui_text(12, y, buf, SZ_BODY, COL_ACC, AL_LEFT, 0);
+			else ui_text(12, y, buf, SZ_SMALL, COL_TXT, AL_LEFT, 0);
+		}
+		y += lh;
+	}
+	ui_scissor_off();
+	S.ocontent = y - oy - 18 + 10;
+
+	// Barra de desplazamiento fina
+	float vis = SCR_H - 18;
+	if (S.ocontent > vis) {
+		float hh = vis * vis / S.ocontent;
+		if (hh < 14) hh = 14;
+		float sy = 18 + (vis - hh) * (S.oscroll / (S.ocontent - vis));
+		ui_rrect(TOP_W - 4, sy + 2, 3, hh - 4, 1.5f, C2D_Color32(0xff, 0xff, 0xff, 0x55));
 	}
 }
-
 static float draw_req_col(float x, float y, float w, const char *title, const ReqLine *l, int n)
 {
 	ui_text(x, y, title, SZ_SMALL, COL_ACC, AL_LEFT, w);
@@ -1490,20 +1716,26 @@ static float draw_req_col(float x, float y, float w, const char *title, const Re
 
 static void draw_reqs_top(const AppInfo *a)
 {
+	// «Nombre requisitos del sistema (Windows)»: una sola frase, con el nombre más grande
+	bool mac = g_cfg.reqs_mac && a->mac;
 	float x = 12 + ui_text(12, 24, a->name, SZ_LARGE, COL_WHITE, AL_LEFT, 220);
-	ui_text(x, 27, _(" · Requisitos (Windows)"), SZ_SMALL, COL_DIM, AL_LEFT, TOP_W - 12 - x);
-	if (!a->nmin && !a->nrec) {
+	ui_text(x + 6, 27, mac ? _("requisitos del sistema (macOS)") : _("requisitos del sistema (Windows)"), SZ_SMALL, COL_DIM, AL_LEFT, TOP_W - 18 - x);
+	const ReqLine *mn = mac ? a->mmin : a->rmin, *rc = mac ? a->mrec : a->rrec;
+	int nmn = mac ? a->nmmin : a->nmin, nrc = mac ? a->nmrec : a->nrec;
+	if (!nmn && !nrc) {
 		ui_text(TOP_W / 2, 110, _("Steam no indica requisitos para este juego"), SZ_BODY, COL_DIM, AL_CENTER, 0);
-		return;
+	} else {
+		if (nmn) draw_req_col(12, 46, nrc ? 182 : 376, _("MÍNIMO"), mn, nmn);
+		if (nrc) draw_req_col(nmn ? 206 : 12, 46, nmn ? 182 : 376, _("RECOMENDADO"), rc, nrc);
 	}
-	if (a->nmin) draw_req_col(12, 46, a->nrec ? 182 : 376, _("MÍNIMO"), a->rmin, a->nmin);
-	if (a->nrec) draw_req_col(a->nmin ? 206 : 12, 46, a->nmin ? 182 : 376, _("RECOMENDADO"), a->rrec, a->nrec);
-	if (a->mac || a->lnx) {
-		const char *t = a->mac && a->lnx ? _("También en macOS y Linux") : a->mac ? _("También en macOS") : _("También en Linux");
-		ui_text(12, SCR_H - 18, t, SZ_SMALL, COL_DIM, AL_LEFT, 0);
-	}
+	// Abajo: en qué más sistemas va, y cómo ver los de macOS (es un ajuste del menú START)
+	const char *t = NULL;
+	if (a->mac && !mac) t = a->lnx ? _("También en macOS y Linux · para ver los de macOS: START › Requisitos")
+		: _("También en macOS · para ver sus requisitos: START › Requisitos");
+	else if (mac) t = _("Mostrando macOS · para Windows: START › Requisitos");
+	else if (a->lnx) t = _("También en Linux");
+	if (t) ui_text(12, SCR_H - 18, t, SZ_SMALL, COL_DIM, AL_LEFT, TOP_W - 24);
 }
-
 static void draw_reviews_top(const AppInfo *a)
 {
 	if (a->review_label[0]) {
@@ -1528,8 +1760,7 @@ static void draw_reviews_top(const AppInfo *a)
 		float h = 20 + 3 * 12 + 6;
 		if (y + h > top && y < bottom) {
 			bool on = i == S.rsel;
-			if (on) fx_select(12, y, TOP_W - 24, h, 10, 1);
-			else ui_rrect(12, y, TOP_W - 24, h, 10, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
+			ui_rrect(12, y, TOP_W - 24, h, 10, col_alpha(COL_WHITE, on ? 0.10f + 0.035f * sinf(g_time * 2.4f) : 0.045f));
 			ui_icon(r->voted_up ? IC_THUMB_UP : IC_THUMB_DOWN, 18, y + 5, 11, r->voted_up ? COL_ACC : COL_NEG);
 			ui_text(34, y + 4, r->voted_up ? _("Recomendado") : _("No recomendado"), SZ_SMALL, COL_WHITE, AL_LEFT, 0);
 			char hrs[32];
@@ -1554,14 +1785,23 @@ static void draw_list_top(const char *title, const RowList *l, const char *empty
 	}
 	ui_scissor(GFX_TOP, 0, top, TOP_W, bottom - top);
 	float hy = top + S.lsel_y * rh - S.lscroll;
-	fx_select(10, hy, TOP_W - 20, rh - 1, 7, 1);
+	ui_rrect(10, hy, TOP_W - 20, rh - 1, 6, col_alpha(COL_WHITE, 0.075f + 0.035f * sinf(g_time * 2.4f)));
+	ui_rrect(10, hy + 3, 2, rh - 7, 1, col_alpha(COL_ACC, 0.8f));
 	for (int i = 0; i < l->count; i++) {
 		float y = top + i * rh - S.lscroll;
 		if (y + rh < top || y > bottom) continue;
 		const StoreRow *r = &l->rows[i];
 		bool on = i == S.lsel;
 		float pw = r->disc > 0 ? 36 + 52 : 56;
-		float nw = ui_text(20, y + 4, r->name, SZ_SMALL, on ? COL_WHITE : COL_TXT, AL_LEFT, TOP_W - 40 - pw);
+		float nx = 20;
+		if (r->type == 1 || r->type == 4) {
+			const char *tag = r->type == 1 ? _("DEMO") : "DLC";
+			float tw = ui_text_w(tag, SZ_TINY) + 8;
+			ui_rrect(nx, y + 5, tw, 12, 6, col_alpha(COL_ACC, 0.18f));
+			ui_text(nx + 4, y + 5, tag, SZ_TINY, COL_ACC, AL_LEFT, 0);
+			nx += tw + 5;
+		}
+		float nw = ui_text(nx, y + 4, r->name, SZ_SMALL, on ? COL_WHITE : COL_TXT, AL_LEFT, TOP_W - 20 - nx - pw) + nx - 20;
 		if (r->review[0] && r->review_pct > 0 && 20 + nw + 20 < TOP_W - 40 - pw) {
 			char t[56];
 			snprintf(t, sizeof t, "· %s", r->review);
@@ -1594,8 +1834,8 @@ static void draw_game_top(void)
 		char url[96];
 		snprintf(url, sizeof url, "https://store.steampowered.com/app/%lu/", (unsigned long)a->appid);
 		ui_qr(url, 20, 34, 170);
-		ui_text(206, 50, _("Comprar en el móvil"), SZ_LARGE, COL_WHITE, AL_LEFT, 180);
-		ui_text_wrap(206, 74, 180, _("Escanea el código con la cámara: se abre este juego en la tienda de Steam y lo pagas desde ahí."), SZ_SMALL, COL_TXT, 6, 14);
+		ui_text(206, 50, _("Ver en Steam"), SZ_LARGE, COL_WHITE, AL_LEFT, 180);
+		ui_text_wrap(206, 74, 180, _("Escanea el código con la cámara del móvil: se abre la página de este juego en la tienda de Steam."), SZ_SMALL, COL_TXT, 6, 14);
 		ui_text(206, 170, a->name, SZ_SMALL, COL_DIM, AL_LEFT, 180);
 		ui_text(TOP_W / 2, SCR_H - 18, _("B para volver"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 		return;
@@ -1618,7 +1858,8 @@ static void draw_game_top(void)
 			break;
 		}
 		char t[64];
-		snprintf(t, sizeof t, _("CONTENIDO DESCARGABLE (%d)"), a->ndlc);
+		if (a->demo) snprintf(t, sizeof t, _("DEMO Y CONTENIDO DESCARGABLE (%d)"), a->ndlc + 1);
+		else snprintf(t, sizeof t, _("CONTENIDO DESCARGABLE (%d)"), a->ndlc);
 		draw_list_top(t, &S.dlc, _("Este juego no tiene contenido descargable"));
 		break;
 	}
@@ -1635,10 +1876,29 @@ static void draw_game_top(void)
 
 // Botones de la ficha (también se usan para el toque)
 static const Box B_SEG = {12, 6, 296, 22};
-static const Box B_CART = {12, 76, 296, 26};
-static const Box B_WISH = {12, 108, 145, 26};
-static const Box B_SHOTS = {163, 108, 145, 26};
-static const Box B_INST = {12, 140, 296, 26};
+// Botones de la ficha: se colocan según haya o no botón de demo (game_layout)
+static Box B_CART = {12, 84, 296, 26};
+static Box B_DEMO = {12, 112, 296, 22};
+static Box B_WISH = {12, 116, 145, 26};
+static Box B_SHOTS = {163, 116, 145, 26};
+static Box B_INST = {12, 148, 296, 26};
+
+static void game_layout(const AppInfo *a)
+{
+	S.has_demo_btn = auth_logged() && a->demo && !a->is_demo;
+	if (S.has_demo_btn) {
+		B_CART = (Box){12, 82, 296, 24};
+		B_DEMO = (Box){12, 110, 296, 22};
+		B_WISH = (Box){12, 138, 145, 24};
+		B_SHOTS = (Box){163, 138, 145, 24};
+		B_INST = (Box){12, 166, 296, 24};
+	} else {
+		B_CART = (Box){12, 84, 296, 26};
+		B_WISH = (Box){12, 116, 145, 26};
+		B_SHOTS = (Box){163, 116, 145, 26};
+		B_INST = (Box){12, 148, 296, 26};
+	}
+}
 
 static bool hit(const Box *b, int x, int y)
 {
@@ -1666,10 +1926,6 @@ static void draw_button_k(const Box *b, const char *key, bool focus, Icon ic, co
 	ui_text(x + 18, ty, label, SZ_SMALL, f, AL_LEFT, b->x + b->w - 8 - (x + 18));
 }
 
-static void draw_button(const Box *b, Icon ic, const char *label, u32 top, u32 bot, u32 fg, float alpha, bool pressed)
-{
-	draw_button_k(b, NULL, false, ic, label, top, bot, fg, alpha, pressed);
-}
 
 // Gratis: el juego lo es, es una demo, o la única forma de tenerlo es una licencia gratuita
 static bool game_is_free(const AppInfo *a, const BuyOpt *opts, int nopt)
@@ -1729,40 +1985,52 @@ static void draw_game_bottom(void)
 	for (int i = 0; i < SEC_COUNT; i++) {
 		float x = B_SEG.x + 2 + i * sw;
 		float on = 1 - clampf(fabsf(S.seg_x - i), 0, 1);
-		ui_text(x + sw / 2, B_SEG.y + 5, _(secs[i]), SZ_TINY, col_lerp(COL_DIM, COL_WHITE, on), AL_CENTER, sw - 4);
+		ui_text(x + sw / 2, B_SEG.y + (B_SEG.h - ui_line_h(SZ_TINY)) / 2 + 1, _(secs[i]), SZ_TINY, col_lerp(COL_DIM, COL_WHITE, on), AL_CENTER, sw - 4);
 	}
 
 	if (a) {
-		const StoreRow *own = auth_logged() ? owned_row(a->appid) : NULL;
-		bool wished = auth_logged() && in_wishlist(a->appid);
+		game_layout(a);
+		bool in = auth_logged();
+		const StoreRow *own_row = in ? owned_row(a->appid) : NULL;
+		bool own = in && owned_app(a->appid);
+		bool wished = in && in_wishlist(a->appid);
 		ui_text(12, 36, own ? _("Ya es tuyo") : a->is_free ? _("Jugar") : _("Comprar"), SZ_SMALL, own ? COL_LIME : COL_DIM, AL_LEFT, 0);
 		ui_text(12, 50, a->name, SZ_BODY, COL_WHITE, AL_LEFT, a->disc && !own ? 160 : 190);
-		StoreRow pr = {0};
-		pr.disc = a->disc;
-		snprintf(pr.price, sizeof pr.price, "%s", a->price);
-		snprintf(pr.orig, sizeof pr.orig, "%s", a->orig);
-		pr.free = a->is_free;
+		int nopt = 0;
+		const BuyOpt *opts = shop_buyopts(a->appid, &nopt, NULL);
 		if (own) {
+			// Ya es tuyo: un sello de biblioteca (aunque Steam deje comprarlo otra vez para regalar)
 			char hrs[48];
-			if (own->minutes >= 60) snprintf(hrs, sizeof hrs, _("En tu biblioteca · %d h"), (own->minutes + 30) / 60);
+			if (own_row && own_row->minutes >= 60) snprintf(hrs, sizeof hrs, _("En tu biblioteca · %d h"), (own_row->minutes + 30) / 60);
 			else snprintf(hrs, sizeof hrs, "%s", _("En tu biblioteca"));
-			float w = ui_text_w(hrs, SZ_SMALL) + 16;
+			float w = ui_text_w(hrs, SZ_SMALL) + 34;
 			FxButton lb = {C2D_Color32(0x2b, 0x55, 0x1a, 0xff), 1, false, false};
 			fx_button(308 - w, 36, w, 32, 10, &lb);
+			ui_icon(IC_PAD, 308 - w + 10, 46, 12, COL_LIME);
 			ui_text(308 - 8, 45, hrs, SZ_SMALL, COL_LIME, AL_RIGHT, 0);
 		} else if (a->disc > 0) {
 			ui_badge_disc(308 - 64 - 52, 36, 52, 32, a->disc, SZ_LARGE);
 			ui_price_box(308 - 64, 36, 64, 32, a->orig, a->price, SZ_SMALL, SZ_BODY + 0.05f);
+			// Cuenta atrás hasta que acaba la oferta (con la hora de los servidores de Steam)
+			u32 end = opts && nopt ? opts[0].disc_end : 0;
+			if (end && g_server_known) {
+				long long left = (long long)end - ((long long)time(NULL) + g_server_delta);
+				if (left > 0) {
+					char cd[64], t[80];
+					int d = (int)(left / 86400), h = (int)(left % 86400 / 3600), m = (int)(left % 3600 / 60), sec = (int)(left % 60);
+					if (d) snprintf(cd, sizeof cd, "%d d %02d:%02d:%02d", d, h, m, sec);
+					else snprintf(cd, sizeof cd, "%02d:%02d:%02d", h, m, sec);
+					snprintf(t, sizeof t, _("La oferta acaba en %s"), cd);
+					ui_icon(IC_COIN, 308 - ui_text_w(t, SZ_TINY) - 16, 70.5f, 10, COL_LIME);
+					ui_text(308, 70, t, SZ_TINY, COL_LIME, AL_RIGHT, 0);
+				}
+			}
 		} else {
 			const char *p = a->is_free ? _("Gratis") : a->has_price ? a->price : a->coming_soon ? _("Próximamente") : _("No disponible");
 			float w = ui_text_w(p, SZ_BODY + 0.05f) + 16;
 			ui_rect(308 - w, 36, w, 32, COL_SHADE);
 			ui_text(308 - 8, 44, p, SZ_BODY + 0.05f, a->is_free ? COL_LIME : COL_TXT, AL_RIGHT, 0);
 		}
-		// Sin sesión, carrito, deseados e instalar se ven apagados
-		bool in = auth_logged();
-		int nopt = 0;
-		const BuyOpt *opts = in ? shop_buyopts(a->appid, &nopt, NULL) : NULL;
 		bool free = game_is_free(a, opts, nopt);
 		bool carted = in && !own && shop_in_cart(a->appid, opts, nopt);
 		bool busy_cart = shop_busy_with(free ? SH_FREE : SH_CART_ADD, a->appid);
@@ -1771,31 +2039,43 @@ static void draw_game_bottom(void)
 		const char *cl = own ? _("Ya lo tienes") : free ? _("Añadir a la biblioteca") : carted ? _("En el carrito · Ver")
 			: soon ? (a->coming_soon ? _("Próximamente") : _("No está a la venta")) : _("Añadir al carrito");
 		if (busy_cart) cl = free ? _("Añadiendo a tu biblioteca…") : _("Añadiendo al carrito…");
-		if (!in) draw_button_k(&B_CART, "Y", false, IC_PHONE, _("Comprar en el móvil"), C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff),
+		if (!in) draw_button_k(&B_CART, "Y", false, IC_PHONE, _("Ver en Steam"), C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff),
 			COL_WHITE, 1, S.pressed == BT_CART);
 		else if (carted) draw_button_k(&B_CART, "Y", false, IC_CART, cl, C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_CART);
 		else draw_button_k(&B_CART, in && !own && !soon ? "Y" : NULL, false, IC_CART, cl, C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), C2D_Color32(0xd2, 0xef, 0xa9, 0xff),
 			in && !own && !soon ? 1 : 0.45f, S.pressed == BT_CART);
+		if (S.has_demo_btn) {
+			// La demo gratis del juego, en el azul claro que usa Steam para «Añadir a la biblioteca»
+			bool demo_own = owned_app(a->demo);
+			bool busy = shop_busy_with(SH_FREE, a->demo);
+			const char *dl = demo_own ? _("La demo ya está en tu biblioteca") : busy ? _("Añadiendo a tu biblioteca…") : _("Añadir la demo a tu biblioteca");
+			draw_button_k(&B_DEMO, demo_own ? NULL : "SELECT", false, IC_PAD, dl, C2D_Color32(0x67, 0xc1, 0xf5, 0xff), C2D_Color32(0x41, 0x7a, 0xa6, 0xff),
+				COL_WHITE, demo_own ? 0.45f : 1, S.pressed == BT_DEMO);
+		}
 		bool busy_wish = shop_busy_with(wished ? SH_WISH_REMOVE : SH_WISH_ADD, a->appid);
-		if (wished) draw_button_k(&B_WISH, own ? NULL : "SELECT", false, IC_HEART, busy_wish ? _("Quitando…") : _("En deseados"), C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_WISH);
-		else draw_button_k(&B_WISH, in && !own ? "SELECT" : NULL, false, IC_HEART, busy_wish ? _("Añadiendo…") : _("Deseados"), COL_BTN2, COL_BTN2, COL_ACC, in && !own ? 1 : 0.45f, S.pressed == BT_WISH);
+		if (wished) draw_button_k(&B_WISH, own ? NULL : "X+←", false, IC_HEART, busy_wish ? _("Quitando…") : _("En deseados"), C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_WISH);
+		else draw_button_k(&B_WISH, in && !own ? "X+←" : NULL, false, IC_HEART, busy_wish ? _("Añadiendo…") : _("Deseados"), COL_BTN2, COL_BTN2, COL_ACC, in && !own ? 1 : 0.45f, S.pressed == BT_WISH);
 		char shots[40];
 		snprintf(shots, sizeof shots, _("Capturas (%d)"), a->nshots);
-		draw_button_k(&B_SHOTS, a->nshots ? "X" : NULL, false, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, a->nshots ? 1 : 0.45f, S.pressed == BT_SHOTS);
-		draw_button(&B_INST, IC_PC, _("Instalar en mi PC"), C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, own ? 1 : 0.4f, S.pressed == BT_INST);
-		if (!in) ui_text(BOT_W / 2, 172, _("Inicia sesión (START) para el carrito, deseados e instalar"), SZ_TINY, COL_DIM, AL_CENTER, 300);
-		else if (!own) ui_text(BOT_W / 2, 172, _("Instalar se activa cuando el juego es tuyo"), SZ_TINY, COL_DIM, AL_CENTER, 300);
+		draw_button_k(&B_SHOTS, a->nshots ? "X+→" : NULL, false, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, a->nshots ? 1 : 0.45f, S.pressed == BT_SHOTS);
+		draw_button_k(&B_INST, own ? "X+↓" : NULL, false, IC_PC, _("Instalar en tu PC (a distancia)"), C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, own ? 1 : 0.4f, S.pressed == BT_INST);
+		float ny = B_INST.y + B_INST.h + 5;
+		if (!in) ui_text(BOT_W / 2, ny, _("Inicia sesión (START) para el carrito, deseados e instalar"), SZ_TINY, COL_DIM, AL_CENTER, 300);
+		else if (!own) ui_text(BOT_W / 2, ny, _("Instalar se activa cuando el juego es tuyo"), SZ_TINY, COL_DIM, AL_CENTER, 300);
 	}
 
 	if (S.show_qr) {
 		static const char *h[] = {"B", "Volver"};
 		draw_hints(h, 1);
 	} else if (S.sec >= SEC_EXTRAS) {
-		static const char *h[] = {"↑↓", "Elegir", "A", "Abrir ficha", "L R", "Apartado", "B", "Volver"};
+		static const char *h[] = {"↑↓", "Elegir", "A", "Abrir ficha", "L R", "Apartado", "B", "Volver", "START", "Menú"};
+		draw_hints(h, 5);
+	} else if (S.sec == SEC_REVIEWS) {
+		static const char *h[] = {"↑↓", "Leer", "L R", "Apartado", "B", "Volver", "START", "Menú"};
 		draw_hints(h, 4);
-	} else if (!auth_logged()) {
-		static const char *h[] = {"L R", "Apartado", "Y", "Comprar en el móvil", "B", "Volver"};
-		draw_hints(h, 3);
+	} else if (S.sec == SEC_SUMMARY) {
+		static const char *h[] = {"↑↓", "Desplazar", "L R", "Apartado", "B", "Volver", "START", "Menú"};
+		draw_hints(h, 4);
 	} else {
 		static const char *h[] = {"L R", "Apartado", "B", "Volver", "START", "Menú"};
 		draw_hints(h, 3);
@@ -1881,8 +2161,8 @@ static void draw_shots_bottom(void)
 		draw_round_button(&B_PREV, "L", _("Anterior"), S.shot > 0, S.pressed == BT_PREV);
 		draw_round_button(&B_NEXT, "R", _("Siguiente"), S.shot + 1 < a->nshots, S.pressed == BT_NEXT);
 	}
-	static const char *hh[] = {"← →", "Cambiar", "B", "Volver"};
-	draw_hints(hh, 2);
+	static const char *hh[] = {"← →", "Cambiar", "L R", "Cambiar", "B", "Volver"};
+	draw_hints(hh, 3);
 }
 
 // ============================================================================
@@ -1961,7 +2241,7 @@ static void draw_overlays_bottom(void)
 
 static bool key_repeat(u32 down, u32 held, u32 mask);
 
-enum { MI_LOGIN, MI_PROFILE, MI_LIBRARY, MI_WISHLIST, MI_CART, MI_LOGOUT, MI_EXIT };
+enum { MI_LOGIN, MI_PROFILE, MI_LIBRARY, MI_WISHLIST, MI_CART, MI_LOGOUT, MI_REQS, MI_EXIT };
 #define MENU_ROW 30
 #define MENU_HEAD 44
 
@@ -1980,6 +2260,7 @@ static int menu_items(int *out)
 		out[n++] = MI_CART;
 		out[n++] = MI_LOGOUT;
 	}
+	out[n++] = MI_REQS;
 	out[n++] = MI_EXIT;
 	return n;
 }
@@ -2090,8 +2371,8 @@ static void draw_profile_bottom(void)
 	draw_button_k(&B_PWISH, NULL, S.pfocus == 1, IC_HEART, wish, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PWISH);
 	u32 red = C2D_Color32(0x6a, 0x26, 0x22, 0xff);
 	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 2, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
-	static const char *hh[] = {"↑↓", "Elegir", "A", "Abrir", "B", "Volver"};
-	draw_hints(hh, 3);
+	static const char *hh[] = {"↑↓", "Elegir", "A", "Abrir", "B", "Volver", "START", "Menú"};
+	draw_hints(hh, 4);
 }
 
 static int press_update(u32 kd, u32 kh, u32 ku, touchPosition *tp, const int *ids, int n);
@@ -2149,6 +2430,13 @@ static void menu_choose(int item)
 	case MI_LIBRARY: open_account_list(TAB_LIBRARY); break;
 	case MI_WISHLIST: open_account_list(TAB_WISHLIST); break;
 	case MI_CART: open_account_list(TAB_CART); break;
+	case MI_REQS:
+		// Ajuste: requisitos de Windows o de macOS en las fichas
+		g_cfg.reqs_mac = !g_cfg.reqs_mac;
+		config_save();
+		S.menu_open = true;   // el menú se queda abierto para ver el cambio
+		toast(g_cfg.reqs_mac ? _("Las fichas enseñan los requisitos de macOS") : _("Las fichas enseñan los requisitos de Windows"));
+		break;
 	case MI_EXIT:
 		S.ask_exit = true;
 		S.exit_anim = 0;
@@ -2198,6 +2486,7 @@ static void draw_menu(void)
 		[MI_LIBRARY] = {IC_PAD, "Biblioteca"},
 		[MI_WISHLIST] = {IC_HEART, "Lista de deseos"},
 		[MI_CART] = {IC_CART, "Carrito"},
+		[MI_REQS] = {IC_WRENCH, "Requisitos"},
 		[MI_LOGOUT] = {IC_LOCK, "Cerrar sesión"},
 		[MI_EXIT] = {IC_POWER, "Salir de Steam3DS"},
 	};
@@ -2208,6 +2497,8 @@ static void draw_menu(void)
 		u32 c = items[i] == MI_EXIT || items[i] == MI_LOGOUT ? C2D_Color32(0xff, 0x8a, 0x7a, 0xff) : COL_ACC;
 		ui_icon(info[items[i]].ic, 22, y + 8, 12, col_alpha(c, a));
 		ui_text(42, y + 6, _(info[items[i]].label), SZ_BODY - 0.02f, col_alpha(on ? COL_WHITE : COL_TXT, a), AL_LEFT, BOT_W - 60);
+		if (items[i] == MI_REQS)
+			ui_text(BOT_W - 24, y + 7, g_cfg.reqs_mac ? "macOS" : "Windows", SZ_SMALL, col_alpha(COL_ACC, a), AL_RIGHT, 0);
 		if (items[i] == MI_CART && shop_cart()->n) {
 			// Cuántos hay, en una píldora verde
 			char nc[8];
@@ -2268,44 +2559,59 @@ static void draw_login_top(void)
 		}
 		return;
 	}
-	ui_qr(ai->qr_url, 14, 30, 176);
+	// El QR, centrado en el alto que queda bajo la barra de arriba
+	const float qs = 176, qy = 18 + (SCR_H - 18 - qs) / 2;
+	ui_qr(ai->qr_url, 14, qy, qs);
 	float x = 204, w = TOP_W - 12 - x;
-	ui_text(x, 30, _("Inicia sesión con Steam"), SZ_LARGE, COL_WHITE, AL_LEFT, w);
+	float tw = ui_text(x, qy, _("Inicia sesión con Steam"), SZ_LARGE, COL_WHITE, AL_LEFT, w);
+	ui_rrect(x, qy + 19, tw < w ? tw : w, 2, 1, col_alpha(COL_ACC, 0.8f));   // subrayado
 	static const char *steps[] = {
 		"Abre la app de Steam en el móvil",
 		"Toca el escudo de Steam Guard",
 		"Elige «Escanear un código QR» y apunta aquí",
 	};
-	float y = 56;
+	float y = qy + 30;
+	float lt = ui_line_h(SZ_TINY), ls = ui_line_h(SZ_SMALL);
 	for (int i = 0; i < 3; i++) {
 		char num[4];
 		snprintf(num, sizeof num, "%d", i + 1);
-		ui_circle(x + 7, y + 7, 7, C2D_Color32(0xff, 0xff, 0xff, 0x1c));
-		ui_text(x + 7, y + 1, num, SZ_TINY, COL_ACC, AL_CENTER, 0);
+		// El círculo, centrado en la primera línea del paso, y el número centrado en el círculo
+		float cy = y + ls * 0.55f;
+		ui_circle(x + 7, cy, 7.5f, C2D_Color32(0xff, 0xff, 0xff, 0x1c));
+		ui_text(x + 7, cy - lt * 0.55f, num, SZ_TINY, COL_ACC, AL_CENTER, 0);
 		int nl = ui_text_wrap(x + 20, y, w - 20, _(steps[i]), SZ_SMALL, COL_TXT, 3, 13);
 		y += nl * 13 + 8;
 	}
-	// Estado: esperando, o ya escaneado y falta aprobar
-	float sy = 186;
+	// Estado: esperando, o ya escaneado y falta aprobar (alineado con el pie del QR)
+	float sy = qy + qs - 26;
 	if (ai->qr_scanned) {
-		float bh = 14 + 13 * ui_text_lines(_("Escaneado: apruébalo en el móvil"), SZ_SMALL, w - 20);
+		int nl = ui_text_lines(_("Escaneado: apruébalo en el móvil"), SZ_SMALL, w - 20);
+		float bh = 12 + 13 * nl;
 		FxButton ok = {C2D_Color32(0x2b, 0x55, 0x1a, 0xff), 1, false, false};
-		fx_button(x, sy - (bh - 26), w, bh, 10, &ok);
-		ui_text_wrap(x + 10, sy - (bh - 26) + 7, w - 20, _("Escaneado: apruébalo en el móvil"), SZ_SMALL, COL_LIME, 2, 13);
+		fx_button(x, sy + 26 - bh, w, bh, 10, &ok);
+		ui_text_wrap(x + 10, sy + 26 - bh + 6, w - 20, _("Escaneado: apruébalo en el móvil"), SZ_SMALL, COL_LIME, 2, 13);
 	} else {
-		ui_spinner(x + 10, sy + 12, 5, COL_DIM);
-		ui_text(x + 24, sy + 5, _("Esperando al móvil…"), SZ_SMALL, COL_DIM, AL_LEFT, w - 30);
+		float cy = sy + 13;
+		ui_spinner(x + 8, cy, 6, COL_DIM);
+		ui_text(x + 22, cy - ls * 0.55f, _("Esperando al móvil…"), SZ_SMALL, COL_DIM, AL_LEFT, w - 30);
 	}
 }
 
 static void draw_login_bottom(void)
 {
-	fx_glass(14, 22, BOT_W - 28, 172, 18, 1, 0);
-	ui_circle(BOT_W / 2, 44, 18, C2D_Color32(0xff, 0xff, 0xff, 0x12));
-	ui_icon(IC_LOCK, BOT_W / 2 - 10, 34, 20, COL_ACC);
-	ui_text(BOT_W / 2, 64, _("Tu contraseña nunca pasa por la consola"), SZ_BODY, COL_WHITE, AL_CENTER, 300);
-	ui_text_wrap(24, 88, BOT_W - 48, _("Apruebas la entrada desde la app oficial de Steam. La sesión se guarda en la tarjeta SD; puedes cerrarla cuando quieras desde el menú (START) o desde Steam, en Dispositivos autorizados."),
-		SZ_SMALL, COL_DIM, 6, 14);
+	// Todo centrado dentro del panel: el candado, el título y el texto (cada línea centrada)
+	const char *msg = _("Apruebas la entrada desde la app oficial de Steam. La sesión se guarda en la tarjeta SD; puedes cerrarla cuando quieras desde el menú (START) o desde Steam, en Dispositivos autorizados.");
+	const float px = 14, py = 12, pw = BOT_W - 28, ph = SCR_H - 18 - 12 - py;
+	fx_glass(px, py, pw, ph, 18, 1, 0);
+	int nl = ui_text_lines(msg, SZ_SMALL, pw - 36);
+	float content = 36 + 10 + 16 + 10 + nl * 14;
+	float y = py + (ph - content) / 2;
+	ui_circle(BOT_W / 2, y + 18, 18, C2D_Color32(0xff, 0xff, 0xff, 0x12));
+	ui_icon(IC_LOCK, BOT_W / 2 - 10, y + 18 - 10 - 2, 20, COL_ACC);
+	y += 36 + 10;
+	ui_text(BOT_W / 2, y, _("Tu contraseña nunca pasa por la consola"), SZ_BODY, COL_WHITE, AL_CENTER, pw - 24);
+	y += 16 + 10;
+	ui_text_wrap_center(BOT_W / 2, y, pw - 36, msg, SZ_SMALL, COL_DIM, 8, 14);
 	static const char *hh[] = {"B", "Volver"};
 	draw_hints(hh, 1);
 }
@@ -2716,12 +3022,12 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 			int x = S.touch_x0, y = S.touch_y0;
 			if (y < LIST_Y && S.tab < TAB_COUNT) {
 				if (!(S.tab == TAB_SEARCH && S.search_focus)) {
-					int nt = (int)(x / (BOT_W / 4.6f));
-					if (nt >= TAB_COUNT && S.tab == TAB_SEARCH) S.search_focus = true;   // tocar la lupa sube el foco
-					else tab_switch(nt >= TAB_COUNT ? TAB_SEARCH : nt);
+					int nt = tab_at(x);
+					if (nt == TAB_SEARCH && S.tab == TAB_SEARCH) S.search_focus = true;   // tocar la lupa sube el foco
+					else tab_switch(nt);
 				}
 			} else if (S.tab == TAB_HOME && y < LIST_Y + SUB_H) {
-				int i = (int)((x - 12) / ((BOT_W - 24) / (float)HOME_PARTS));
+				int i = (int)((x - 10) / ((BOT_W - 20) / (float)HOME_PARTS));
 				home_switch(i < 0 ? 0 : i);
 			} else if (S.dragging) {
 				int i = (int)((y - top + t->scroll) / ROW_H);
@@ -3150,6 +3456,7 @@ static const Box *button_box(int id)
 	case BT_PAYQ: return &B_PAYQ;
 	case BT_CVV: return &B_CVV;
 	case BT_PAYGO: return &B_PAYGO;
+	case BT_DEMO: return &B_DEMO;
 	}
 	return NULL;
 }
@@ -3210,7 +3517,7 @@ static void input_pick(const AppInfo *a, u32 kd, u32 kh, touchPosition *tp)
 // El botón verde de la ficha
 static void game_cart_button(const AppInfo *a)
 {
-	if (owned_row(a->appid)) {
+	if (owned_app(a->appid)) {
 		toast(_("Ya está en tu biblioteca"));
 		return;
 	}
@@ -3255,14 +3562,31 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	}
 	if (kd & KEY_B) { game_back(); return; }
 	if ((kd & KEY_A) && e && e->failed) { info_retry(e); return; }
-	if (kd & (KEY_L | KEY_LEFT)) game_set_sec(S.sec - 1);
-	if (kd & (KEY_R | KEY_RIGHT)) game_set_sec(S.sec + 1);
-	// Botones de la consola para lo que hay en la pantalla táctil (la tecla va dibujada en cada botón)
+	// Botones de la consola para lo que hay en la pantalla táctil (la tecla va dibujada en cada botón):
+	// Y carrito, SELECT demo, y X con la cruceta: → capturas, ← deseados, ↓ instalar en el PC
 	int key_b = BT_NONE;
+	bool combo = kh & KEY_X;
 	if (a) {
 		if (kd & KEY_Y) key_b = auth_logged() ? BT_CART : -1;
-		if (kd & KEY_X) key_b = BT_SHOTS;
-		if ((kd & KEY_SELECT) && auth_logged()) key_b = BT_WISH;
+		if (combo && (kd & KEY_RIGHT)) key_b = BT_SHOTS;
+		if (combo && (kd & KEY_LEFT)) key_b = BT_WISH;
+		if (combo && (kd & KEY_DOWN)) key_b = BT_INST;
+		if ((kd & KEY_SELECT) && S.has_demo_btn) key_b = BT_DEMO;
+	}
+	if (combo) {
+		kd &= ~(KEY_LEFT | KEY_RIGHT | KEY_UP | KEY_DOWN);   // la cruceta es de la combinación
+		kh &= ~(KEY_UP | KEY_DOWN);
+	}
+	if (kd & (KEY_L | KEY_LEFT)) game_set_sec(S.sec - 1);
+	if (kd & (KEY_R | KEY_RIGHT)) game_set_sec(S.sec + 1);
+	if (S.sec == SEC_SUMMARY) {
+		// El Resumen se desplaza con la cruceta (manteniendo, sigue bajando)
+		float vis = SCR_H - 18;
+		float max = S.ocontent - vis;
+		if (max < 0) max = 0;
+		if (kh & KEY_DOWN) S.oscroll_t += 220 * g_dt;
+		if (kh & KEY_UP) S.oscroll_t -= 220 * g_dt;
+		S.oscroll_t = clampf(S.oscroll_t, 0, max);
 	}
 	if (key_b == -1) {
 		S.show_qr = true;   // sin sesión, Y lleva a comprar en el móvil
@@ -3283,8 +3607,8 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 
 	if ((kd & KEY_TOUCH) && hit(&B_SEG, tp->px, tp->py))
 		game_set_sec((int)((tp->px - B_SEG.x) / (B_SEG.w / SEC_COUNT)));
-	static const int ids[] = {BT_CART, BT_WISH, BT_SHOTS, BT_INST};
-	int b = a ? press_update(kd, kh, ku, tp, ids, 4) : BT_NONE;
+	static const int ids[] = {BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_DEMO};
+	int b = a ? press_update(kd, kh, ku, tp, ids, S.has_demo_btn ? 5 : 4) : BT_NONE;
 	if (key_b) b = key_b;
 	if (b == BT_SHOTS && a->nshots) {
 		go_scene(SC_SHOTS, 1);
@@ -3298,11 +3622,19 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	} else if (b == BT_CART) {
 		game_cart_button(a);
 	} else if (b == BT_WISH) {
-		if (owned_row(a->appid)) toast(_("Ya está en tu biblioteca"));
+		if (owned_app(a->appid)) toast(_("Ya está en tu biblioteca"));
 		else if (shop_busy()) toast(_("Un momento, estoy con lo anterior"));
 		else shop_wish(a->appid, a->name, !in_wishlist(a->appid));
 	} else if (b == BT_INST) {
 		toast(_("Instalar en el PC llega en la próxima actualización"));
+	} else if (b == BT_DEMO) {
+		if (owned_app(a->demo)) toast(_("Ya está en tu biblioteca"));
+		else if (shop_busy()) toast(_("Un momento, estoy con lo anterior"));
+		else {
+			char dn[140];
+			snprintf(dn, sizeof dn, _("Demo de %s"), a->name);
+			shop_free(a->demo, dn);
+		}
 	}
 }
 
@@ -3597,8 +3929,9 @@ int main(int argc, char **argv)
 				tabs[TAB_CART].started = true;
 				shop_cart_load();
 			}
-			if (S.scene == SC_GAME || S.scene == SC_SHOTS) shop_buyopts_load(S.app);
 		}
+		// Las formas de comprar (y cuándo acaba la oferta) se piden también sin sesión
+		if (S.ctx_ready && (S.scene == SC_GAME || S.scene == SC_SHOTS)) shop_buyopts_load(S.app);
 		shop_update();
 		cart_sync();
 		shop_events();
@@ -3636,7 +3969,10 @@ int main(int argc, char **argv)
 		S.pick_anim = approach(S.pick_anim, S.pick_open ? 1 : 0, S.pick_open ? 12 : 18);
 		S.sub_anim = approach(S.sub_anim, S.scene == SC_STORE && S.tab == TAB_HOME ? 1 : 0, 14);
 		S.sub_x = approach(S.sub_x, S.home_sub, 16);
-		S.search_x = approach(S.search_x, S.tab == TAB_SEARCH && S.search_focus ? 1 : 0, 14);
+		S.oscroll = approach(S.oscroll, S.oscroll_t, 18);
+		// La píldora primero llega a la lupa y solo entonces se estira
+		bool at_lupa = fabsf(S.tab_x - TAB_SEARCH) < 0.03f;
+		S.search_x = approach(S.search_x, S.tab == TAB_SEARCH && S.search_focus && at_lupa ? 1 : 0, 14);
 		S.sec_anim = clampf(S.sec_anim + dt / 0.22f, 0, 1);
 		S.scene_anim = clampf(S.scene_anim + dt / 0.28f, 0, 1);
 		S.shot_anim = clampf(S.shot_anim + dt / 0.30f, 0, 1);

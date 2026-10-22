@@ -5,7 +5,7 @@
 INDIRECT = [
     "Inicio", "Ofertas", "Demos", "Betas",
     "Resumen", "Requisitos", "Opiniones", "Extras", "Similares",
-    "Ficha", "Pestaña", "Salir", "Menú", "Carrito", "Quitar", "Pagar", "Tienda", "Reintentar", "Aceptar", "Elegir", "Abrir", "Escribir", "Resultados", "Buscar esto", "Categoría", "Novedades",
+    "Ficha", "Pestaña", "Salir", "Menú", "Carrito", "Quitar", "Pagar", "Tienda", "Reintentar", "Aceptar", "Elegir", "Abrir", "Escribir", "Resultados", "Saltar", "Más vendidos", "Quitar", "Requisitos", "Desplazar", "Leer", "Buscar esto", "Categoría", "Novedades",
     "Iniciar sesión con el móvil", "Mi perfil", "Biblioteca", "Lista de deseos", "Cerrar sesión", "Salir de Steam3DS",
     "Abre la app de Steam en el móvil", "Toca el escudo de Steam Guard", "Elige «Escanear un código QR» y apunta aquí", "Elegir", "Abrir ficha", "Apartado", "Volver", "Comprar en el móvil", "Cambiar", "Abrir", "Borrar",
     "Lo más vendido", "Novedades populares", "Próximamente", "Gratis para jugar",
@@ -41,7 +41,6 @@ TR = {
     "Lo más vendido": ("Top sellers", "トップセラー"),
     "Novedades populares": ("Popular new releases", "人気の新作"),
     "Gratis para jugar": ("Free to play", "基本プレイ無料"),
-    "Demo %d de %d": ("Demo %d of %d", "体験版 %d / %d"),
     "Acceso anticipado": ("Early Access", "早期アクセス"),
     "%d resultados para «%s»": ("%d results for “%s”", "「%s」の検索結果 %d 件"),
     "No se pudo cargar esta lista": ("Couldn't load this list", "リストを読み込めませんでした"),
@@ -70,9 +69,7 @@ TR = {
     "Steam no responde bien ahora mismo": ("Steam isn't working well right now", "Steamが現在正常に応答していません"),
     "Steam respondió con un error": ("Steam answered with an error", "Steamがエラーを返しました"),
     "Steam mandó una respuesta inesperada": ("Steam sent an unexpected answer", "Steamから予期しない応答がありました"),
-    "Oferta %d de %d": ("Deal %d of %d", "セール %d / %d"),
     "Próximamente": ("Coming soon", "近日公開"),
-    "Reseñas: ": ("Reviews: ", "レビュー: "),
 
     # Red
     "Sin conexión Wi-Fi": ("No Wi-Fi connection", "Wi-Fiに接続されていません"),
@@ -91,12 +88,8 @@ TR = {
     "Añadir a la biblioteca": ("Add to library", "ライブラリに追加"),
     "Deseados": ("Wishlist", "ウィッシュリスト"),
     "Capturas (%d)": ("Screenshots (%d)", "スクリーンショット (%d)"),
-    "Instalar en mi PC": ("Install on my PC", "PCにインストール"),
     "Disponible al iniciar sesión": ("Available after signing in", "サインイン後に使えます"),
     "Comprar en el móvil": ("Buy on phone", "スマホで購入"),
-    "Escanea el código con la cámara: se abre este juego en la tienda de Steam y lo pagas desde ahí.": (
-        "Scan the code with your camera: this game opens in the Steam store and you pay there.",
-        "カメラでコードを読み取ると、Steamストアでこのゲームが開きます。そこで購入できます。"),
     "B para volver": ("B to go back", "Bで戻る"),
 
     # Características
@@ -125,13 +118,10 @@ TR = {
     "Humor adulto": ("Mature humor", "大人向けユーモア"),
 
     # Requisitos
-    " · Requisitos (Windows)": (" · System requirements (Windows)", " · 動作環境 (Windows)"),
     "MÍNIMO": ("MINIMUM", "最低"),
     "RECOMENDADO": ("RECOMMENDED", "推奨"),
     "Steam no indica requisitos para este juego": ("Steam doesn't list requirements for this game", "このゲームの動作環境は記載されていません"),
-    "También en macOS": ("Also on macOS", "macOSにも対応"),
     "También en Linux": ("Also on Linux", "Linuxにも対応"),
-    "También en macOS y Linux": ("Also on macOS and Linux", "macOSとLinuxにも対応"),
 
     # Opiniones
     "%d %% de %d reseñas": ("%d %% of %d reviews", "%d %% (%d 件)"),
@@ -187,7 +177,6 @@ TR = {
     # Perfil, biblioteca y deseados
     "Has jugado %d h": ("You've played %d h", "%d 時間プレイ済み"),
     "Aún no lo has jugado": ("You haven't played it yet", "まだプレイしていません"),
-    "Deseado %d de %d": ("Wishlisted %d of %d", "ウィッシュリスト %d / %d"),
     "Biblioteca · %d juegos": ("Library · %d games", "ライブラリ · %d 本"),
     "Lista de deseos · %d": ("Wishlist · %d", "ウィッシュリスト · %d"),
     "Tu lista de deseos está vacía": ("Your wishlist is empty", "ウィッシュリストは空です"),
@@ -344,4 +333,23 @@ TR = {
     "Buscar esto": ("Search this", "これを検索"),
     "Categoría": ("Category", "カテゴリ"),
     "Novedades": ("New releases", "新作"),
+    "Saltar": ("Skip", "スキップ"),
+    'Añadir la demo a tu biblioteca': ('Add the demo to your library', '体験版をライブラリに追加'),
+    'DEMO Y CONTENIDO DESCARGABLE (%d)': ('DEMO AND DOWNLOADABLE CONTENT (%d)', '体験版と追加コンテンツ (%d)'),
+    'Demo de %s': ('%s demo', '%s 体験版'),
+    'Escanea el código con la cámara del móvil: se abre la página de este juego en la tienda de Steam.': ("Scan the code with your phone's camera: this game's page opens in the Steam store.", 'スマホのカメラでコードをスキャンすると、Steamストアのこのゲームのページが開きます。'),
+    'Instalar en tu PC (a distancia)': ('Install on your PC (remotely)', 'PCにインストール（リモート）'),
+    'La demo ya está en tu biblioteca': ('The demo is already in your library', '体験版はすでにライブラリにあります'),
+    'La oferta acaba en %s': ('Offer ends in %s', 'セール終了まで %s'),
+    'Las fichas enseñan los requisitos de Windows': ('Game pages show Windows requirements', 'Windowsの必要環境を表示します'),
+    'Las fichas enseñan los requisitos de macOS': ('Game pages show macOS requirements', 'macOSの必要環境を表示します'),
+    'Mostrando macOS · para Windows: START › Requisitos': ('Showing macOS · for Windows: START › Requirements', 'macOSを表示中 · Windowsは START › 必要環境'),
+    'También en macOS y Linux · para ver los de macOS: START › Requisitos': ('Also on macOS and Linux · for macOS: START › Requirements', 'macOS・Linuxにも対応 · macOSは START › 必要環境'),
+    'También en macOS · para ver sus requisitos: START › Requisitos': ('Also on macOS · to see its requirements: START › Requirements', 'macOSにも対応 · 必要環境は START › 必要環境'),
+    'Ver en Steam': ('Check on Steam', 'Steamで見る'),
+    'requisitos del sistema (Windows)': ('system requirements (Windows)', '必要環境（Windows）'),
+    'requisitos del sistema (macOS)': ('system requirements (macOS)', '必要環境（macOS）'),
+    'Desplazar': ('Scroll', 'スクロール'),
+    'Leer': ('Read', '読む'),
+    "Más vendidos": ("Top sellers", "トップセラー"),
 }

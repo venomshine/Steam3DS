@@ -18,6 +18,7 @@
 #include "steam.h"
 #include "ui.h"
 #include "util.h"
+#include "sfx.h"
 
 // ============================================================================
 // Estado
@@ -3401,10 +3402,40 @@ static void draw_splash_bottom(void)
 	C2D_ViewRestore(&view);
 }
 
+// El sonido de la carga, cada cosa en su canal y en su momento de la animación
+enum { CH_IMPACT, CH_HUM, CH_FLICKER, CH_CREAK, CH_STEAM };
+
+static void splash_sound(float t0, float t1)
+{
+#define CROSS(T) (t0 < (T) && t1 >= (T))
+	if (t0 <= 0) sfx_loop(CH_HUM, SFX_HUM);
+	if (CROSS(SPLASH_HIT)) {
+		sfx_play(CH_IMPACT, SFX_IMPACT, -1);
+		sfx_play(CH_FLICKER, SFX_FLICKER, -1);   // el golpe hace parpadear el bombillo
+	}
+	if (CROSS(SPLASH_SPIN)) sfx_play(CH_CREAK, SFX_CREAK0, SFX_CREAK);
+	if (CROSS(SPLASH_STEAM)) sfx_play(CH_STEAM, SFX_STEAM0, SFX_STEAM);
+	float at[2], depth[2], len[2];
+	int nd = bulb_dips((u32)(t1 / BULB_PERIOD), at, depth, len);
+	for (int i = 0; i < nd; i++)
+		if (CROSS(at[i])) sfx_play(CH_FLICKER, SFX_FLICKER, -1);
+#undef CROSS
+	// Todo se apaga con el fundido a negro del final
+	float g = splash_out >= 0 ? clampf(1 - splash_out / 0.35f, 0, 1) : 1;
+	// El bombillo y su chisporroteo, arriba a la derecha; el zumbido baja cuando flojea
+	sfx_volume(CH_HUM, 0.16f * g * clampf(t1 / 0.6f, 0, 1) * (0.4f + 0.6f * bulb.power), 0.45f);
+	sfx_volume(CH_FLICKER, 0.45f * g, 0.45f);
+	sfx_volume(CH_IMPACT, 0.95f * g, 0);
+	sfx_volume(CH_CREAK, 0.65f * g, -0.05f);
+	sfx_volume(CH_STEAM, 0.28f * g * clampf((t1 - SPLASH_STEAM) / 0.02f, 0, 1), 0.1f);
+}
+
 static void splash_update(float dt, u32 kd)
 {
 	// Los primeros fotogramas tardan (se está cargando todo): sin este tope la entrada se saltaba
+	float prev = splash_t;
 	splash_t += dt < 0.034f ? dt : 0.034f;
+	splash_sound(prev, splash_t);
 	if (splash_out < 0) {
 		bool skip = splash_t > 0.6f && (kd & (KEY_A | KEY_B | KEY_TOUCH));
 		if ((splash_t > 3.5f && splash_ready()) || splash_t > 6.5f || skip) splash_out = 0;
@@ -4430,6 +4461,7 @@ int main(int argc, char **argv)
 	sprites = C2D_SpriteSheetLoad("romfs:/gfx/sprites.t3x");
 	splash_bg = C2D_SpriteSheetLoad("romfs:/gfx/splash_bg.t3x");
 	wheel_sheet = C2D_SpriteSheetLoad("romfs:/gfx/wheel3d.t3x");
+	if (!sfx_init()) netlog("sonido: sin DSP (falta sdmc:/3ds/dspfirm.cdc)");
 	ui_sheet = C2D_SpriteSheetLoad("romfs:/gfx/ui.t3x");
 	if (ui_sheet) C3D_TexSetFilter(C2D_SpriteSheetGetImage(ui_sheet, 0).tex, GPU_LINEAR, GPU_LINEAR);
 	if (sprites) {
@@ -4725,6 +4757,7 @@ int main(int argc, char **argv)
 			if (splash_bg) C2D_SpriteSheetFree(splash_bg);
 			if (wheel_sheet) C2D_SpriteSheetFree(wheel_sheet);
 			sprites = splash_bg = wheel_sheet = NULL;
+			sfx_exit();   // solo suena la carga
 		}
 	}
 
@@ -4755,6 +4788,7 @@ int main(int argc, char **argv)
 	net_exit();
 	fx_exit();
 	ui_exit();
+	sfx_exit();
 	util_exit();
 	C2D_Fini();
 	C3D_Fini();

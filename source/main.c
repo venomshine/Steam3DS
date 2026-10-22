@@ -3036,7 +3036,7 @@ static void draw_splash_top(void)
 	draw_sprite_ex(SPR_GLOW, px, py, 4.7f, 4.7f, 0, C2D_Color32(0xff, 0xc4, 0x82, (u8)(0x70 * bulb.power)), 1);
 	draw_ambient(t, TOP_W, SCR_H, px, py, clampf(t / 0.8f, 0, 1));
 	float pop = ease_out_back(clampf(t / 0.55f, 0, 1));
-	const float t0 = 0.62f;      // la válvula se abre
+	const float t0 = 0.85f;      // la válvula se abre (ya girando)
 	float flash = t > t0 ? expf(-(t - t0) * 3.0f) : 0;
 	draw_sprite(SPR_GLOW, cx, cy, (1.9f + 0.08f * sinf(t * 2.4f) + 0.5f * flash) * pop, 0, (0.20f + 0.25f * flash) * pop * bulb.power);
 
@@ -3080,8 +3080,10 @@ static void draw_splash_top(void)
 	}
 	for (int i = 0; i < nb; i++) draw_puff(&burst[i], cx, cy, 0.9f * (1 - puff_front(&burst[i], 0)), false);
 
-	// Como una válvula que se abre: arranca despacio y coge velocidad
-	float spin = t < 0.8f ? 0.9f * t * t : 0.576f + 1.44f * (t - 0.8f);
+	// Como una válvula que se abre: quieta hasta asentarse en la pared, luego arranca despacio y
+	// coge velocidad
+	float u = t - 0.55f;
+	float spin = u <= 0 ? 0 : u < 0.8f ? 0.9f * u * u : 0.576f + 1.44f * (u - 0.8f);
 	draw_wheel3d(cx, cy, pop, spin, pop);
 
 	// Lo que ya ha salido del aro, por delante

@@ -20,4 +20,19 @@ typedef struct {
 
 extern Config g_cfg;
 void config_load(void);
-bool config_save(void);
+void config_save(void);
+
+// Disco en segundo plano: abrir un archivo de la SD tarda 30-50 ms y, en el hilo de la interfaz,
+// se notaba como un tirón. disk_save guarda una copia de data (si ya había otra pendiente para el
+// mismo archivo, gana la última); disk_load lee el archivo entero y avisa con done
+typedef struct DiskLoad {
+	char path[96];
+	u8 *data;               // termina en 0 (para leerlo como texto); NULL si no existe
+	size_t len;
+	volatile bool done;
+	bool busy, abandoned;   // del hilo de disco
+} DiskLoad;
+
+void disk_save(const char *path, const void *data, size_t len);
+DiskLoad *disk_load(const char *path);
+void disk_load_free(DiskLoad *l);   // también si aún no ha terminado

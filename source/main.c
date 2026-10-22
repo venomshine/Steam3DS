@@ -409,30 +409,44 @@ static void seen_path(char *p, size_t n)
 	snprintf(p, n, APP_DIR "/vistos_%llu.bin", (unsigned long long)auth_info()->steamid);
 }
 
+// La lista se lee en el hilo de disco (abrir el archivo en la SD paraba la interfaz unos 40 ms
+// justo al terminar de cargar la biblioteca); hasta que llega, nada sale como nuevo
+static DiskLoad *seen_ld;
+static bool seen_ready;      // la lista de seen_owner ya está leída
+static bool seen_pending;    // la biblioteca terminó antes que la lectura: se repasa al llegar
+
 static void seen_load(void)
 {
 	u64 id = auth_info()->steamid;
 	if (seen_owner == id) return;
 	seen_owner = id;
 	nseen = 0;
-	seen_exists = false;
+	seen_exists = seen_ready = seen_pending = false;
+	disk_load_free(seen_ld);
 	char p[96];
 	seen_path(p, sizeof p);
-	FILE *f = fopen(p, "rb");
-	if (!f) return;
-	seen_exists = true;
-	u32 a;
-	while (fread(&a, sizeof a, 1, f) == 1) {
-		if (nseen == seen_cap) {
-			int cap = seen_cap ? seen_cap * 2 : 256;
-			u32 *n = realloc(seen, cap * sizeof *n);
-			if (!n) break;
-			seen = n;
-			seen_cap = cap;
+	seen_ld = disk_load(p);
+}
+
+static void seen_add(u32 appid);
+static void seen_sync(Tab *t);
+
+static void seen_poll(void)
+{
+	if (auth_logged()) seen_load();
+	if (!seen_ld || !seen_ld->done) return;
+	if (seen_ld->data) {
+		seen_exists = true;
+		for (size_t i = 0; i + 4 <= seen_ld->len; i += 4) {
+			u32 a;
+			memcpy(&a, seen_ld->data + i, 4);
+			seen_add(a);
 		}
-		seen[nseen++] = a;
 	}
-	fclose(f);
+	disk_load_free(seen_ld);
+	seen_ld = NULL;
+	seen_ready = true;
+	if (seen_pending) seen_sync(&tabs[TAB_LIBRARY]);
 }
 
 static bool seen_has(u32 appid)
@@ -457,19 +471,9 @@ static void seen_add(u32 appid)
 
 static void seen_save(void)
 {
-	char p[96], tmp[100];
+	char p[96];
 	seen_path(p, sizeof p);
-	snprintf(tmp, sizeof tmp, "%s.tmp", p);
-	FILE *f = fopen(tmp, "wb");
-	if (!f) return;
-	bool ok = fwrite(seen, sizeof *seen, nseen, f) == (size_t)nseen;
-	ok = fclose(f) == 0 && ok;
-	if (!ok) {
-		remove(tmp);
-		return;
-	}
-	remove(p);
-	rename(tmp, p);
+	disk_save(p, seen, nseen * sizeof *seen);
 	seen_exists = true;
 }
 
@@ -483,6 +487,8 @@ static bool lib_is_new(u32 appid)
 static void seen_sync(Tab *t)
 {
 	seen_load();
+	seen_pending = !seen_ready;
+	if (!seen_ready) return;
 	bool first = !seen_exists, changed = first;
 	for (int i = 0; i < t->list.count; i++) {
 		const StoreRow *r = &t->list.rows[i];
@@ -501,7 +507,7 @@ static bool owned_app(u32 appid);
 // Al abrir la ficha de un juego tuyo deja de ser nuevo (la de uno que aún no tienes no cuenta)
 static void seen_open(u32 appid)
 {
-	if (!lib_is_new(appid) || !owned_app(appid)) return;
+	if (!seen_ready || !lib_is_new(appid) || !owned_app(appid)) return;
 	seen_add(appid);
 	seen_save();
 }
@@ -722,12 +728,10 @@ static void recents_add(const char *term)
 		if (strcasecmp(S.recents[i], term)) snprintf(keep[n++], 64, "%s", S.recents[i]);
 	memcpy(S.recents, keep, sizeof keep);
 	S.nrecents = n;
-	FILE *f = fopen(APP_DIR "/searches.tmp", "w");
-	if (!f) return;
-	for (int i = 0; i < n; i++) fprintf(f, "%s\n", S.recents[i]);
-	fclose(f);
-	remove(APP_DIR "/searches.txt");
-	rename(APP_DIR "/searches.tmp", APP_DIR "/searches.txt");
+	char buf[8 * 64];
+	size_t len = 0;
+	for (int i = 0; i < n; i++) len += snprintf(buf + len, sizeof buf - len, "%s\n", S.recents[i]);
+	disk_save(APP_DIR "/searches.txt", buf, len);
 }
 
 // Sin búsqueda en marcha, la lista de Buscar son las recientes (filas sin appid)
@@ -4377,6 +4381,7 @@ int main(int argc, char **argv)
 				t->fail_at = 0;
 			}
 		}
+		seen_poll();
 		info_poll();
 		for (int i = 0; i < CACHE; i++) {
 			InfoEnt *e = &cache[i];

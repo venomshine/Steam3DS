@@ -10,14 +10,194 @@
 Config g_cfg;
 static bool have_mcu;
 
+// ----------------------------------------------------------------------------
+// Disco en segundo plano
+
+#define DISK_SAVES 8
+#define DISK_LOADS 4
+static struct { char path[96]; void *data; size_t len; bool used; } dsaves[DISK_SAVES];
+static DiskLoad *dloads[DISK_LOADS];
+static LightLock dlock;
+static LightEvent dwake;
+static Thread dthread;
+static bool dquit;
+
+static void write_file(const char *path, const void *data, size_t len)
+{
+	char tmp[100];
+	snprintf(tmp, sizeof tmp, "%s.tmp", path);
+	FILE *f = fopen(tmp, "wb");
+	if (!f) return;
+	bool ok = fwrite(data, 1, len, f) == len;
+	ok = fclose(f) == 0 && ok;
+	if (!ok) {
+		remove(tmp);
+		return;
+	}
+	remove(path);
+	rename(tmp, path);
+}
+
+static void read_file(DiskLoad *l)
+{
+	FILE *f = fopen(l->path, "rb");
+	if (!f) return;
+	fseek(f, 0, SEEK_END);
+	long n = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	if (n >= 0 && (l->data = malloc(n + 1))) {
+		l->len = fread(l->data, 1, n, f);
+		l->data[l->len] = 0;
+	}
+	fclose(f);
+}
+
+static void disk_main(void *arg)
+{
+	(void)arg;
+	for (;;) {
+		// Primero las escrituras: así una lectura que llega después ve lo último guardado
+		char path[96];
+		void *data = NULL;
+		size_t len = 0;
+		DiskLoad *ld = NULL;
+		bool quit;
+		LightLock_Lock(&dlock);
+		for (int i = 0; i < DISK_SAVES && !data; i++)
+			if (dsaves[i].used) {
+				memcpy(path, dsaves[i].path, sizeof path);
+				data = dsaves[i].data;
+				len = dsaves[i].len;
+				dsaves[i].used = false;
+				dsaves[i].data = NULL;
+			}
+		for (int i = 0; i < DISK_LOADS && !data && !ld; i++)
+			if (dloads[i]) {
+				ld = dloads[i];
+				dloads[i] = NULL;
+				ld->busy = true;
+			}
+		quit = dquit;
+		LightLock_Unlock(&dlock);
+		if (data) {
+			write_file(path, data, len);
+			free(data);
+		} else if (ld) {
+			read_file(ld);
+			LightLock_Lock(&dlock);
+			bool drop = ld->abandoned;
+			ld->busy = false;
+			ld->done = true;
+			LightLock_Unlock(&dlock);
+			if (drop) {
+				free(ld->data);
+				free(ld);
+			}
+		} else if (quit) {
+			return;
+		} else {
+			LightEvent_Wait(&dwake);
+		}
+	}
+}
+
+void disk_save(const char *path, const void *data, size_t len)
+{
+	void *copy = malloc(len ? len : 1);
+	if (!dthread || !copy) {
+		free(copy);
+		write_file(path, data, len);
+		return;
+	}
+	memcpy(copy, data, len);
+	LightLock_Lock(&dlock);
+	int k = -1;
+	for (int i = 0; i < DISK_SAVES; i++)
+		if (dsaves[i].used && !strcmp(dsaves[i].path, path)) k = i;
+	for (int i = 0; i < DISK_SAVES && k < 0; i++)
+		if (!dsaves[i].used) k = i;
+	if (k >= 0) {
+		free(dsaves[k].data);
+		snprintf(dsaves[k].path, sizeof dsaves[k].path, "%s", path);
+		dsaves[k].data = copy;
+		dsaves[k].len = len;
+		dsaves[k].used = true;
+	}
+	LightLock_Unlock(&dlock);
+	if (k < 0) {
+		// Cola llena (no debería pasar): se guarda aquí mismo
+		write_file(path, copy, len);
+		free(copy);
+	}
+	LightEvent_Signal(&dwake);
+}
+
+DiskLoad *disk_load(const char *path)
+{
+	DiskLoad *l = calloc(1, sizeof *l);
+	if (!l) return NULL;
+	snprintf(l->path, sizeof l->path, "%s", path);
+	int k = -1;
+	if (dthread) {
+		LightLock_Lock(&dlock);
+		for (int i = 0; i < DISK_LOADS && k < 0; i++)
+			if (!dloads[i]) {
+				dloads[i] = l;
+				k = i;
+			}
+		LightLock_Unlock(&dlock);
+	}
+	if (k < 0) {
+		read_file(l);
+		l->done = true;
+	} else {
+		LightEvent_Signal(&dwake);
+	}
+	return l;
+}
+
+void disk_load_free(DiskLoad *l)
+{
+	if (!l) return;
+	bool later = false;
+	if (dthread) {
+		LightLock_Lock(&dlock);
+		for (int i = 0; i < DISK_LOADS; i++)
+			if (dloads[i] == l) dloads[i] = NULL;
+		if (l->busy) later = l->abandoned = true;   // lo suelta el hilo de disco al acabar
+		LightLock_Unlock(&dlock);
+	}
+	if (later) return;
+	free(l->data);
+	free(l);
+}
+
+// ----------------------------------------------------------------------------
+
 void util_init(void)
 {
 	have_mcu = R_SUCCEEDED(mcuHwcInit());
 	ptmuInit();
+	LightLock_Init(&dlock);
+	LightEvent_Init(&dwake, RESET_ONESHOT);
+	// Con menos prioridad que la interfaz: lee y escribe mientras ella espera al siguiente frame
+	s32 prio = 0x30;
+	svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+	dthread = threadCreate(disk_main, NULL, 32 * 1024, prio + 1, -2, false);
 }
 
 void util_exit(void)
 {
+	// Lo pendiente se guarda antes de salir
+	if (dthread) {
+		LightLock_Lock(&dlock);
+		dquit = true;
+		LightLock_Unlock(&dlock);
+		LightEvent_Signal(&dwake);
+		threadJoin(dthread, U64_MAX);
+		threadFree(dthread);
+		dthread = NULL;
+	}
 	if (have_mcu) mcuHwcExit();
 	ptmuExit();
 }
@@ -84,12 +264,9 @@ void config_load(void)
 	fclose(f);
 }
 
-bool config_save(void)
+void config_save(void)
 {
-	FILE *f = fopen(APP_DIR "/config.ini.tmp", "w");
-	if (!f) return false;
-	fprintf(f, "lang=%s\ncountry=%s\nbirth=%s\nreqs=%s\n", g_cfg.lang, g_cfg.country, g_cfg.birth, g_cfg.reqs_mac ? "mac" : "win");
-	fclose(f);
-	remove(APP_DIR "/config.ini");
-	return rename(APP_DIR "/config.ini.tmp", APP_DIR "/config.ini") == 0;
+	char buf[160];
+	int n = snprintf(buf, sizeof buf, "lang=%s\ncountry=%s\nbirth=%s\nreqs=%s\n", g_cfg.lang, g_cfg.country, g_cfg.birth, g_cfg.reqs_mac ? "mac" : "win");
+	disk_save(APP_DIR "/config.ini", buf, n);
 }

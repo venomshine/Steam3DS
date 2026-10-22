@@ -3697,6 +3697,15 @@ static const char *card_name(const char *type)
 static const char *pay_err_text(const PayInfo *p)
 {
 	if (p->maybe_paid) return _("No se pudo confirmar el cobro. Revisa tu correo o el historial de compras de Steam antes de volver a intentarlo.");
+	if (p->err_desc[0]) return p->err_desc;   // el motivo que da Steam
+	// Con tarjeta, como la web de Steam: 0 (y 86 si al final falla) es que la compañía de la tarjeta lo rechazó
+	if (p->method == PM_CARD && !p->err[0]) {
+		switch (p->detail) {
+		case 0: case 86: return _("La compañía de tu tarjeta ha rechazado el pago. A veces el banco retiene el importe un tiempo, pero no se realiza ningún cargo.");
+		case 1: return _("La compañía de tu tarjeta ha rechazado el pago porque la dirección de facturación no coincide. Revísala en la app oficial de Steam.");
+		case 2: return _("La compañía de tu tarjeta ha rechazado el pago por saldo insuficiente.");
+		}
+	}
 	switch (p->detail) {
 	case 2: return _("Saldo insuficiente.");
 	case 4: case 34: return _("La compra ha caducado y Steam la ha cancelado. No se ha realizado ningún cargo.");
@@ -3710,6 +3719,8 @@ static const char *pay_err_text(const PayInfo *p)
 	case 47: return _("El carrito contiene artículos duplicados (un lote incluye otro). Elimina uno.");
 	case 53: return _("Demasiados intentos. Espera unos minutos.");
 	case 82: return _("Este método de pago no está disponible en este momento. Inténtalo más tarde.");
+	case 44: return _("Las compras de tu cuenta están bloqueadas. Contacta con el soporte de Steam.");
+	case 46: return _("Por seguridad, Steam ha rechazado la compra y limitará las compras durante un tiempo. Contacta con el soporte de Steam.");
 	}
 	if (!strcmp(p->err, "sin cookies del checkout")) return _("La sesión no está lista. Cierra sesión y vuelve a iniciarla.");
 	if (!strcmp(p->err, "pagina de pago no reconocida")) return _("No se pudo abrir el pago. Vuelve a iniciar sesión o paga desde el móvil.");

@@ -241,6 +241,20 @@ static void on_status(const cJSON *r, u64 now)
 	} else if (success == 22) {
 		next_poll = now + (P.state == PAY_BANK ? POLL_MS : 2000);
 	} else {
+		// Steam a veces explica el motivo (es lo que enseña su web)
+		const cJSON *d = cJSON_GetObjectItemCaseSensitive(r, "errorDescription");
+		P.err_desc[0] = 0;
+		if (cJSON_IsString(d)) {
+			size_t n = 0;
+			bool tag = false;
+			for (const char *c = d->valuestring; *c && n < sizeof P.err_desc - 1; c++) {
+				if (*c == '<') { tag = true; if (n && P.err_desc[n - 1] != ' ') P.err_desc[n++] = ' '; continue; }
+				if (*c == '>') { tag = false; continue; }
+				if (!tag) P.err_desc[n++] = *c;
+			}
+			while (n && P.err_desc[n - 1] == ' ') n--;
+			P.err_desc[n] = 0;
+		}
 		fail(detail, "");
 	}
 }
@@ -276,6 +290,9 @@ void pay_update(void)
 	if (req && req->state >= REQ_DONE) {
 		root = req->state == REQ_DONE && req->data ? cJSON_Parse(req->data) : NULL;
 		bool net_fail = !root;
+		// Lo que responde Steam en cada paso, para entender un pago que falla (no lleva datos de la
+		// tarjeta: solo el resultado, el código de detalle y el recibo)
+		if (req->data && step != ST_PRICE) netlog("pago: respuesta %.400s", req->data);
 		if (step == ST_INIT) {
 			const char *t = NULL;
 			const cJSON *tv = cJSON_GetObjectItemCaseSensitive(root, "transid");
@@ -300,6 +317,8 @@ void pay_update(void)
 				long long bal = jll(root, "steamAccountBalance");
 				if (bal) P.wallet_cents = bal;
 				P.short_wallet = P.method == PM_WALLET && P.total_cents > P.wallet_cents;
+				netlog("pago: total %lld, metodo %s, CVV %s", P.total_cents, P.method == PM_WALLET ? "cartera" : page.card_type,
+					P.need_cvv ? "pedido" : "no pedido");
 				set_state(PAY_REVIEW);
 			} else {
 				fail(root ? jint(root, "purchaseresultdetail") : 0, net_fail ? req->err : "");

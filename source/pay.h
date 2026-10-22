@@ -44,6 +44,7 @@ typedef struct {
 
 	int detail;                 // EPurchaseResultDetail si falló
 	char err[64];               // fallo técnico (para el registro y la pantalla)
+	char err_desc[192];         // el motivo que da Steam, si lo da (errorDescription, sin HTML)
 	bool maybe_paid;            // falló al comprobar el estado: puede que se haya cobrado
 } PayInfo;
 

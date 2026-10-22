@@ -15,6 +15,7 @@ typedef struct {
 	char lang[8];        // "sys", "es", "en", "ja"
 	char country[4];     // último país que dijo Steam
 	char birth[12];      // AAAA-MM-DD (por si algún día Steam la pide)
+	bool reqs_mac;       // requisitos de macOS en vez de los de Windows
 } Config;
 
 extern Config g_cfg;

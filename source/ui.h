@@ -44,6 +44,9 @@ float ui_text(float x, float y, const char *s, float sz, u32 col, int align, flo
 // Texto en varias líneas. Devuelve el número de líneas (dibuja como mucho max_lines, la última con «…»).
 int ui_text_wrap(float x, float y, float w, const char *s, float sz, u32 col, int max_lines, float line_h);
 int ui_text_lines(const char *s, float sz, float w);
+int ui_text_wrap_center(float cx, float y, float w, const char *s, float sz, u32 col, int max_lines, float lh);
+// Siguiente línea que cabe en w: devuelve los bytes consumidos y en *len los que se dibujan
+size_t ui_next_line(const char *s, float sz, float w, size_t *len);
 
 // Texto maquetado una sola vez (para lo que se dibuja en muchos frames, como las reseñas)
 typedef struct { C2D_Text line[4]; int n; } TextBlock;

@@ -79,6 +79,7 @@ void config_load(void)
 		if (!strcmp(line, "lang")) snprintf(g_cfg.lang, sizeof g_cfg.lang, "%s", v);
 		else if (!strcmp(line, "country")) snprintf(g_cfg.country, sizeof g_cfg.country, "%s", v);
 		else if (!strcmp(line, "birth")) snprintf(g_cfg.birth, sizeof g_cfg.birth, "%s", v);
+		else if (!strcmp(line, "reqs")) g_cfg.reqs_mac = !strcmp(v, "mac");
 	}
 	fclose(f);
 }
@@ -87,7 +88,7 @@ bool config_save(void)
 {
 	FILE *f = fopen(APP_DIR "/config.ini.tmp", "w");
 	if (!f) return false;
-	fprintf(f, "lang=%s\ncountry=%s\nbirth=%s\n", g_cfg.lang, g_cfg.country, g_cfg.birth);
+	fprintf(f, "lang=%s\ncountry=%s\nbirth=%s\nreqs=%s\n", g_cfg.lang, g_cfg.country, g_cfg.birth, g_cfg.reqs_mac ? "mac" : "win");
 	fclose(f);
 	remove(APP_DIR "/config.ini");
 	return rename(APP_DIR "/config.ini.tmp", APP_DIR "/config.ini") == 0;

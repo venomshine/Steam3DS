@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 C2D_Font g_font = NULL;     // NULL = fuente del sistema
 float g_time, g_dt;
@@ -156,7 +157,7 @@ static bool no_line_start(u32 cp)
 }
 
 // Calcula dónde termina la siguiente línea que cabe en w. Devuelve bytes consumidos; *len = bytes a dibujar.
-static size_t next_line(const char *s, float sz, float w, size_t *len)
+size_t ui_next_line(const char *s, float sz, float w, size_t *len)
 {
 	float x = 0;
 	size_t i = 0, last_break = 0, last_break_len = 0;
@@ -191,8 +192,91 @@ int ui_text_lines(const char *s, float sz, float w)
 	int lines = 0;
 	while (s && *s) {
 		size_t len;
-		s += next_line(s, sz, w, &len);
+		s += ui_next_line(s, sz, w, &len);
 		lines++;
+	}
+	return lines;
+}
+
+// Palabras cortas que no pueden quedar justo antes de «…» (la frase se quedaría colgando)
+static bool is_connector(const char *w, size_t n)
+{
+	static const char *const list[] = {
+		"y", "e", "o", "u", "a", "de", "del", "la", "el", "lo", "los", "las", "en", "con", "por", "para", "que",
+		"al", "un", "una", "ni", "su", "sus", "se", "tu", "mi", "sin", "como", "más", "pero",
+		"the", "of", "and", "to", "in", "an", "with", "for", "or", "on", "at", "by", "your", "its", "from", "as", "is",
+	};
+	for (size_t i = 0; i < sizeof list / sizeof *list; i++)
+		if (strlen(list[i]) == n && !strncasecmp(w, list[i], n)) return true;
+	return false;
+}
+
+// Última línea de un texto que no cabe entero: solo palabras completas. Si hay un final de frase
+// en la segunda mitad de la línea, se corta ahí sin «…»; si no, en la última palabra con sentido
+// (sin conectores ni comas al final) y con «…».
+static void last_line(float x, float y, float w, const char *s, float sz, u32 col)
+{
+	char tmp[512];
+	size_t n = strlen(s);
+	if (n > sizeof tmp - 8) n = sizeof tmp - 8;
+	memcpy(tmp, s, n);
+	tmp[n] = 0;
+	for (char *p = tmp; *p; p++) if (*p == '\n') *p = ' ';
+	char *t = tmp;
+	while (*t == ' ') t++;
+	float ell = ui_text_w("…", sz);
+	// Hasta dónde caben palabras enteras (dejando sitio para «…»)
+	size_t fit = 0, i = 0, len = strlen(t);
+	while (i <= len) {
+		if (i == len || t[i] == ' ') {
+			if (text_w_n(t, i, sz) + ell > w) break;
+			fit = i;
+		}
+		i++;
+	}
+	if (fit == 0) {
+		ui_text(x, y, t, sz, col, AL_LEFT, w);   // una sola palabra larguísima
+		return;
+	}
+	// ¿Un final de frase en la segunda mitad?
+	for (size_t k = fit; k > fit / 2; k--) {
+		char c = t[k - 1];
+		if (c == '.' || c == '!' || c == '?') {
+			draw_n(x, y, t, k, sz, col);
+			return;
+		}
+	}
+	// Quita conectores y signos colgando del final
+	size_t end = fit;
+	for (int guard = 0; guard < 4; guard++) {
+		while (end > 0 && (t[end - 1] == ' ' || t[end - 1] == ',' || t[end - 1] == ';' || t[end - 1] == ':' || t[end - 1] == '-'))
+			end--;
+		size_t ws = end;
+		while (ws > 0 && t[ws - 1] != ' ') ws--;
+		if (ws > 0 && is_connector(t + ws, end - ws)) end = ws;
+		else break;
+	}
+	if (end == 0) end = fit;
+	memcpy(t + end, "…", 4);
+	draw_n(x, y, t, end + 3, sz, col);
+}
+
+// Como ui_text_wrap pero cada línea centrada en cx
+int ui_text_wrap_center(float cx, float y, float w, const char *s, float sz, u32 col, int max_lines, float lh)
+{
+	if (lh <= 0) lh = ui_line_h(sz);
+	int lines = 0;
+	while (s && *s && (max_lines <= 0 || lines < max_lines)) {
+		size_t len;
+		size_t used = ui_next_line(s, sz, w, &len);
+		if (!used) break;
+		char tmp[256];
+		size_t n = len < sizeof tmp - 1 ? len : sizeof tmp - 1;
+		memcpy(tmp, s, n);
+		tmp[n] = 0;
+		ui_text(cx, y + lines * lh, tmp, sz, col, AL_CENTER, 0);
+		lines++;
+		s += used;
 	}
 	return lines;
 }
@@ -203,16 +287,10 @@ int ui_text_wrap(float x, float y, float w, const char *s, float sz, u32 col, in
 	int lines = 0;
 	while (s && *s) {
 		size_t len;
-		size_t used = next_line(s, sz, w, &len);
+		size_t used = ui_next_line(s, sz, w, &len);
 		if (max_lines > 0 && lines == max_lines - 1 && s[used]) {
-			// Última línea visible: el resto con «…»
-			char tmp[512];
-			size_t n = strlen(s);
-			if (n > sizeof tmp - 1) n = sizeof tmp - 1;
-			memcpy(tmp, s, n);
-			tmp[n] = 0;
-			for (char *p = tmp; *p; p++) if (*p == '\n') *p = ' ';
-			ui_text(x, y + lines * lh, tmp, sz, col, AL_LEFT, w);
+			// Última línea visible y sobra texto: se corta con sentido (ver last_line)
+			last_line(x, y + lines * lh, w, s, sz, col);
 			return lines + 1;
 		}
 		draw_n(x, y + lines * lh, s, len, sz, col);
@@ -229,7 +307,7 @@ void ui_block_parse(TextBlock *b, C2D_TextBuf buf, const char *s, float sz, floa
 	b->n = 0;
 	while (s && *s && b->n < max_lines) {
 		size_t len;
-		size_t used = next_line(s, sz, w, &len);
+		size_t used = ui_next_line(s, sz, w, &len);
 		char tmp[512];
 		if (b->n == max_lines - 1 && s[used]) {
 			// Última línea: lo que quepa y «…»
@@ -387,6 +465,9 @@ static void ring(float cx, float cy, float r, float th, u32 c)
 void ui_icon(Icon ic, float x, float y, float s, u32 c)
 {
 	float u = s / 12.0f;   // los íconos están pensados en una rejilla de 12×12
+	// El texto de la fuente tiene su centro visual algo por debajo de su caja: los iconos se bajan
+	// lo mismo para quedar alineados con el texto que llevan al lado
+	y += s * 0.11f;
 #define X(v) (x + (v) * u)
 #define Y(v) (y + (v) * u)
 	switch (ic) {

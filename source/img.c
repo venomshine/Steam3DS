@@ -6,6 +6,8 @@
 #include <string.h>
 
 #define SLOTS 14
+#define ICON_SLOTS 40   // aparte: los iconos pequeños (biblioteca, avatares) no echan a las imágenes grandes
+#define ALL_SLOTS (SLOTS + ICON_SLOTS)
 
 typedef struct {
 	char *url;
@@ -18,7 +20,7 @@ typedef struct {
 	u64 used;
 } Slot;
 
-static Slot slots[SLOTS];
+static Slot slots[ALL_SLOTS];
 static u64 frame;
 
 void img_init(void) {}
@@ -33,7 +35,7 @@ static void slot_clear(Slot *s)
 
 void img_exit(void)
 {
-	for (int i = 0; i < SLOTS; i++) slot_clear(&slots[i]);
+	for (int i = 0; i < ALL_SLOTS; i++) slot_clear(&slots[i]);
 }
 
 // La imagen llega ya en el orden de la GPU (lo hace el hilo de red): solo se copia
@@ -62,7 +64,7 @@ void img_update(void)
 {
 	frame++;
 	// Como mucho una subida por frame para no dar tirones
-	for (int i = 0; i < SLOTS; i++) {
+	for (int i = 0; i < ALL_SLOTS; i++) {
 		Slot *s = &slots[i];
 		if (!s->req) continue;
 		if (s->req->state == REQ_DONE) {
@@ -82,7 +84,7 @@ void img_update(void)
 
 static Slot *find(const char *url, int max_w)
 {
-	for (int i = 0; i < SLOTS; i++)
+	for (int i = 0; i < ALL_SLOTS; i++)
 		if (slots[i].url && slots[i].max_w == max_w && !strcmp(slots[i].url, url)) return &slots[i];
 	return NULL;
 }
@@ -94,7 +96,8 @@ const Pic *img_get(const char *url, int max_w)
 	if (!s) {
 		// Hueco libre o el que lleva más tiempo sin usarse (nunca uno de este frame)
 		Slot *best = NULL;
-		for (int i = 0; i < SLOTS; i++) {
+		int i0 = max_w <= 64 ? SLOTS : 0, i1 = max_w <= 64 ? ALL_SLOTS : SLOTS;
+		for (int i = i0; i < i1; i++) {
 			Slot *c = &slots[i];
 			if (!c->url) { best = c; break; }
 			if (c->used == frame) continue;
@@ -113,7 +116,7 @@ const Pic *img_get(const char *url, int max_w)
 
 bool img_failed(const char *url)
 {
-	for (int i = 0; url && i < SLOTS; i++)
+	for (int i = 0; url && i < ALL_SLOTS; i++)
 		if (slots[i].url && slots[i].failed && !strcmp(slots[i].url, url)) return true;
 	return false;
 }

@@ -130,6 +130,8 @@ static void row_from_item(const cJSON *it, StoreRow *row)
 	const cJSON *rel = cJSON_GetObjectItemCaseSensitive(it, "release");
 	if (rel && jbool(rel, "is_coming_soon")) row->coming_soon = true;
 	if (rel && jbool(rel, "is_early_access")) row->early = true;
+	const cJSON *as = cJSON_GetObjectItemCaseSensitive(it, "assets");
+	if (as) copy(row->icon, sizeof row->icon, jstr(as, "community_icon"));
 	const cJSON *rv = cJSON_GetObjectItemCaseSensitive(it, "reviews");
 	const cJSON *sf = rv ? cJSON_GetObjectItemCaseSensitive(rv, "summary_filtered") : NULL;
 	if (sf) {
@@ -237,7 +239,7 @@ Req *steam_req_offers(int start, int count)
 	return steam_req_query(Q_OFFERS, start, count);
 }
 
-Req *steam_req_items(const u32 *ids, int n)
+Req *steam_req_items(const u32 *ids, int n, bool assets)
 {
 	cJSON *in = cJSON_CreateObject();
 	cJSON *arr = cJSON_AddArrayToObject(in, "ids");
@@ -249,7 +251,14 @@ Req *steam_req_items(const u32 *ids, int n)
 	cJSON_AddItemToObject(in, "context", context());
 	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
 	cJSON_AddBoolToObject(dr, "include_reviews", true);
+	if (assets) cJSON_AddBoolToObject(dr, "include_assets", true);
 	return service_call("IStoreBrowseService/GetItems", in);
+}
+
+void steam_icon_url(const StoreRow *r, char *out, size_t n)
+{
+	if (r->icon[0]) snprintf(out, n, "https://shared.akamai.steamstatic.com/community_assets/images/apps/%lu/%s.jpg", (unsigned long)r->appid, r->icon);
+	else if (n) out[0] = 0;
 }
 
 Req *steam_req_morelike(u32 appid)
@@ -811,6 +820,7 @@ bool steam_parse_owned(const char *json, RowList *l)
 		copy_utf8(row->name, sizeof row->name, jstr(g, "name"));
 		row->minutes = (int)jnum(g, "playtime_forever", 0);
 		row->last_played = (u32)jnum(g, "rtime_last_played", 0);
+		copy(row->icon, sizeof row->icon, jstr(g, "img_icon_url"));
 		if (row->appid && row->name[0]) l->count++;
 	}
 	qsort(l->rows, l->count, sizeof(StoreRow), cmp_last_played);

@@ -82,11 +82,20 @@ int main(void) {
 	CHECK(steam_parse_rows(slurp("data/search.json"), &sr, false));
 	printf("búsqueda: %d, %s tipo=%d\n", sr.count, sr.count ? sr.rows[0].name : "", sr.count ? sr.rows[0].type : -1);
 	CHECK(sr.count > 0);
-	// Biblioteca: ordenada por la última vez que jugaste
+	// Biblioteca: ordenada por nombre, y con el icono de cada juego
 	RowList ow = {0};
 	CHECK(steam_parse_owned(slurp("data/owned.json"), &ow));
 	printf("biblioteca: %d, primero %s (%d min)\n", ow.count, ow.rows[0].name, ow.rows[0].minutes);
 	CHECK(ow.count == 3 && ow.rows[0].appid == 730 && ow.rows[1].appid == 1091500 && ow.rows[2].appid == 570);
+	char icu[160];
+	steam_icon_url(&ow.rows[0], icu, sizeof icu);
+	CHECK(!strcmp(icu, "https://shared.akamai.steamstatic.com/community_assets/images/apps/730/8dbc71957312bbd3baea65848b545be9eae2a355.jpg"));
+	// Los nombres por GetItems traen el icono si se pide (include_assets)
+	RowList ia = {0};
+	CHECK(steam_parse_rows("{\"response\":{\"store_items\":[{\"appid\":367520,\"name\":\"Hollow Knight\",\"assets\":{\"community_icon\":\"f6ab055c2366237200b1a31cccbd6cf81e436d72\"}}]}}", &ia, false));
+	CHECK(ia.count == 1 && !strcmp(ia.rows[0].icon, "f6ab055c2366237200b1a31cccbd6cf81e436d72"));
+	steam_req_items((u32[]){367520}, 1, true);
+	CHECK(strstr(last_url, "include_assets") != NULL);
 	// Deseados: por prioridad, y la 0 («sin ordenar») al final
 	u32 *ids;
 	int nw = steam_parse_wishlist(slurp("data/wishlist.json"), &ids);

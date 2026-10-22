@@ -21,6 +21,7 @@ typedef struct {
 	bool early;             // sigue en acceso anticipado (dato de Steam, no la etiqueta de los usuarios)
 	int minutes;            // biblioteca: minutos jugados
 	u32 last_played;        // biblioteca: última vez (hora Unix)
+	char icon[44];          // icono del juego (el hash de 32×32 de la comunidad de Steam)
 } StoreRow;
 
 typedef struct {
@@ -124,7 +125,9 @@ bool steam_parse_rows(const char *json, RowList *list, bool append);
 // Ficha
 Req *steam_req_appdetails(u32 appid);
 bool steam_parse_appdetails(const char *json, u32 appid, AppInfo *out);
-Req *steam_req_items(const u32 *ids, int n);      // nombres, precios y reseñas de varios a la vez
+Req *steam_req_items(const u32 *ids, int n, bool assets);   // assets: también el icono
+// URL del icono de 32×32 de una fila (vacía si Steam no lo da)
+void steam_icon_url(const StoreRow *r, char *out, size_t n);      // nombres, precios y reseñas de varios a la vez
 bool steam_parse_review_summary(const char *json, AppInfo *a);
 Req *steam_req_reviews(u32 appid, const char *cursor);
 int steam_parse_reviews(const char *json, Review *out, int max, char *cursor, size_t cursor_sz);

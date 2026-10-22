@@ -259,7 +259,7 @@ static InfoEnt *info_get(u32 appid, bool start)
 	free_e->appid = appid;
 	free_e->used = frame_no;
 	free_e->req = steam_req_appdetails(appid);
-	free_e->sum = steam_req_items(&appid, 1);
+	free_e->sum = steam_req_items(&appid, 1, false);
 	return free_e;
 }
 
@@ -345,7 +345,7 @@ static void tab_more(int ti)
 			if (t->wish_next >= t->nwish) return;
 			int n = t->nwish - t->wish_next;
 			if (n > 50) n = 50;
-			t->list.req = steam_req_items(t->wish + t->wish_next, n);
+			t->list.req = steam_req_items(t->wish + t->wish_next, n, true);
 			t->wish_next += n;
 		} else {
 			if (t->list.count) return;
@@ -358,7 +358,7 @@ static void tab_more(int ti)
 		} else if (t->wish_next < t->nwish) {
 			int n = t->nwish - t->wish_next;
 			if (n > 50) n = 50;
-			t->list.req = steam_req_items(t->wish + t->wish_next, n);
+			t->list.req = steam_req_items(t->wish + t->wish_next, n, false);
 			t->wish_next += n;
 		}
 	} else if (ti == TAB_CART) {
@@ -1291,9 +1291,18 @@ static void draw_store_bottom(void)
 			ui_text(28, vc(y, ROW_H - 1, SZ_BODY - 0.02f), r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 40);
 			continue;
 		}
-		float pw = S.tab == TAB_LIBRARY ? 46 : r->disc > 0 ? 36 + 50 : 56;
+		float pw = S.tab == TAB_LIBRARY ? 58 : r->disc > 0 ? 36 + 50 : 56;
 		float nx = 8;
-		if (r->type == 1 || r->type == 4) {
+		if (S.tab == TAB_LIBRARY) {
+			// El icono del juego, como en la biblioteca de Steam
+			const float is = 20, iy = y + (ROW_H - 1 - is) / 2;
+			char iu[160];
+			steam_icon_url(r, iu, sizeof iu);
+			const Pic *ip = iu[0] ? img_get(iu, 32) : NULL;
+			if (ip) img_draw_cover(ip, nx + 2, iy, is, is, 0.5f);
+			else ui_rrect(nx + 2, iy, is, is, 4, col_alpha(COL_WHITE, 0.07f));
+			nx += is + 10;
+		} else if (r->type == 1 || r->type == 4) {
 			// Etiqueta pequeña para demos y DLC (en Buscar salen mezclados)
 			const char *tag = r->type == 1 ? _("DEMO") : "DLC";
 			float tw = ui_text_w(tag, SZ_TINY) + 8;
@@ -1620,14 +1629,14 @@ static void game_poll(const AppInfo *a)
 		rowlist_free(&S.dlc);
 		S.dlc_for = a->appid;
 		// En un DLC, Extras enseña el juego base que hace falta para usarlo
-		if (a->fullgame) S.dlc.req = steam_req_items(&a->fullgame, 1);
+		if (a->fullgame) S.dlc.req = steam_req_items(&a->fullgame, 1, false);
 		else if (a->ndlc || a->demo) {
 			// La demo (si la hay) va primero, y luego el contenido descargable
 			u32 ids[51];
 			int n = 0;
 			if (a->demo) ids[n++] = a->demo;
 			for (int i = 0; i < a->ndlc && n < 51; i++) ids[n++] = a->dlc[i];
-			S.dlc.req = steam_req_items(ids, n > 50 ? 50 : n);
+			S.dlc.req = steam_req_items(ids, n > 50 ? 50 : n, false);
 		}
 	}
 	if (S.sec == SEC_SIMILAR && S.similar_for != a->appid) {

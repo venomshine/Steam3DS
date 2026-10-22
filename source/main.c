@@ -2199,8 +2199,8 @@ static void draw_shots_bottom(void)
 		draw_round_button(&B_PREV, "L", _("Anterior"), S.shot > 0, S.pressed == BT_PREV);
 		draw_round_button(&B_NEXT, "R", _("Siguiente"), S.shot + 1 < a->nshots, S.pressed == BT_NEXT);
 	}
-	static const char *hh[] = {"← →", "Cambiar", "L R", "Cambiar", "B", "Volver"};
-	draw_hints(hh, 3);
+	static const char *hh[] = {"← →", "Cambiar", "B", "Volver"};
+	draw_hints(hh, 2);
 }
 
 // ============================================================================

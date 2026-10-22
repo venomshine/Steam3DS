@@ -384,6 +384,21 @@ static void add_row(RowList *l, const StoreRow *r)
 	l->rows[l->count++] = *r;
 }
 
+// Juegos añadidos en esta sesión (el último primero): salen arriba en la biblioteca, que es lo
+// que esperas ver al abrirla justo después (Steam los pone al final o por número)
+static u32 added_now[8];
+static int nadded_now;
+
+static void note_added(u32 appid)
+{
+	int j = 0;
+	while (j < nadded_now && added_now[j] != appid) j++;
+	if (j == nadded_now && nadded_now < 8) nadded_now++;
+	if (j >= nadded_now) j = nadded_now - 1;
+	memmove(added_now + 1, added_now, j * sizeof *added_now);
+	added_now[0] = appid;
+}
+
 static void owned_poll(Tab *t)
 {
 	Req *r = t->list.req;
@@ -424,6 +439,13 @@ static void owned_poll(Tab *t)
 			free(ids);
 			return;
 		}
+		for (int k = nadded_now - 1; k >= 0; k--)
+			for (int j = 1; j < n; j++)
+				if (ids[j] == added_now[k]) {
+					memmove(ids + 1, ids, j * sizeof *ids);
+					ids[0] = added_now[k];
+					break;
+				}
 		free(t->wish);
 		t->wish = ids;
 		t->nwish = n;
@@ -435,6 +457,14 @@ static void owned_poll(Tab *t)
 		tab_more(TAB_LIBRARY);
 		return;
 	}
+	for (int k = nadded_now - 1; k >= 0; k--)
+		for (int j = 1; j < t->list.count; j++)
+			if (t->list.rows[j].appid == added_now[k]) {
+				StoreRow row = t->list.rows[j];
+				memmove(t->list.rows + 1, t->list.rows, j * sizeof row);
+				t->list.rows[0] = row;
+				break;
+			}
 	net_release(r);
 	t->list.req = NULL;
 	t->sel_changed = osGetTime();
@@ -3769,6 +3799,7 @@ static void shop_events(void)
 			break;
 		case SH_FREE:
 			if (ev.ok) {
+				note_added(ev.appid);
 				library_changed();
 				snprintf(t, sizeof t, _("¡Ya está en tu biblioteca! %s"), ev.what);
 			} else if (ev.code == 1009) {

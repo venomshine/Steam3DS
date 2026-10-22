@@ -3003,7 +3003,7 @@ enum { SPR_WHEEL, SPR_STEAM, SPR_GLOW, SPR_FLIP };   // SPR_FLIP..+23: flipbook 
 // La válvula en 3D (tools/gen_wheel3d.py): su sombra y 24 fotogramas de giro (3° cada uno) con la
 // luz del bombillo en cada extremo del balanceo
 // (en su propia hoja, wheel3d.t3x)
-enum { W3D_SHADOW, W3D_DIRT, W3D_A, W3D_B = W3D_A + 24 };
+enum { W3D_SHADOW, W3D_DIRT, W3D_CRACK, W3D_A = W3D_CRACK + 3, W3D_B = W3D_A + 24 };
 #define W3D_SIZE    112.0f
 #define WHEEL_PX    100.0f      // tamaño de la válvula en pantalla
 #define WHEEL_R     46.0f       // radio del aro en pantalla
@@ -3030,6 +3030,23 @@ static void splash_shake(float t, float amp, float *dx, float *dy)
 	*dy = e * 0.8f * sinf(u * 2 * (float)M_PI * 23 + 1.3f);
 }
 
+// Los parpadeos del bombillo en el tramo n de BULB_PERIOD s: cuándo empiezan, cuánto bajan y
+// cuánto duran (lo usan la luz y el chisporroteo, para que vayan a la vez)
+#define BULB_PERIOD 2.7f
+static int bulb_dips(u32 n, float *at, float *depth, float *len)
+{
+	float h = ((n * 2654435761u) >> 8 & 0xffff) / 65535.0f;
+	if (h <= 0.35f) return 0;
+	at[0] = n * BULB_PERIOD + 0.4f + h * 1.6f;
+	depth[0] = 0.25f + 0.25f * h;
+	len[0] = 0.07f;
+	if (h <= 0.7f) return 1;
+	at[1] = at[0] + 0.12f;
+	depth[1] = depth[0] * 0.6f;
+	len[1] = 0.05f;
+	return 2;
+}
+
 static void bulb_update(float t)
 {
 	bulb.swing = 0.5f + 0.5f * sinf(t * 2 * (float)M_PI / 4.0f);
@@ -3041,15 +3058,10 @@ static void bulb_update(float t)
 	bulb.ly = -sinf(th);
 	// Tiembla un poco siempre y, a ratos, pierde fuerza un instante (a veces dos seguidos)
 	float f = 0.96f + 0.04f * sinf(t * 23);
-	const float period = 2.7f;
-	u32 n = (u32)(t / period);
-	float in = t - n * period;
-	float h = ((n * 2654435761u) >> 8 & 0xffff) / 65535.0f;
-	if (h > 0.35f) {
-		float at = 0.4f + h * 1.6f, depth = 0.25f + 0.25f * h;
-		if (in >= at && in < at + 0.07f) f -= depth;
-		if (h > 0.7f && in >= at + 0.12f && in < at + 0.17f) f -= depth * 0.6f;
-	}
+	float at[2], depth[2], len[2];
+	int nd = bulb_dips((u32)(t / BULB_PERIOD), at, depth, len);
+	for (int i = 0; i < nd; i++)
+		if (t >= at[i] && t < at[i] + len[i]) f -= depth[i];
 	// y parpadea con el golpe
 	if (u > 0 && u < 0.3f) f -= 0.4f * expf(-u * 14) * (0.6f + 0.4f * sinf(u * 90));
 	bulb.power = f;
@@ -3225,6 +3237,52 @@ static void draw_wheel3d(float cx, float cy, float scale, float spin, float alph
 	C2D_DrawImageAtRotated(C2D_SpriteSheetGetImage(wheel_sheet, W3D_DIRT), cx, cy, 0.5f, spin, &tint, s, s);
 }
 
+// El golpe en la pared: el yeso se raja desde el aro (las grietas corren en tres etapas), sale una
+// nube de polvo de yeso que se abre y sube despacio, y caen cascotes. Las grietas y el polvo van
+// detrás de la válvula; los cascotes, delante
+static void draw_impact_back(float t, float cx, float cy)
+{
+	float u = t - SPLASH_HIT;
+	if (u < 0 || !wheel_sheet) return;
+	int st = u < 0.035f ? 0 : u < 0.08f ? 1 : 2;
+	C2D_ImageTint tint;
+	C2D_PlainImageTint(&tint, C2D_Color32(0, 0, 0, 0xff), 1 - bulb.power);
+	C2D_DrawImageAt(C2D_SpriteSheetGetImage(wheel_sheet, W3D_CRACK + st), cx - 100, cy - 100, 0.5f, &tint, 1, 1);
+	for (int i = 0; i < 10; i++) {
+		const float life = 2.2f;
+		float age = u - i * 0.012f;
+		if (age < 0 || age > life) continue;
+		float p = age / life;
+		float a = i * 0.628f + hrand(i, 31) * 0.5f;
+		float r = 48 + 34 * (1 - expf(-age * 2.4f));
+		float x = cx + cosf(a) * r, y = cy + sinf(a) * r * 0.9f - 16 * age - 6 * age * age;
+		float al = clampf(age / 0.06f, 0, 1) * powf(1 - p, 1.6f) * 0.42f;
+		// Yeso gris en penumbra, con el lado del bombillo algo más cálido
+		u32 c = col_lerp(C2D_Color32(0x3a, 0x3c, 0x40, 0xff), C2D_Color32(0xb8, 0xa8, 0x90, 0xff),
+			(0.25f + 0.35f * clampf(cosf(a) * bulb.lx + sinf(a) * bulb.ly, 0, 1)) * bulb.power);
+		draw_sprite_ex(SPR_STEAM, x, y, 0.35f + 1.2f * (1 - expf(-age * 1.6f)), 0.3f + 0.9f * (1 - expf(-age * 1.6f)),
+			hrand(i, 32) * 6.28f + age * 0.4f, col_alpha(c, al), 1);
+	}
+}
+
+static void draw_impact_front(float t, float cx, float cy)
+{
+	float u = t - SPLASH_HIT;
+	if (u < 0 || u > 1.6f) return;
+	for (int i = 0; i < 18; i++) {
+		float a = hrand(i, 41) * 6.28f;
+		float v = 40 + 90 * hrand(i, 42), up = 30 + 80 * hrand(i, 43);
+		float age = u - hrand(i, 44) * 0.05f;
+		if (age < 0) continue;
+		float x = cx + cosf(a) * (47 + v * age), y = cy + sinf(a) * 47 - up * age + 0.5f * 520 * age * age;
+		if (y > SCR_H + 4) continue;
+		float sz = 1.2f + 2.2f * hrand(i, 45);
+		float al = 1 - clampf((age - 0.9f) / 0.5f, 0, 1);
+		u32 c = col_lerp(C2D_Color32(0x2c, 0x2b, 0x2a, 0xff), C2D_Color32(0x9c, 0x92, 0x84, 0xff), 0.5f * hrand(i, 46) * bulb.power);
+		ui_rect(x - sz / 2, y - sz / 2, sz, sz, col_alpha(c, al));
+	}
+}
+
 static void draw_splash_top(void)
 {
 	float t = splash_t;
@@ -3296,7 +3354,9 @@ static void draw_splash_top(void)
 	// coge velocidad
 	float u = t - SPLASH_SPIN;
 	float spin = u <= 0 ? 0 : u < 0.8f ? 0.9f * u * u : 0.576f + 1.44f * (u - 0.8f);
+	draw_impact_back(t, cx, cy);
 	draw_wheel3d(cx, cy, scale, spin, pop, lift);
+	draw_impact_front(t, cx, cy);
 
 	// Lo que ya ha salido del aro, por delante
 	for (int i = 0; i < nb; i++) draw_puff(&burst[i], cx, cy, 0.9f * puff_front(&burst[i], 0), false);

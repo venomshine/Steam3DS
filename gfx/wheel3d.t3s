@@ -1,6 +1,9 @@
 --atlas -f rgba8888 -z auto
 wheel_shadow.png
 wheel_dirt.png
+crack0.png
+crack1.png
+crack2.png
 w3d/a00.png
 w3d/a01.png
 w3d/a02.png

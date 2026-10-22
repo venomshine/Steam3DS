@@ -1855,7 +1855,7 @@ static void draw_summary_top(const AppInfo *a)
 	if (y < block) y = block;
 	y += 6;
 
-	// Fecha · estudio, y qué amigos lo tienen
+	// Qué amigos lo tienen (a la izquierda) y fecha · estudio, siempre a la derecha
 	char t[112], fr[160];
 	snprintf(t, sizeof t, "%s%s%s", a->release, a->release[0] && a->developer[0] ? " · " : "", a->developer);
 	if (friends_text(fr, sizeof fr)) {
@@ -1863,7 +1863,7 @@ static void draw_summary_top(const AppInfo *a)
 		float fw = ui_text(28, y, fr, SZ_SMALL, FR.playing ? COL_LIME : COL_TXT, AL_LEFT, 230);
 		ui_text(TOP_W - 12, y, t, SZ_SMALL, COL_DIM, AL_RIGHT, TOP_W - 52 - fw);
 	} else {
-		ui_text(12, y, t, SZ_SMALL, COL_DIM, AL_LEFT, TOP_W - 24);
+		ui_text(TOP_W - 12, y, t, SZ_SMALL, COL_DIM, AL_RIGHT, TOP_W - 24);
 	}
 	y += 18;
 	ui_hline(12, y, TOP_W - 24, C2D_Color32(0xff, 0xff, 0xff, 0x26));

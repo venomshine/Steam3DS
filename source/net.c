@@ -33,6 +33,8 @@ static LightLock soc_lock;
 static LightLock log_lock;
 static LightLock ref_lock;
 static volatile const char *status_text = "";
+long long g_server_delta;
+bool g_server_known;
 
 // ----------------------------------------------------------------------------
 // Registro en la SD
@@ -308,6 +310,27 @@ static size_t on_header(char *p, size_t sz, size_t n, void *ud)
 			r->country[0] = c[0];
 			r->country[1] = c[1];
 			r->country[2] = 0;
+		}
+	}
+	// La hora de verdad (UTC) viene en la cabecera Date: la de la consola es la local y puede ir mal
+	static const char dk[] = "date:";
+	if (len > 30 && strncasecmp(p, dk, sizeof(dk) - 1) == 0) {
+		static const char *mon[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+		char m[4] = "";
+		int d, y, hh, mm, ss;
+		if (sscanf(p + 5, " %*3s, %d %3s %d %d:%d:%d", &d, m, &y, &hh, &mm, &ss) == 6) {
+			int mi = 0;
+			while (mi < 12 && strcmp(m, mon[mi])) mi++;
+			if (mi < 12) {
+				// Días desde 1970 (algoritmo de días civiles)
+				int yy = y - (mi < 2), era = yy / 400, yoe = yy - era * 400;
+				int doy = (153 * (mi + (mi > 1 ? -2 : 10)) + 2) / 5 + d - 1;
+				int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+				long long days = (long long)era * 146097 + doe - 719468;
+				long long t = days * 86400 + hh * 3600 + mm * 60 + ss;
+				g_server_delta = t - (long long)time(NULL);
+				g_server_known = true;
+			}
 		}
 	}
 	static const char er[] = "x-eresult:";

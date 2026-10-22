@@ -56,6 +56,9 @@ void net_release(Req *r);
 // Estado de la conexión, para mostrar el motivo real en pantalla.
 bool net_wifi_ok(void);
 bool net_busy(void);           // hay algo descargándose
+// Hora UTC según los servidores de Steam = time(NULL) + g_server_delta (cuando g_server_known)
+extern long long g_server_delta;
+extern bool g_server_known;
 const char *net_status_text(void);
 
 char *url_escape(const char *s);   // malloc

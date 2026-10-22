@@ -3238,8 +3238,9 @@ static void draw_wheel3d(float cx, float cy, float scale, float spin, float alph
 	C2D_DrawImageAtRotated(C2D_SpriteSheetGetImage(wheel_sheet, W3D_DIRT), cx, cy, 0.5f, spin, &tint, s, s);
 }
 
-// El golpe en la pared: el yeso se raja desde el aro (las grietas corren en tres etapas), sale una
-// nube de polvo de yeso que se abre y sube despacio, y caen cascotes. Las grietas y el polvo van
+// El golpe en la pared: el yeso se raja desde el centro, donde se clava el vástago (las grietas
+// corren en tres etapas por detrás de los radios y pasan del aro), sale una nube de polvo de yeso
+// que se abre entre los radios y sube despacio, y caen cascotes. Las grietas y el polvo van
 // detrás de la válvula; los cascotes, delante
 static void draw_impact_back(float t, float cx, float cy)
 {
@@ -3255,7 +3256,7 @@ static void draw_impact_back(float t, float cx, float cy)
 		if (age < 0 || age > life) continue;
 		float p = age / life;
 		float a = i * 0.628f + hrand(i, 31) * 0.5f;
-		float r = 48 + 34 * (1 - expf(-age * 2.4f));
+		float r = 16 + 66 * (1 - expf(-age * 2.4f));
 		float x = cx + cosf(a) * r, y = cy + sinf(a) * r * 0.9f - 16 * age - 6 * age * age;
 		float al = clampf(age / 0.06f, 0, 1) * powf(1 - p, 1.6f) * 0.42f;
 		// Yeso gris en penumbra, con el lado del bombillo algo más cálido
@@ -3275,7 +3276,7 @@ static void draw_impact_front(float t, float cx, float cy)
 		float v = 40 + 90 * hrand(i, 42), up = 30 + 80 * hrand(i, 43);
 		float age = u - hrand(i, 44) * 0.05f;
 		if (age < 0) continue;
-		float x = cx + cosf(a) * (47 + v * age), y = cy + sinf(a) * 47 - up * age + 0.5f * 520 * age * age;
+		float x = cx + cosf(a) * (16 + v * age), y = cy + sinf(a) * 16 - up * age + 0.5f * 520 * age * age;
 		if (y > SCR_H + 4) continue;
 		float sz = 1.2f + 2.2f * hrand(i, 45);
 		float al = 1 - clampf((age - 0.9f) / 0.5f, 0, 1);

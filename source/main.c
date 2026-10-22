@@ -1769,6 +1769,13 @@ static void draw_reqs_top(const AppInfo *a)
 		if (nrc) draw_req_col(nmn ? 206 : 12, 46, nmn ? 182 : 376, _("RECOMENDADO"), rc, nrc);
 	}
 }
+// Alto de la tarjeta de una opinión: según las líneas de texto que tenga (hasta tres)
+static float review_h(int i)
+{
+	int n = S.rtext[i].n < 1 ? 1 : S.rtext[i].n;
+	return 26 + 12 * n;
+}
+
 static void draw_reviews_top(const AppInfo *a)
 {
 	if (a->review_label[0]) {
@@ -1790,7 +1797,7 @@ static void draw_reviews_top(const AppInfo *a)
 	float y = top - S.rscroll;
 	for (int i = 0; i < S.nreviews; i++) {
 		const Review *r = &S.reviews[i];
-		float h = 20 + 3 * 12 + 6;
+		float h = review_h(i);
 		if (y + h > top && y < bottom) {
 			bool on = i == S.rsel;
 			ui_rrect(12, y, TOP_W - 24, h, 10, col_alpha(COL_WHITE, on ? 0.10f + 0.035f * sinf(g_time * 2.4f) : 0.045f));
@@ -4015,8 +4022,9 @@ int main(int argc, char **argv)
 				if (y + rh > t + vis) t = y + rh - vis;
 				S.lscroll = approach(S.lscroll, t, 18);
 			}
-			float card = 20 + 3 * 12 + 6 + 5, rvis = SCR_H - 20 - 52;
-			float ry = S.rsel * card, rt = S.rscroll;
+			float rvis = SCR_H - 20 - 52, ry = 0, rt = S.rscroll;
+			for (int i = 0; i < S.rsel && i < S.nreviews; i++) ry += review_h(i) + 5;
+			float card = S.rsel < S.nreviews ? review_h(S.rsel) + 5 : 0;
 			if (ry < rt) rt = ry;
 			if (ry + card > rt + rvis) rt = ry + card - rvis;
 			S.rscroll = approach(S.rscroll, rt, 18);

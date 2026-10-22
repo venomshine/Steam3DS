@@ -2255,6 +2255,7 @@ static void draw_overlays_bottom(void)
 		if (S.menu_anim > 0.01f) {
 			int items[8];
 			base = menu_y(menu_items(items)) - th - 6;
+			if (base < 4) base = 4;
 		}
 		float x = (BOT_W - w) / 2, y = base + (1 - in) * 16;
 		fx_panel(x, y, w, th, 13, a);
@@ -2273,8 +2274,8 @@ static void draw_overlays_bottom(void)
 static bool key_repeat(u32 down, u32 held, u32 mask);
 
 enum { MI_LOGIN, MI_PROFILE, MI_LIBRARY, MI_WISHLIST, MI_CART, MI_LOGOUT, MI_REQS, MI_EXIT };
-#define MENU_ROW 30
-#define MENU_HEAD 44
+#define MENU_ROW 26
+#define MENU_HEAD 42
 
 static int menu_items(int *out)
 {
@@ -2298,7 +2299,8 @@ static int menu_items(int *out)
 
 static float menu_y(int n)
 {
-	return SCR_H - 18 - (MENU_HEAD + n * MENU_ROW + 8);
+	// El panel llega hasta abajo (tapa la barra de botones): con sesión son siete opciones
+	return SCR_H - (MENU_HEAD + n * MENU_ROW + 10);
 }
 
 static void open_login(void)

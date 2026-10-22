@@ -94,12 +94,13 @@ def valve_logo(size, angle=-90.0, spokes=5, light=False, square=False):
 
     La geometría está medida sobre el logo oficial en un lienzo de 1500. Devuelve RGBA de
     size×size (a 8×). light: el círculo en el azul clarito de la válvula de antes (para el banner).
-    square: en vez del círculo, el cuadrado de bordes redondos de los iconos de la 3DS, con las
-    válvulas y la biela centradas y algo más grandes (el brazo sigue saliendo por la izquierda)."""
+    square: en vez del círculo, el cuadrado de bordes redondos de los iconos de la 3DS, con el
+    mismo encuadre que el oficial y algo más grande (el brazo sigue saliendo por la izquierda)."""
     s = size * K
     f = s / 1500.0
-    # Encuadre: en el cuadrado se centra lo que se ve (válvulas y biela: 347..1236 × 316..1205)
-    z, ox, oy = (1.16, 791.5, 760.75) if square else (1.0, 750.0, 750.0)
+    # Encuadre: en el cuadrado, el mismo que en el círculo oficial (centrado en su centro, no en la
+    # caja de las válvulas: el brazo que sale por la izquierda equilibra que vayan algo a la derecha)
+    z, ox, oy = (1.16, 749.5, 749.0) if square else (1.0, 750.0, 750.0)
 
     def P(x, y):
         return (((x - ox) * z + 750) * f, ((y - oy) * z + 750) * f)

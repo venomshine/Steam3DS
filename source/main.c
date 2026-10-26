@@ -526,6 +526,14 @@ static void lib_sort(Tab *t)
 		}
 }
 
+// Lo que la tienda sabe que tienes también trae DLC, bandas sonoras, vídeos o hardware: en la
+// biblioteca, como en la de Steam, solo van los juegos, demos, mods, programas y betas
+// (tipos de la tienda: 0 juego, 1 demo, 2 mod, 4 DLC, 6 programa, 11 música, 12 beta…)
+static bool lib_type_ok(int type)
+{
+	return type == 0 || type == 1 || type == 2 || type == 6 || type == 12;
+}
+
 static void owned_poll(Tab *t)
 {
 	Req *r = t->list.req;
@@ -533,7 +541,12 @@ static void owned_poll(Tab *t)
 	if (t->lib_stage == 2) {
 		// Los nombres llegan de 50 en 50: se piden todos seguidos para poder ordenar por nombre
 		bool fail = r->state != REQ_DONE;
+		int before = t->list.count;
 		list_poll(&t->list, true);
+		int n = before;
+		for (int i = before; i < t->list.count; i++)
+			if (lib_type_ok(t->list.rows[i].type)) t->list.rows[n++] = t->list.rows[i];
+		t->list.count = n;
 		t->list.total = t->lib_base + t->nwish;
 		t->list.end = t->wish_next >= t->nwish;
 		lib_sort(t);

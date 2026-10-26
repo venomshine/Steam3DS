@@ -542,33 +542,17 @@ static void jerr_exit(j_common_ptr c)
 
 static bool decode_jpeg(Req *r);
 
-// PNG (los marcos de avatar de Steam, con transparencia; de los animados solo el primer fotograma)
-// Se reduce a la mitad hasta caber en max_w y va en mosaico RGBA8 (en memoria: A, B, G, R)
-static bool decode_png(Req *r)
+// Imagen RGBA (fila a fila) a la textura: se reduce a la mitad hasta caber en max_w y va en mosaico
+// RGBA8 (en memoria: A, B, G, R). Suelta src
+static bool tile_rgba(Req *r, u8 *src, int sw0, int sh0)
 {
-	png_image im;
-	memset(&im, 0, sizeof im);
-	im.version = PNG_IMAGE_VERSION;
-	if (!png_image_begin_read_from_memory(&im, r->data, r->len)) return false;
-	im.format = PNG_FORMAT_RGBA;
-	int sw0 = im.width, sh0 = im.height;
-	if (sw0 > 2048 || sh0 > 2048) {
-		png_image_free(&im);
-		return false;
-	}
-	u8 *src = malloc(PNG_IMAGE_SIZE(im));
-	if (!src || !png_image_finish_read(&im, NULL, src, 0, NULL)) {
-		free(src);
-		png_image_free(&im);
-		return false;
-	}
 	int f = 1;
 	while (r->jpeg_max_w > 0 && sw0 / (f * 2) >= r->jpeg_max_w) f *= 2;
 	int w = sw0 / f, h = sh0 / f;
 	int tw = 8, th = 8;
 	while (tw < w) tw <<= 1;
 	while (th < h) th <<= 1;
-	u8 *dst = tw <= 1024 && th <= 1024 ? calloc((size_t)tw * th, 4) : NULL;
+	u8 *dst = w > 0 && h > 0 && tw <= 1024 && th <= 1024 ? calloc((size_t)tw * th, 4) : NULL;
 	if (!dst) {
 		free(src);
 		return false;
@@ -609,9 +593,176 @@ static bool decode_png(Req *r)
 	return true;
 }
 
+// PNG (los marcos de avatar de Steam, con transparencia; de los animados solo el primer fotograma)
+static bool decode_png(Req *r)
+{
+	png_image im;
+	memset(&im, 0, sizeof im);
+	im.version = PNG_IMAGE_VERSION;
+	if (!png_image_begin_read_from_memory(&im, r->data, r->len)) return false;
+	im.format = PNG_FORMAT_RGBA;
+	int sw0 = im.width, sh0 = im.height;
+	if (sw0 > 2048 || sh0 > 2048) {
+		png_image_free(&im);
+		return false;
+	}
+	u8 *src = malloc(PNG_IMAGE_SIZE(im));
+	if (!src || !png_image_finish_read(&im, NULL, src, 0, NULL)) {
+		free(src);
+		png_image_free(&im);
+		return false;
+	}
+	return tile_rgba(r, src, sw0, sh0);
+}
+
+// GIF (ilustraciones de los perfiles): el primer fotograma, con su transparencia
+static bool decode_gif(Req *r)
+{
+	const u8 *d = (const u8 *)r->data;
+	size_t n = r->len, p = 13;
+	if (n < 13 || memcmp(d, "GIF8", 4)) return false;
+	int W = d[6] | d[7] << 8, H = d[8] | d[9] << 8;
+	if (W <= 0 || H <= 0 || W > 2048 || H > 2048) return false;
+	const u8 *gct = NULL;
+	int gsize = 0, transp = -1;
+	if (d[10] & 0x80) {
+		gsize = 2 << (d[10] & 7);
+		gct = d + p;
+		p += 3 * gsize;
+	}
+	while (p < n) {
+		u8 b = d[p++];
+		if (b == 0x21) {   // extensión (de la de control sale el color transparente)
+			if (p >= n) return false;
+			u8 label = d[p++];
+			if (label == 0xF9 && p + 4 < n && d[p] == 4 && (d[p + 1] & 1)) transp = d[p + 4];
+			while (p < n && d[p]) p += d[p] + 1;
+			p++;
+			continue;
+		}
+		if (b != 0x2C || p + 9 > n) return false;
+		int ix = d[p] | d[p + 1] << 8, iy = d[p + 2] | d[p + 3] << 8, iw = d[p + 4] | d[p + 5] << 8, ih = d[p + 6] | d[p + 7] << 8;
+		u8 lf = d[p + 8];
+		p += 9;
+		const u8 *ct = gct;
+		int csize = gsize;
+		if (lf & 0x80) {
+			csize = 2 << (lf & 7);
+			ct = d + p;
+			p += 3 * csize;
+		}
+		if (!ct || p >= n || iw <= 0 || ih <= 0 || (size_t)(ct - d) + 3 * (size_t)csize > n) return false;
+		int minc = d[p++];
+		if (minc < 2 || minc > 8) return false;
+		size_t npix = (size_t)iw * ih;
+		u8 *idx = calloc(npix, 1);
+		u16 *prefix = malloc(4096 * sizeof *prefix);
+		u8 *suffix = malloc(4096), *stack = malloc(4097);
+		if (!idx || !prefix || !suffix || !stack) {
+			free(idx), free(prefix), free(suffix), free(stack);
+			return false;
+		}
+		// LZW
+		int clear = 1 << minc, eoi = clear + 1, avail = clear + 2, bits_c = minc + 1, mask = (1 << bits_c) - 1, old = -1;
+		u8 first = 0;
+		for (int i = 0; i < clear; i++) suffix[i] = (u8)i, prefix[i] = 0;
+		u32 datum = 0;
+		int bits = 0, blk = 0;
+		size_t out = 0;
+		while (out < npix) {
+			while (bits < bits_c) {
+				if (!blk) {
+					if (p >= n || !(blk = d[p++])) goto done;
+				}
+				if (p >= n) goto done;
+				datum |= (u32)d[p++] << bits;
+				bits += 8;
+				blk--;
+			}
+			int code = datum & mask;
+			datum >>= bits_c;
+			bits -= bits_c;
+			if (code == clear) {
+				bits_c = minc + 1;
+				mask = (1 << bits_c) - 1;
+				avail = clear + 2;
+				old = -1;
+				continue;
+			}
+			if (code == eoi) break;
+			if (old < 0) {
+				if (code >= clear) break;
+				idx[out++] = first = suffix[code];
+				old = code;
+				continue;
+			}
+			if (code > avail) break;
+			int in = code, sp = 0;
+			if (code == avail) {
+				stack[sp++] = first;
+				code = old;
+			}
+			while (code >= clear && sp < 4096) {
+				stack[sp++] = suffix[code];
+				code = prefix[code];
+			}
+			first = suffix[code];
+			stack[sp++] = first;
+			if (avail < 4096) {
+				prefix[avail] = (u16)old;
+				suffix[avail] = first;
+				avail++;
+				if (!(avail & mask) && avail < 4096) {
+					bits_c++;
+					mask = (1 << bits_c) - 1;
+				}
+			}
+			old = in;
+			while (sp && out < npix) idx[out++] = stack[--sp];
+		}
+	done:
+		free(prefix), free(suffix), free(stack);
+		u8 *rgba = calloc((size_t)W * H, 4);
+		if (!rgba) {
+			free(idx);
+			return false;
+		}
+		// Entrelazado: las filas llegan en cuatro pasadas
+		int pass = 0, ystep = 8, yy = 0;
+		for (int row = 0; row < ih; row++) {
+			int y = row;
+			if (lf & 0x40) {
+				y = yy;
+				yy += ystep;
+				while (yy >= ih && pass < 3) {
+					pass++;
+					static const int start[] = {0, 4, 2, 1}, step[] = {8, 8, 4, 2};
+					yy = start[pass];
+					ystep = step[pass];
+				}
+			}
+			int Y = iy + y;
+			if (Y < 0 || Y >= H) continue;
+			for (int x = 0; x < iw; x++) {
+				int X = ix + x, c = idx[(size_t)row * iw + x];
+				if (X >= W || c == transp || c >= csize) continue;
+				u8 *o = rgba + ((size_t)Y * W + X) * 4;
+				o[0] = ct[c * 3];
+				o[1] = ct[c * 3 + 1];
+				o[2] = ct[c * 3 + 2];
+				o[3] = 255;
+			}
+		}
+		free(idx);
+		return tile_rgba(r, rgba, W, H);
+	}
+	return false;
+}
+
 static bool decode_image(Req *r)
 {
 	if (r->len > 8 && !memcmp(r->data, "\x89PNG", 4)) return decode_png(r);
+	if (r->len > 13 && !memcmp(r->data, "GIF8", 4)) return decode_gif(r);
 	return decode_jpeg(r);
 }
 

@@ -1980,7 +1980,10 @@ Req *steam_req_files(const u64 *ids, int n, const char *token)
 static void ugc_sized(const char *src, char *out, size_t n)
 {
 	char base[200];
-	snprintf(base, sizeof base, "%s", src);
+	// Las direcciones antiguas (steamuserimages-a.akamaihd.net/ugc/…) son los mismos archivos
+	const char *old = strstr(src, "steamuserimages-a.akamaihd.net/");
+	if (old) snprintf(base, sizeof base, "https://images.steamusercontent.com/%s", old + strlen("steamuserimages-a.akamaihd.net/"));
+	else snprintf(base, sizeof base, "%s", src);
 	char *q = strchr(base, '?');
 	if (q) *q = 0;
 	if (strstr(base, "steamusercontent.com")) snprintf(out, n, "%s?imw=400&imh=400&ima=fit&impolicy=Letterbox&letterbox=false", base);

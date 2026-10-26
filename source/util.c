@@ -260,6 +260,7 @@ void config_load(void)
 		else if (!strcmp(line, "country")) snprintf(g_cfg.country, sizeof g_cfg.country, "%s", v);
 		else if (!strcmp(line, "birth")) snprintf(g_cfg.birth, sizeof g_cfg.birth, "%s", v);
 		else if (!strcmp(line, "reqs")) g_cfg.reqs_mac = !strcmp(v, "mac");
+		else if (!strcmp(line, "sound")) g_cfg.quiet = !strcmp(v, "off");
 	}
 	fclose(f);
 }
@@ -267,6 +268,7 @@ void config_load(void)
 void config_save(void)
 {
 	char buf[160];
-	int n = snprintf(buf, sizeof buf, "lang=%s\ncountry=%s\nbirth=%s\nreqs=%s\n", g_cfg.lang, g_cfg.country, g_cfg.birth, g_cfg.reqs_mac ? "mac" : "win");
+	int n = snprintf(buf, sizeof buf, "lang=%s\ncountry=%s\nbirth=%s\nreqs=%s\nsound=%s\n", g_cfg.lang, g_cfg.country, g_cfg.birth,
+		g_cfg.reqs_mac ? "mac" : "win", g_cfg.quiet ? "off" : "on");
 	disk_save(APP_DIR "/config.ini", buf, n);
 }

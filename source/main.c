@@ -23,7 +23,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
@@ -809,6 +809,22 @@ static void wish_poll(Tab *t)
 static void notif_reset(void);
 static void flist_reset(void);
 
+// Las listas de la tienda se vuelven a pedir (al cambiar de idioma)
+static void store_tabs_reload(void)
+{
+	for (int ti = 0; ti < TAB_ALL; ti++) {
+		if (ti >= TAB_COUNT && ti < TAB_H0) continue;   // biblioteca, deseados y carrito no cambian
+		Tab *t = &tabs[ti];
+		rowlist_free(&t->list);   // suelta también su petición
+		for (int k = 0; k < HOME_PARTS; k++) rowlist_free(&t->part[k]);
+		memset(t, 0, sizeof *t);
+	}
+	if (S.tags_req) net_release(S.tags_req);
+	S.tags_req = NULL;
+	S.ntags = 0;   // las búsquedas populares, en el idioma nuevo
+	tab_more(cur_ti());
+}
+
 static void account_lists_clear(void)
 {
 	family_reset();
@@ -879,8 +895,7 @@ static void library_changed(void)
 {
 	Tab *t = &tabs[TAB_LIBRARY];
 	family_reset();   // lo de la familia se vuelve a sumar cuando esté la biblioteca nueva
-	if (t->list.req) net_release(t->list.req);
-	rowlist_free(&t->list);
+	rowlist_free(&t->list);   // suelta también su petición (soltarla antes era soltarla dos veces)
 	free(t->wish);
 	t->wish = NULL;
 	t->nwish = t->wish_next = 0;
@@ -2936,7 +2951,7 @@ static void draw_overlays_bottom(void)
 
 static bool key_repeat(u32 down, u32 held, u32 mask);
 
-enum { MI_LOGIN, MI_PROFILE, MI_NOTIF, MI_LIBRARY, MI_WISHLIST, MI_CART, MI_LOGOUT, MI_REQS, MI_ABOUT, MI_EXIT };
+enum { MI_LOGIN, MI_PROFILE, MI_NOTIF, MI_LIBRARY, MI_WISHLIST, MI_CART, MI_LOGOUT, MI_REQS, MI_ABOUT, MI_SETTINGS, MI_EXIT };
 #define MENU_ROW 24
 #define MENU_HEAD 38
 
@@ -2956,7 +2971,7 @@ static int menu_items(int *out)
 		out[n++] = MI_CART;
 		out[n++] = MI_LOGOUT;
 	}
-	out[n++] = MI_ABOUT;
+	out[n++] = MI_SETTINGS;
 	out[n++] = MI_EXIT;
 	return n;
 }
@@ -4042,6 +4057,152 @@ static void input_accounts(u32 kd, u32 kh, touchPosition *tp)
 	}
 }
 
+// ---------------------------------------------------------------------------- Configuración
+
+enum { ST_LANG, ST_REQS, ST_SOUND, ST_CACHE, ST_ABOUT, ST_COUNT };
+static int set_sel;
+static Scene set_back;
+
+static void open_settings(void)
+{
+	set_back = S.scene == SC_SETTINGS ? SC_STORE : S.scene;
+	set_sel = 0;
+	go_scene(SC_SETTINGS, 1);
+}
+
+static const char *const lang_codes[] = {"sys", "es", "en", "ja"};
+static const char *const lang_names[] = {"Idioma de la consola", "Español", "English", "日本語"};
+
+static int lang_index(void)
+{
+	for (int i = 0; i < 4; i++)
+		if (!strcmp(g_cfg.lang, lang_codes[i])) return i;
+	return 0;
+}
+
+// El idioma se aplica al momento: los textos de la app y, al volver a pedirlas, las listas de la tienda
+static void set_lang(int i)
+{
+	snprintf(g_cfg.lang, sizeof g_cfg.lang, "%s", lang_codes[(i + 4) % 4]);
+	config_save();
+	Lang l = !strcmp(g_cfg.lang, "es") ? LANG_ES : !strcmp(g_cfg.lang, "en") ? LANG_EN : !strcmp(g_cfg.lang, "ja") ? LANG_JA : i18n_system();
+	i18n_set(l);
+	const char *cc = g_cfg.country[0] ? g_cfg.country : "US";
+	steam_set_context(i18n_steam_lang(cc), cc);
+	store_tabs_reload();
+}
+
+static void settings_value(int i, char *out, size_t n)
+{
+	switch (i) {
+	case ST_LANG: snprintf(out, n, "%s", _(lang_names[lang_index()])); break;
+	case ST_REQS: snprintf(out, n, "%s", g_cfg.reqs_mac ? "macOS" : "Windows"); break;
+	case ST_SOUND: snprintf(out, n, "%s", g_cfg.quiet ? _("Desactivado") : _("Activado")); break;
+	case ST_CACHE: {
+		s64 b = net_cache_bytes();
+		if (b < 0) snprintf(out, n, "%s", _("Calculando…"));
+		else if (b < (1 << 20)) snprintf(out, n, "%lld KB", (long long)(b >> 10));
+		else snprintf(out, n, "%.1f MB", b / 1048576.0);
+		break;
+	}
+	default: out[0] = 0;
+	}
+}
+
+static void draw_settings_top(void)
+{
+	static const char *title[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Acerca de Steam3DS"};
+	static const char *desc[ST_COUNT] = {
+		"El idioma de la app y de la tienda. Con «Idioma de la consola» se usa el que tenga configurado tu Nintendo 3DS.",
+		"Qué requisitos se muestran en la ficha de cada juego. También puedes cambiarlo en el apartado Requisitos de la ficha.",
+		"El golpe de la válvula, el bombillo, el óxido y el vapor al abrir la app. Se aplica la próxima vez que la abras.",
+		"Las imágenes de la tienda se guardan en la tarjeta SD para que aparezcan al momento la próxima vez. Ocupa como mucho 64 MB y lo más antiguo se borra solo. Vaciarla no borra nada de tu cuenta.",
+		"La versión de Steam3DS, los enlaces del proyecto, las políticas de Steam, los créditos y el aviso legal.",
+	};
+	const float X = 16, W = TOP_W - 32;
+	ui_text(X, 28, _(title[set_sel]), SZ_LARGE, COL_WHITE, AL_LEFT, W);
+	ui_rrect(X, 47, ui_text_w(_(title[set_sel]), SZ_LARGE), 2, 1, col_alpha(COL_ACC, 0.8f));
+	ui_text_wrap(X, 62, W, _(desc[set_sel]), SZ_SMALL, COL_TXT, 6, 15);
+	char v[64];
+	settings_value(set_sel, v, sizeof v);
+	if (v[0]) {
+		fx_glass(X, 170, W, 36, 12, 1, 0);
+		ui_text(X + 14, 179, v, SZ_BODY, COL_ACC, AL_LEFT, W - 28);
+	}
+}
+
+static void draw_settings_bottom(void)
+{
+	fx_bar(0, 0, BOT_W, LIST_Y, true);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_icon(IC_WRENCH, 28, 6, 12, COL_ACC);
+	ui_text(46, 5, _("Configuración"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
+	static const Icon ic[ST_COUNT] = {IC_CHAT, IC_PC, IC_BELL, IC_IMAGE, IC_INFO};
+	static const char *label[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Acerca de Steam3DS"};
+	const float RH = 36;
+	for (int i = 0; i < ST_COUNT; i++) {
+		float y = LIST_Y + 4 + i * RH;
+		bool on = i == set_sel;
+		if (on) {
+			float br = 0.075f + 0.035f * sinf(g_time * 2.4f);
+			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
+			ui_rrect(3, y + 6, 2, RH - 12, 1, col_alpha(COL_ACC, 0.8f));
+		}
+		ui_icon(ic[i], 14, y + 12, 12, on ? COL_ACC : COL_DIM);
+		ui_text(36, y + 10, _(label[i]), SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, 170);
+		char v[64];
+		settings_value(i, v, sizeof v);
+		if (i == ST_ABOUT) ui_text(BOT_W - 20, y + 8, "›", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+		else ui_text(BOT_W - 14, y + 11, v, SZ_SMALL, COL_ACC, AL_RIGHT, 110);
+		if (i < ST_COUNT - 1) ui_hline(36, y + RH - 1, BOT_W - 44, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
+	}
+	static const char *hv[] = {"← →", "Cambiar", "↑↓", "Elegir", "B", "Volver"};
+	static const char *hc[] = {"A", "Vaciar", "↑↓", "Elegir", "B", "Volver"};
+	static const char *ha[] = {"A", "Abrir", "↑↓", "Elegir", "B", "Volver"};
+	draw_hints(set_sel == ST_CACHE ? hc : set_sel == ST_ABOUT ? ha : hv, 3);
+}
+
+static void input_settings(u32 kd, u32 kh, touchPosition *tp)
+{
+	if ((kd & KEY_B) || ((kd & KEY_TOUCH) && tp->py < LIST_Y && tp->px < 120)) {
+		go_scene(set_back == SC_SETTINGS ? SC_STORE : set_back, -1);
+		return;
+	}
+	if (key_repeat(kd, kh, KEY_DOWN)) set_sel = (set_sel + 1) % ST_COUNT;
+	if (key_repeat(kd, kh, KEY_UP)) set_sel = (set_sel + ST_COUNT - 1) % ST_COUNT;
+	if ((kd & KEY_TOUCH) && tp->py >= LIST_Y + 4) {
+		int i = (int)((tp->py - LIST_Y - 4) / 36);
+		if (i >= 0 && i < ST_COUNT) {
+			if (i == set_sel) kd |= KEY_A;
+			set_sel = i;
+		}
+	}
+	int d = (kd & KEY_LEFT) ? -1 : (kd & (KEY_RIGHT | KEY_A)) ? 1 : 0;
+	if (!d) return;
+	switch (set_sel) {
+	case ST_LANG:
+		set_lang(lang_index() + d);
+		break;
+	case ST_REQS:
+		g_cfg.reqs_mac = !g_cfg.reqs_mac;
+		config_save();
+		break;
+	case ST_SOUND:
+		g_cfg.quiet = !g_cfg.quiet;
+		config_save();
+		break;
+	case ST_CACHE:
+		if (kd & KEY_A) {
+			net_cache_clear();
+			toast_icon(_("Caché de imágenes vaciada"), IC_IMAGE);
+		}
+		break;
+	case ST_ABOUT:
+		if (kd & KEY_A) open_about();
+		break;
+	}
+}
+
 static void menu_choose(int item)
 {
 	S.menu_open = false;
@@ -4077,6 +4238,7 @@ static void menu_choose(int item)
 		break;
 	case MI_NOTIF: open_notifs(); break;
 	case MI_ABOUT: open_about(); break;
+	case MI_SETTINGS: open_settings(); break;
 	case MI_EXIT:
 		S.ask_exit = true;
 		S.exit_anim = 0;
@@ -4130,6 +4292,7 @@ static void draw_menu(void)
 		[MI_REQS] = {IC_WRENCH, "Requisitos"},
 		[MI_LOGOUT] = {IC_LOCK, "Cerrar sesión"},
 		[MI_ABOUT] = {IC_INFO, "Acerca de Steam3DS"},
+		[MI_SETTINGS] = {IC_WRENCH, "Configuración"},
 		[MI_EXIT] = {IC_POWER, "Salir de Steam3DS"},
 	};
 	for (int i = 0; i < n; i++) {
@@ -5848,7 +6011,8 @@ int main(int argc, char **argv)
 	sprites = C2D_SpriteSheetLoad("romfs:/gfx/sprites.t3x");
 	splash_bg = C2D_SpriteSheetLoad("romfs:/gfx/splash_bg.t3x");
 	wheel_sheet = C2D_SpriteSheetLoad("romfs:/gfx/wheel3d.t3x");
-	if (!sfx_init()) netlog("sonido: sin DSP (falta sdmc:/3ds/dspfirm.cdc)");
+	if (g_cfg.quiet) netlog("sonido: desactivado en Configuración");
+	else if (!sfx_init()) netlog("sonido: sin DSP (falta sdmc:/3ds/dspfirm.cdc)");
 	ui_sheet = C2D_SpriteSheetLoad("romfs:/gfx/ui.t3x");
 	if (ui_sheet) C3D_TexSetFilter(C2D_SpriteSheetGetImage(ui_sheet, 0).tex, GPU_LINEAR, GPU_LINEAR);
 	if (sprites) {
@@ -5927,6 +6091,8 @@ int main(int argc, char **argv)
 			bool shown = e->appid == S.app || (cr && e->appid == cr->appid);
 			if (e->failed && shown && now - e->fail_at > (u64)retry_delay(e->err) * 1000) info_retry(e);
 		}
+		// Las fotos que lleguen se suben cuando acaba la animación de pantalla, del menú o del apartado
+		img_hold(S.scene_anim < 0.97f || (S.menu_anim > 0.03f && S.menu_anim < 0.97f) || S.sec_anim < 0.97f);
 		img_update();
 
 		if (S.quit_fade >= 0) {
@@ -5995,6 +6161,7 @@ int main(int argc, char **argv)
 		case SC_NOTIF: input_notifs(kd, kh, &tp); break;
 		case SC_FRIENDS: input_friends(kd, kh, &tp); break;
 		case SC_ACCOUNTS: input_accounts(kd, kh, &tp); break;
+		case SC_SETTINGS: input_settings(kd, kh, &tp); break;
 		case SC_PAY: input_pay(kd, kh, ku, &tp, dt); break;
 		}
 		auth_update();
@@ -6094,12 +6261,13 @@ int main(int argc, char **argv)
 		case SC_NOTIF: draw_notifs_top(); break;
 		case SC_FRIENDS: draw_friends_top(); break;
 		case SC_ACCOUNTS: draw_accounts_top(); break;
+		case SC_SETTINGS: draw_settings_top(); break;
 		case SC_PAY: draw_pay_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -6121,6 +6289,7 @@ int main(int argc, char **argv)
 		case SC_NOTIF: draw_notifs_bottom(); break;
 		case SC_FRIENDS: draw_friends_bottom(); break;
 		case SC_ACCOUNTS: draw_accounts_bottom(); break;
+		case SC_SETTINGS: draw_settings_bottom(); break;
 		case SC_PAY: draw_pay_bottom(); break;
 		}
 		C2D_ViewReset();

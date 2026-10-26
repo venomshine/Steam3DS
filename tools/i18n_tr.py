@@ -3,7 +3,8 @@
 
 # Textos que llegan a _() a través de una variable (pestañas, apartados, pistas, clasificaciones)
 INDIRECT = [
-    "Marcar", "Mantener para pagar", "Precio", "Notificaciones", "Entrar", "Quitar cuenta",
+    "Marcar", "Mantener para pagar", "Precio", "Notificaciones",
+    'Idioma', 'Idioma de la consola', 'Requisitos del sistema', 'Sonido de la pantalla de carga', 'Caché de imágenes', 'Vaciar', 'Configuración', 'El idioma de la app y de la tienda. Con «Idioma de la consola» se usa el que tenga configurado tu Nintendo 3DS.', 'Qué requisitos se muestran en la ficha de cada juego. También puedes cambiarlo en el apartado Requisitos de la ficha.', 'El golpe de la válvula, el bombillo, el óxido y el vapor al abrir la app. Se aplica la próxima vez que la abras.', 'Las imágenes de la tienda se guardan en la tarjeta SD para que aparezcan al momento la próxima vez. Ocupa como mucho 64 MB y lo más antiguo se borra solo. Vaciarla no borra nada de tu cuenta.', 'La versión de Steam3DS, los enlaces del proyecto, las políticas de Steam, los créditos y el aviso legal.', 'Español', 'English', '日本語', "Entrar", "Quitar cuenta",
     'En línea', 'Ocupado', 'Ausente', 'Durmiendo', 'Quiere intercambiar', 'Quiere jugar', 'Jugando', 'Desconectados', 'Ver la lista', 'Ver el juego',
     'Acuerdo de Suscriptor de Steam', 'Tu cuenta y las licencias de lo que compras', 'El contrato entre tú y Valve para usar Steam: tu cuenta, las licencias del contenido que compras, las suscripciones y las normas de uso del servicio.', 'Política de privacidad', 'Qué datos se recogen y para qué', 'Qué datos recoge Valve cuando usas Steam, para qué los usa, con quién los comparte y cómo ejercer tus derechos sobre ellos.', 'Reembolsos de Steam', 'Cuándo y cómo pedir un reembolso', 'Puedes pedir el reembolso de casi cualquier compra en los 14 días siguientes si has jugado menos de 2 horas. Se solicita desde la ayuda de Steam.', 'Normas de conducta en línea', 'Reseñas, foros, perfiles y chat', 'Lo que no está permitido en las partes de Steam con contenido de los usuarios: reseñas, foros, perfiles, chat y Workshop.', 'Información legal', 'Marcas y derechos de autor', 'Avisos de marcas, derechos de autor y el resto de la información legal de Valve y de Steam.',
     "Explora la tienda de Steam, consulta ofertas y reseñas, gestiona tu lista de deseos y tu carrito, y compra con los métodos de pago de tu cuenta, todo desde la consola.",
@@ -19,6 +20,27 @@ INDIRECT = [
 ]
 
 TR = {
+    # Configuración
+    'Activado': ('On', 'オン'),
+    'Desactivado': ('Off', 'オフ'),
+    'Caché de imágenes vaciada': ('Image cache cleared', '画像キャッシュを消去しました'),
+    'Calculando…': ('Calculating…', '計算中…'),
+    'Configuración': ('Settings', '設定'),
+    'Idioma': ('Language', '言語'),
+    'Idioma de la consola': ('Console language', '本体の言語'),
+    'Requisitos del sistema': ('System requirements', '動作環境'),
+    'Sonido de la pantalla de carga': ('Loading screen sound', '起動画面のサウンド'),
+    'Caché de imágenes': ('Image cache', '画像キャッシュ'),
+    'Vaciar': ('Clear', '消去'),
+    'El idioma de la app y de la tienda. Con «Idioma de la consola» se usa el que tenga configurado tu Nintendo 3DS.': ('The language of the app and the store. “Console language” uses the one set on your Nintendo 3DS.', 'アプリとストアの言語です。「本体の言語」を選ぶと Nintendo 3DS の設定を使います。'),
+    'Qué requisitos se muestran en la ficha de cada juego. También puedes cambiarlo en el apartado Requisitos de la ficha.': ("Which requirements are shown on each game's page. You can also change it in the game page's Specs section.", '各ゲームのページに表示する動作環境です。ページの「動作環境」でも変更できます。'),
+    'El golpe de la válvula, el bombillo, el óxido y el vapor al abrir la app. Se aplica la próxima vez que la abras.': ('The valve impact, the light bulb, the rust and the steam when the app opens. It applies the next time you open it.', 'アプリ起動時のバルブの衝撃音、電球、さび、蒸気の音です。次回起動時から反映されます。'),
+    'Las imágenes de la tienda se guardan en la tarjeta SD para que aparezcan al momento la próxima vez. Ocupa como mucho 64 MB y lo más antiguo se borra solo. Vaciarla no borra nada de tu cuenta.': ("Store images are saved on the SD card so they show up instantly next time. It uses up to 64 MB and the oldest are deleted automatically. Clearing it doesn't remove anything from your account.", 'ストアの画像を SD カードに保存し、次回すぐに表示します。最大 64 MB で、古いものから自動的に削除されます。消去してもアカウントには影響しません。'),
+    'La versión de Steam3DS, los enlaces del proyecto, las políticas de Steam, los créditos y el aviso legal.': ("The Steam3DS version, the project links, Steam's policies, the credits and the legal notice.", 'Steam3DS のバージョン、プロジェクトのリンク、Steam のポリシー、クレジット、法的通知です。'),
+    'Español': ('Español', 'Español'),
+    'English': ('English', 'English'),
+    '日本語': ('日本語', '日本語'),
+
     # Cuentas
     'Añadir otra cuenta': ('Add another account', '別のアカウントを追加'),
     'Cambiar de cuenta': ('Switch account', 'アカウントを切り替え'),

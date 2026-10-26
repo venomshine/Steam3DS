@@ -45,6 +45,7 @@ typedef struct Req {
 	u8 *pixels;             // si jpeg: ya en el orden de la GPU (RGB8 en mosaico de tw×th)
 	int w, h;               // tamaño de la imagen
 	int tw, th;             // tamaño de la textura (potencias de 2)
+	bool alpha;             // PNG con transparencia: RGBA8 (4 bytes por píxel) en vez de RGB8
 
 	int refs;
 	struct Req *next;

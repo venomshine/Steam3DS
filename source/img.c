@@ -39,11 +39,11 @@ void img_exit(void)
 }
 
 // La imagen llega ya en el orden de la GPU (lo hace el hilo de red): solo se copia
-static bool upload(Slot *s, const u8 *tiled, int w, int h, int tw, int th)
+static bool upload(Slot *s, const u8 *tiled, int w, int h, int tw, int th, bool alpha)
 {
 	if (!tiled || tw > 1024 || th > 1024) return false;
-	if (!C3D_TexInit(&s->tex, tw, th, GPU_RGB8)) return false;
-	memcpy(s->tex.data, tiled, (size_t)tw * th * 3);
+	if (!C3D_TexInit(&s->tex, tw, th, alpha ? GPU_RGBA8 : GPU_RGB8)) return false;
+	memcpy(s->tex.data, tiled, (size_t)tw * th * (alpha ? 4 : 3));
 	C3D_TexFlush(&s->tex);
 	C3D_TexSetFilter(&s->tex, GPU_LINEAR, GPU_LINEAR);
 	s->sub.width = w;
@@ -76,7 +76,7 @@ void img_update(void)
 		Slot *s = &slots[i];
 		if (!s->req) continue;
 		if (s->req->state == REQ_DONE) {
-			if (s->req->pixels && upload(s, s->req->pixels, s->req->w, s->req->h, s->req->tw, s->req->th)) s->ready = true;
+			if (s->req->pixels && upload(s, s->req->pixels, s->req->w, s->req->h, s->req->tw, s->req->th, s->req->alpha)) s->ready = true;
 			else s->failed = true;
 			net_release(s->req);
 			s->req = NULL;

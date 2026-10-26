@@ -3,6 +3,7 @@
 
 #include <curl/curl.h>
 #include <jpeglib.h>
+#include <png.h>
 #include <setjmp.h>
 #include <malloc.h>
 #include <stdarg.h>
@@ -539,6 +540,81 @@ static void jerr_exit(j_common_ptr c)
 	longjmp(((struct jerr *)c->err)->jb, 1);
 }
 
+static bool decode_jpeg(Req *r);
+
+// PNG (los marcos de avatar de Steam, con transparencia; de los animados solo el primer fotograma)
+// Se reduce a la mitad hasta caber en max_w y va en mosaico RGBA8 (en memoria: A, B, G, R)
+static bool decode_png(Req *r)
+{
+	png_image im;
+	memset(&im, 0, sizeof im);
+	im.version = PNG_IMAGE_VERSION;
+	if (!png_image_begin_read_from_memory(&im, r->data, r->len)) return false;
+	im.format = PNG_FORMAT_RGBA;
+	int sw0 = im.width, sh0 = im.height;
+	if (sw0 > 2048 || sh0 > 2048) {
+		png_image_free(&im);
+		return false;
+	}
+	u8 *src = malloc(PNG_IMAGE_SIZE(im));
+	if (!src || !png_image_finish_read(&im, NULL, src, 0, NULL)) {
+		free(src);
+		png_image_free(&im);
+		return false;
+	}
+	int f = 1;
+	while (r->jpeg_max_w > 0 && sw0 / (f * 2) >= r->jpeg_max_w) f *= 2;
+	int w = sw0 / f, h = sh0 / f;
+	int tw = 8, th = 8;
+	while (tw < w) tw <<= 1;
+	while (th < h) th <<= 1;
+	u8 *dst = tw <= 1024 && th <= 1024 ? calloc((size_t)tw * th, 4) : NULL;
+	if (!dst) {
+		free(src);
+		return false;
+	}
+	for (int y = 0; y < h; y++) {
+		u32 rowbase = ((y >> 3) * (tw >> 3)) << 6;
+		u32 ybits = ((y & 1) << 1) | ((y & 2) << 2) | ((y & 4) << 3);
+		for (int x = 0; x < w; x++) {
+			// Media del bloque f×f, con el color pesado por su alfa (sin bordes oscuros)
+			u32 c[4] = {0};
+			for (int j = 0; j < f; j++) {
+				const u8 *q = src + ((size_t)(y * f + j) * sw0 + x * f) * 4;
+				for (int i = 0; i < f; i++, q += 4) {
+					c[0] += q[0] * q[3];
+					c[1] += q[1] * q[3];
+					c[2] += q[2] * q[3];
+					c[3] += q[3];
+				}
+			}
+			u32 off = (rowbase + ((x >> 3) << 6) + ((x & 1) | ((x & 2) << 1) | ((x & 4) << 2) | ybits)) * 4;
+			u8 *o = dst + off;
+			o[0] = c[3] / (f * f);
+			if (c[3]) {
+				o[1] = c[2] / c[3];
+				o[2] = c[1] / c[3];
+				o[3] = c[0] / c[3];
+			}
+		}
+		if ((y & 15) == 15) svcSleepThread(250000);
+	}
+	free(src);
+	r->pixels = dst;
+	r->alpha = true;
+	r->w = w;
+	r->h = h;
+	r->tw = tw;
+	r->th = th;
+	return true;
+}
+
+static bool decode_image(Req *r)
+{
+	if (r->len > 8 && !memcmp(r->data, "\x89PNG", 4)) return decode_png(r);
+	return decode_jpeg(r);
+}
+
 static bool decode_jpeg(Req *r)
 {
 	struct jpeg_decompress_struct ci;
@@ -689,7 +765,7 @@ static void run_req(Lane *l, Req *r)
 	if (r->jpeg && (raw_get(r) || cache_get(r))) {
 		// Ya la teníamos (en memoria o en la SD): solo se decodifica a este tamaño
 		r->http = 200;
-		if (!decode_jpeg(r)) snprintf(r->err, sizeof r->err, "imagen no válida");
+		if (!decode_image(r)) snprintf(r->err, sizeof r->err, "imagen no válida");
 		free(r->data);
 		r->data = NULL;
 		r->len = r->cap = 0;
@@ -763,7 +839,7 @@ static void run_req(Lane *l, Req *r)
 		snprintf(r->err, sizeof r->err, "HTTP %ld", r->http);
 	} else if (r->jpeg) {
 		raw_put(r);
-		if (!decode_jpeg(r)) snprintf(r->err, sizeof r->err, "imagen no válida");
+		if (!decode_image(r)) snprintf(r->err, sizeof r->err, "imagen no válida");
 		else cache_put(r);
 	} else if (r->parse && !r->cancel && r->data) {
 		r->parsed = r->parse(r);

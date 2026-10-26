@@ -28,9 +28,9 @@ SIZE = 112                      # cada fotograma (en pantalla se ve a ~100 px)
 FRAMES = 24                     # 72° / 3°
 SWING = (22.0, 68.0)            # extremos del balanceo: ángulo de la luz sobre la horizontal (arriba a la derecha)
 # Bombillo flojo y cálido, válvula muy sucia (mugre negra)
-# Pintada de rojo como la de la intro de Valve, pero de pintura de válvula de verdad (algo apagada,
-# con brillo moderado), sucia y con el cubo de hierro oscuro
-LOOK = dict(dirt=1.0, amb=0.24, kd=1.05, tint=(1.0, 0.92, 0.80), ks=0.70, paint=True)
+# Pintada de rojo como la de la intro de Valve, pero de pintura vieja de válvula (oscura y apagada,
+# con poco brillo), sucia y con el cubo de hierro oscuro
+LOOK = dict(dirt=1.0, amb=0.24, kd=1.05, tint=(1.0, 0.92, 0.80), ks=0.45, paint=True)
 
 
 def light_dir(th):
@@ -124,8 +124,8 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
     diff = np.clip(n @ L, 0, 1)
     spec = np.clip(n @ H, 0, 1) ** 48
     if paint:
-        # la pintura: un brillo no muy duro y un lustre ancho y suave
-        spec = np.clip(n @ H, 0, 1) ** 60 + 0.12 * np.clip(n @ H, 0, 1) ** 10
+        # la pintura vieja: un brillo blando y un lustre ancho y suave
+        spec = np.clip(n @ H, 0, 1) ** 40 + 0.08 * np.clip(n @ H, 0, 1) ** 8
     # sombra propia: hacia la luz, ¿algo más alto tapa?
     shadow = np.ones_like(z)
     lx, ly = L[0], L[1]; lz = L[2] / math.hypot(lx, ly)
@@ -145,7 +145,7 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
     albedo = np.stack([0xdc + (0x5a - 0xdc) * t, 0xf0 + (0xb8 - 0xf0) * t, 0xff + (0xf6 - 0xff) * t], -1) / 255
     if paint:
         # pintura roja de válvula, más clara arriba; el cubo (y el vástago que asoma) de hierro oscuro
-        albedo = np.stack([0xd2 + (0x7a - 0xd2) * t, 0x36 + (0x14 - 0x36) * t, 0x26 + (0x0e - 0x26) * t], -1) / 255
+        albedo = np.stack([0x86 + (0x42 - 0x86) * t, 0x24 + (0x0e - 0x24) * t, 0x1a + (0x0a - 0x1a) * t], -1) / 255
         iron = np.array([0x30, 0x32, 0x36]) / 255
         hubm = np.clip((hub * 0.82 - r) / (hub * 0.12), 0, 1)
         albedo = albedo * (1 - hubm[..., None]) + iron * hubm[..., None]

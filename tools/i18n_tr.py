@@ -4,6 +4,7 @@
 # Textos que llegan a _() a través de una variable (pestañas, apartados, pistas, clasificaciones)
 INDIRECT = [
     "Marcar", "Mantener para pagar", "Precio",
+    'Acuerdo de Suscriptor de Steam', 'Tu cuenta y las licencias de lo que compras', 'El contrato entre tú y Valve para usar Steam: tu cuenta, las licencias del contenido que compras, las suscripciones y las normas de uso del servicio.', 'Política de privacidad', 'Qué datos se recogen y para qué', 'Qué datos recoge Valve cuando usas Steam, para qué los usa, con quién los comparte y cómo ejercer tus derechos sobre ellos.', 'Reembolsos de Steam', 'Cuándo y cómo pedir un reembolso', 'Puedes pedir el reembolso de casi cualquier compra en los 14 días siguientes si has jugado menos de 2 horas. Se solicita desde la ayuda de Steam.', 'Normas de conducta en línea', 'Reseñas, foros, perfiles y chat', 'Lo que no está permitido en las partes de Steam con contenido de los usuarios: reseñas, foros, perfiles, chat y Workshop.', 'Información legal', 'Marcas y derechos de autor', 'Avisos de marcas, derechos de autor y el resto de la información legal de Valve y de Steam.',
     "Explora la tienda de Steam, consulta ofertas y reseñas, gestiona tu lista de deseos y tu carrito, y compra con los métodos de pago de tu cuenta, todo desde la consola.",
     "Steam3DS es un proyecto independiente y no está afiliado, patrocinado ni respaldado por Valve Corporation ni por Nintendo. Steam y el logotipo de Steam son marcas comerciales o marcas registradas de Valve Corporation. Nintendo 3DS es una marca registrada de Nintendo.",
     "Inicio", "Ofertas", "Demos", "Betas",
@@ -17,6 +18,28 @@ INDIRECT = [
 ]
 
 TR = {
+    # Acerca de: políticas y normas de Steam
+    'Acuerdo de Suscriptor de Steam': ('Steam Subscriber Agreement', 'Steam 利用規約'),
+    'Tu cuenta y las licencias de lo que compras': ('Your account and the licenses for what you buy', 'アカウントと購入したもののライセンス'),
+    'El contrato entre tú y Valve para usar Steam: tu cuenta, las licencias del contenido que compras, las suscripciones y las normas de uso del servicio.': ('The agreement between you and Valve for using Steam: your account, the licenses for the content you buy, subscriptions and the rules for using the service.', 'Steam を利用するためのあなたと Valve の契約です。アカウント、購入したコンテンツのライセンス、サブスクリプション、サービスの利用ルールについて定めています。'),
+    'Política de privacidad': ('Privacy Policy', 'プライバシーポリシー'),
+    'Qué datos se recogen y para qué': ('What data is collected and why', '収集されるデータとその目的'),
+    'Qué datos recoge Valve cuando usas Steam, para qué los usa, con quién los comparte y cómo ejercer tus derechos sobre ellos.': ('What data Valve collects when you use Steam, what it is used for, who it is shared with and how to exercise your rights over it.', 'Steam の利用時に Valve が収集するデータ、その用途、共有先、そしてデータに関する権利の行使方法です。'),
+    'Reembolsos de Steam': ('Steam Refunds', 'Steam の返金'),
+    'Cuándo y cómo pedir un reembolso': ('When and how to request a refund', '返金を申請できる条件と方法'),
+    'Puedes pedir el reembolso de casi cualquier compra en los 14 días siguientes si has jugado menos de 2 horas. Se solicita desde la ayuda de Steam.': ('You can request a refund for nearly any purchase within 14 days if you have played for less than 2 hours. Requests are made through Steam Support.', '購入から 14 日以内かつプレイ時間が 2 時間未満であれば、ほぼすべての購入品の返金を申請できます。申請は Steam サポートから行います。'),
+    'Normas de conducta en línea': ('Online Conduct', 'オンライン行動規範'),
+    'Reseñas, foros, perfiles y chat': ('Reviews, forums, profiles and chat', 'レビュー、フォーラム、プロフィール、チャット'),
+    'Lo que no está permitido en las partes de Steam con contenido de los usuarios: reseñas, foros, perfiles, chat y Workshop.': ('What is not allowed in the parts of Steam with user content: reviews, forums, profiles, chat and the Workshop.', 'ユーザーが投稿する Steam の各機能（レビュー、フォーラム、プロフィール、チャット、ワークショップ）で禁止されていることです。'),
+    'Información legal': ('Legal Information', '法的情報'),
+    'Marcas y derechos de autor': ('Trademarks and copyright', '商標と著作権'),
+    'Avisos de marcas, derechos de autor y el resto de la información legal de Valve y de Steam.': ("Trademark and copyright notices and the rest of Valve's and Steam's legal information.", 'Valve と Steam の商標、著作権表示、その他の法的情報です。'),
+    'Políticas y normas de Steam': ('Steam policies and rules', 'Steam のポリシーと規約'),
+    'Acuerdo de suscriptor, privacidad y reembolsos': ('Subscriber agreement, privacy and refunds', '利用規約、プライバシー、返金'),
+    'Los documentos oficiales de Steam: el Acuerdo de Suscriptor, la privacidad, los reembolsos y las normas de conducta. Al usar Steam desde la consola se aplican igual que en el PC o en el móvil.': ("Steam's official documents: the Subscriber Agreement, privacy, refunds and the rules of conduct. They apply when you use Steam from the console just as they do on PC or mobile.", 'Steam の公式文書です（利用規約、プライバシー、返金、行動規範）。本体から Steam を使う場合も、PC やスマホと同じように適用されます。'),
+    'Pulsa A para verlos y escanea el código de cada uno para leerlo entero en el móvil.': ('Press A to view them and scan each code to read the full document on your phone.', 'A で表示し、各コードをスキャンするとスマホで全文を読めます。'),
+    'Los publica y actualiza Valve; Steam3DS solo enlaza a ellos.': ('They are published and updated by Valve; Steam3DS only links to them.', 'これらは Valve が公開・更新しています。Steam3DS はリンクしているだけです。'),
+
     # Buscar: catálogo y barra de precio
     "Búsquedas recientes": ("Recent searches", "最近の検索"),
     "Explorar la tienda": ("Browse the store", "ストアを見る"),

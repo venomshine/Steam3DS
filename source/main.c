@@ -1093,13 +1093,21 @@ static void draw_qr_panel(const char *url, const char *title, const char *body, 
 	if (nb > 7) nb = 7;
 	int nf = foot ? ui_text_lines(foot, SZ_SMALL, w) : 0;
 	if (nf > 2) nf = 2;
-	float h = ui_line_h(SZ_LARGE) + 10 + (nb - 1) * 14 + ui_line_h(SZ_SMALL);
+	// Un título largo pasa a dos líneas en vez de cortarse
+	int nt = ui_text_lines(title, SZ_LARGE, w);
+	if (nt > 2) nt = 2;
+	float h = ui_line_h(SZ_LARGE) + (nt - 1) * 20 + 10 + (nb - 1) * 14 + ui_line_h(SZ_SMALL);
 	if (a) h += 12 + ih + 6 + ui_line_h(SZ_SMALL);
 	if (nf) h += 10 + (nf - 1) * 14 + ui_line_h(SZ_SMALL);
 	float y = 18 + (area - h) / 2;
-	float tw = ui_text(x, y, title, SZ_LARGE, COL_WHITE, AL_LEFT, w);
-	ui_rrect(x, y + 19, tw < w ? tw : w, 2, 1, col_alpha(COL_ACC, 0.8f));   // subrayado, como al iniciar sesión
-	y += ui_line_h(SZ_LARGE) + 10;
+	if (nt == 1) {
+		float tw = ui_text(x, y, title, SZ_LARGE, COL_WHITE, AL_LEFT, w);
+		ui_rrect(x, y + 19, tw < w ? tw : w, 2, 1, col_alpha(COL_ACC, 0.8f));   // subrayado, como al iniciar sesión
+	} else {
+		ui_text_wrap(x, y, w, title, SZ_LARGE, COL_WHITE, 2, 20);
+		ui_rrect(x, y + 20 + 19, w * 0.6f, 2, 1, col_alpha(COL_ACC, 0.8f));
+	}
+	y += ui_line_h(SZ_LARGE) + (nt - 1) * 20 + 10;
 	ui_text_wrap(x, y, w, body, SZ_SMALL, COL_TXT, 7, 14);
 	y += (nb - 1) * 14 + ui_line_h(SZ_SMALL);
 	if (a) {
@@ -2878,9 +2886,31 @@ static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 #define URL_DISCORD "https://discord.com/invite/yVKp8JwV4e"
 #define URL_KOFI    "https://ko-fi.com/venomshine"
 
-enum { AB_APP, AB_GITHUB, AB_DISCORD, AB_KOFI, AB_CREDITS, AB_LEGAL, AB_COUNT };
+enum { AB_APP, AB_GITHUB, AB_DISCORD, AB_KOFI, AB_POLICIES, AB_CREDITS, AB_LEGAL, AB_COUNT };
 static Scene about_back;
 static int about_sel;
+static bool about_pol;     // dentro de «Políticas y normas de Steam»
+static int pol_sel;
+
+// Los documentos oficiales de Steam: un resumen y el QR para leerlos enteros en el móvil
+static const struct { const char *name, *sub, *desc, *url; } policies[] = {
+	{"Acuerdo de Suscriptor de Steam", "Tu cuenta y las licencias de lo que compras",
+	 "El contrato entre tú y Valve para usar Steam: tu cuenta, las licencias del contenido que compras, las suscripciones y las normas de uso del servicio.",
+	 "https://store.steampowered.com/subscriber_agreement/"},
+	{"Política de privacidad", "Qué datos se recogen y para qué",
+	 "Qué datos recoge Valve cuando usas Steam, para qué los usa, con quién los comparte y cómo ejercer tus derechos sobre ellos.",
+	 "https://store.steampowered.com/privacy_agreement/"},
+	{"Reembolsos de Steam", "Cuándo y cómo pedir un reembolso",
+	 "Puedes pedir el reembolso de casi cualquier compra en los 14 días siguientes si has jugado menos de 2 horas. Se solicita desde la ayuda de Steam.",
+	 "https://store.steampowered.com/steam_refunds/"},
+	{"Normas de conducta en línea", "Reseñas, foros, perfiles y chat",
+	 "Lo que no está permitido en las partes de Steam con contenido de los usuarios: reseñas, foros, perfiles, chat y Workshop.",
+	 "https://store.steampowered.com/online_conduct/"},
+	{"Información legal", "Marcas y derechos de autor",
+	 "Avisos de marcas, derechos de autor y el resto de la información legal de Valve y de Steam.",
+	 "https://store.steampowered.com/legal/"},
+};
+#define NPOLICIES (int)(sizeof policies / sizeof *policies)
 
 static const char *const about_desc = "Explora la tienda de Steam, consulta ofertas y reseñas, gestiona tu lista de deseos y tu carrito, y compra con los métodos de pago de tu cuenta, todo desde la consola.";
 static const char *const about_legal = "Steam3DS es un proyecto independiente y no está afiliado, patrocinado ni respaldado por Valve Corporation ni por Nintendo. Steam y el logotipo de Steam son marcas comerciales o marcas registradas de Valve Corporation. Nintendo 3DS es una marca registrada de Nintendo.";
@@ -2903,6 +2933,7 @@ static void open_about(void)
 {
 	about_back = S.scene == SC_ABOUT ? SC_STORE : S.scene;
 	about_sel = 0;
+	about_pol = false;
 	go_scene(SC_ABOUT, 1);
 }
 
@@ -2949,7 +2980,16 @@ static void about_app_card(float x, float y, float w)
 static void draw_about_top(void)
 {
 	const float X = 16, W = TOP_W - 32;
-	if (about_sel >= AB_GITHUB && about_sel <= AB_KOFI) {
+	if (about_pol) {
+		draw_qr_panel(policies[pol_sel].url, _(policies[pol_sel].name), _(policies[pol_sel].desc), NULL,
+			policies[pol_sel].url + 8, COL_ACC);
+	} else if (about_sel == AB_POLICIES) {
+		ui_text(X, 28, _("Políticas y normas de Steam"), SZ_LARGE, COL_WHITE, AL_LEFT, W);
+		ui_rrect(X, 47, ui_text_w(_("Políticas y normas de Steam"), SZ_LARGE), 2, 1, col_alpha(COL_ACC, 0.8f));
+		ui_text_wrap(X, 62, W, _("Los documentos oficiales de Steam: el Acuerdo de Suscriptor, la privacidad, los reembolsos y las normas de conducta. Al usar Steam desde la consola se aplican igual que en el PC o en el móvil."), SZ_SMALL, COL_TXT, 5, 15);
+		ui_text_wrap(X, 150, W, _("Pulsa A para verlos y escanea el código de cada uno para leerlo entero en el móvil."), SZ_SMALL, COL_ACC, 2, 15);
+		ui_text_wrap(X, 196, W, _("Los publica y actualiza Valve; Steam3DS solo enlaza a ellos."), SZ_SMALL, COL_DIM, 2, 15);
+	} else if (about_sel >= AB_GITHUB && about_sel <= AB_KOFI) {
 		draw_qr_panel(about_link_url(about_sel), about_link_name(about_sel), about_link_desc(about_sel), NULL, about_link_url(about_sel) + 8, COL_ACC);
 	} else if (about_sel == AB_CREDITS) {
 		ui_text(X, 28, _("Créditos y licencias"), SZ_LARGE, COL_WHITE, AL_LEFT, W);
@@ -2972,43 +3012,88 @@ static void draw_about_top(void)
 	}
 }
 
-// Abajo: la lista (la app, GitHub, Discord, Ko-fi, créditos y aviso legal)
-static void draw_about_bottom(void)
+// Abajo, dentro de «Políticas y normas de Steam»: los documentos
+static void draw_policies_bottom(void)
 {
 	fx_bar(0, 0, BOT_W, LIST_Y, true);
 	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
-	ui_icon(IC_INFO, 28, 6, 12, COL_ACC);
-	ui_text(46, 5, _("Acerca de Steam3DS"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
-	static const Icon ic[AB_COUNT] = {IC_PAD, IC_CODE, IC_CHAT, IC_CUP, IC_DOC, IC_DOC};
-	const u32 col[AB_COUNT] = {COL_ACC, C2D_Color32(0xc9, 0xd1, 0xd9, 0xff), C2D_Color32(0x7f, 0x8c, 0xff, 0xff),
-		C2D_Color32(0xff, 0x6e, 0x6b, 0xff), COL_DIM, COL_DIM};
-	char ver[48];
-	snprintf(ver, sizeof ver, "Steam3DS %s", APP_VERSION);
-	const char *title[AB_COUNT] = {ver, "GitHub", "Discord", "Ko-fi", _("Créditos y licencias"), _("Aviso legal")};
-	const char *sub[AB_COUNT] = {_("Gracias por usar Steam3DS"), _("Código y avisos de errores"), _("Comunidad y ayuda"),
-		_("Invítame a un café"), _("Librerías que usa la app"), _("Steam3DS no es una app oficial de Steam")};
+	ui_icon(IC_CHECK, 28, 6, 12, COL_ACC);
+	ui_text(46, 5, _("Políticas y normas de Steam"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
 	const float RH = 32;
-	for (int i = 0; i < AB_COUNT; i++) {
+	for (int i = 0; i < NPOLICIES; i++) {
 		float y = LIST_Y + 2 + i * RH;
-		if (i == about_sel) {
+		if (i == pol_sel) {
 			float br = 0.075f + 0.035f * sinf(g_time * 2.4f);
 			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
 			ui_rrect(3, y + 5, 2, RH - 10, 1, col_alpha(COL_ACC, 0.8f));
+			ui_icon(IC_PHONE, BOT_W - 24, y + 10, 12, COL_ACC);
 		}
-		ui_icon(ic[i], 14, y + 10, 12, col[i]);
-		ui_text(36, y + 3, title[i], SZ_BODY - 0.02f, i == about_sel ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 60);
-		ui_text(36, y + 17, sub[i], SZ_TINY, COL_DIM, AL_LEFT, BOT_W - 60);
-		if (i >= AB_GITHUB && i <= AB_KOFI && i == about_sel) ui_icon(IC_PHONE, BOT_W - 24, y + 10, 12, COL_ACC);
-		if (i < AB_COUNT - 1) ui_hline(36, y + RH - 1, BOT_W - 44, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
+		ui_icon(IC_DOC, 14, y + 10, 12, COL_DIM);
+		ui_text(36, y + 3, _(policies[i].name), SZ_BODY - 0.02f, i == pol_sel ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 64);
+		ui_text(36, y + 17, _(policies[i].sub), SZ_TINY, COL_DIM, AL_LEFT, BOT_W - 64);
+		if (i < NPOLICIES - 1) ui_hline(36, y + RH - 1, BOT_W - 44, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
 	}
 	static const char *h[] = {"↑↓", "Elegir", "B", "Volver"};
 	draw_hints(h, 2);
 }
 
+// Abajo: la lista (la app, GitHub, Discord, Ko-fi, las políticas, créditos y aviso legal)
+static void draw_about_bottom(void)
+{
+	if (about_pol) {
+		draw_policies_bottom();
+		return;
+	}
+	fx_bar(0, 0, BOT_W, LIST_Y, true);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_icon(IC_INFO, 28, 6, 12, COL_ACC);
+	ui_text(46, 5, _("Acerca de Steam3DS"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
+	static const Icon ic[AB_COUNT] = {IC_PAD, IC_CODE, IC_CHAT, IC_CUP, IC_CHECK, IC_DOC, IC_DOC};
+	const u32 col[AB_COUNT] = {COL_ACC, C2D_Color32(0xc9, 0xd1, 0xd9, 0xff), C2D_Color32(0x7f, 0x8c, 0xff, 0xff),
+		C2D_Color32(0xff, 0x6e, 0x6b, 0xff), COL_ACC, COL_DIM, COL_DIM};
+	char ver[48];
+	snprintf(ver, sizeof ver, "Steam3DS %s", APP_VERSION);
+	const char *title[AB_COUNT] = {ver, "GitHub", "Discord", "Ko-fi", _("Políticas y normas de Steam"), _("Créditos y licencias"), _("Aviso legal")};
+	const char *sub[AB_COUNT] = {_("Gracias por usar Steam3DS"), _("Código y avisos de errores"), _("Comunidad y ayuda"),
+		_("Invítame a un café"), _("Acuerdo de suscriptor, privacidad y reembolsos"), _("Librerías que usa la app"),
+		_("Steam3DS no es una app oficial de Steam")};
+	// Siete filas: justas entre la barra de arriba y la de botones
+	const float RH = 28;
+	for (int i = 0; i < AB_COUNT; i++) {
+		float y = LIST_Y + 1 + i * RH;
+		if (i == about_sel) {
+			float br = 0.075f + 0.035f * sinf(g_time * 2.4f);
+			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
+			ui_rrect(3, y + 5, 2, RH - 10, 1, col_alpha(COL_ACC, 0.8f));
+		}
+		ui_icon(ic[i], 14, y + 8, 12, col[i]);
+		ui_text(36, y + 1, title[i], SZ_BODY - 0.02f, i == about_sel ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 60);
+		ui_text(36, y + 15, sub[i], SZ_TINY, COL_DIM, AL_LEFT, BOT_W - 60);
+		if (i >= AB_GITHUB && i <= AB_KOFI && i == about_sel) ui_icon(IC_PHONE, BOT_W - 24, y + 8, 12, COL_ACC);
+		if (i == AB_POLICIES && i == about_sel) ui_text(BOT_W - 20, y + 6, "›", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+		if (i < AB_COUNT - 1) ui_hline(36, y + RH - 1, BOT_W - 44, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
+	}
+	static const char *h[] = {"↑↓", "Elegir", "B", "Volver"};
+	static const char *ha[] = {"A", "Abrir", "↑↓", "Elegir", "B", "Volver"};
+	if (about_sel == AB_POLICIES) draw_hints(ha, 3);
+	else draw_hints(h, 2);
+}
+
 static void input_about(u32 kd, u32 kh)
 {
+	if (about_pol) {
+		if (kd & KEY_B) about_pol = false;
+		if (key_repeat(kd, kh, KEY_DOWN)) pol_sel = (pol_sel + 1) % NPOLICIES;
+		if (key_repeat(kd, kh, KEY_UP)) pol_sel = (pol_sel + NPOLICIES - 1) % NPOLICIES;
+		return;
+	}
 	if (kd & KEY_B) {
 		go_scene(about_back, -1);
+		return;
+	}
+	if ((kd & KEY_A) && about_sel == AB_POLICIES) {
+		about_pol = true;
+		pol_sel = 0;
 		return;
 	}
 	if (key_repeat(kd, kh, KEY_DOWN)) about_sel = (about_sel + 1) % AB_COUNT;

@@ -12,6 +12,7 @@
 #include <strings.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <dirent.h>
 
 #define SOC_BUFSIZE  0x100000
 #define MAX_BODY     (4 * 1024 * 1024)
@@ -68,12 +69,160 @@ static void log_flush(void)
 	}
 }
 
+// ----------------------------------------------------------------------------
+// Caché de imágenes en la SD: los JPEG tal cual llegan (comprimidos), para no volver a bajarlos.
+// Hasta CACHE_MAX; al pasarse se borran los más antiguos. La cuenta y la limpieza las hace el hilo
+// del registro, nunca la interfaz
+
+#define CACHE_DIR  APP_DIR "/cache"
+#define CACHE_MAX  (64LL << 20)
+#define CACHE_DAYS 30
+static volatile s64 cache_bytes = -1;      // -1: aún sin contar
+static volatile bool cache_clear_req;
+
+static void cache_name(const char *url, char *out, size_t n)
+{
+	u64 h = 1469598103934665603ULL;   // FNV-1a
+	for (const unsigned char *p = (const unsigned char *)url; *p; p++) h = (h ^ *p) * 1099511628211ULL;
+	snprintf(out, n, CACHE_DIR "/%016llx.jpg", (unsigned long long)h);
+}
+
+// Cada archivo empieza con «S3C1» y la hora en que se guardó (la fecha del archivo en la SD no es
+// de fiar), y luego el JPEG tal cual
+#define CACHE_MAGIC 0x31433353u   // "S3C1"
+
+static time_t cache_time_of(const char *path)
+{
+	u32 h[2] = {0, 0};
+	FILE *f = fopen(path, "rb");
+	if (!f) return 0;
+	size_t n = fread(h, 4, 2, f);
+	fclose(f);
+	return n == 2 && h[0] == CACHE_MAGIC ? (time_t)h[1] : 0;
+}
+
+static bool cache_get(Req *r)
+{
+	char path[96];
+	cache_name(r->url, path, sizeof path);
+	struct stat st;
+	if (stat(path, &st) != 0 || st.st_size <= 8 || st.st_size > (1 << 20)) return false;
+	FILE *f = fopen(path, "rb");
+	if (!f) return false;
+	u32 h[2];
+	char *d = malloc(st.st_size);
+	size_t n = 0;
+	bool ok = d && fread(h, 4, 2, f) == 2 && h[0] == CACHE_MAGIC && time(NULL) - (time_t)h[1] <= CACHE_DAYS * 86400;
+	if (ok) n = fread(d, 1, st.st_size - 8, f);
+	fclose(f);
+	if (!ok || n != (size_t)st.st_size - 8) {   // vieja, de otro formato o a medias: se vuelve a pedir
+		free(d);
+		return false;
+	}
+	d[n] = 0;
+	free(r->data);
+	r->data = d;
+	r->len = r->cap = n;
+	return true;
+}
+
+static void cache_put(const Req *r)
+{
+	if (!r->data || !r->len || r->len > (1 << 20) || cache_bytes < 0 || cache_clear_req) return;
+	char path[96], tmp[100];
+	cache_name(r->url, path, sizeof path);
+	snprintf(tmp, sizeof tmp, "%s.tmp", path);
+	FILE *f = fopen(tmp, "wb");
+	if (!f) return;
+	u32 h[2] = {CACHE_MAGIC, (u32)time(NULL)};
+	bool ok = fwrite(h, 4, 2, f) == 2 && fwrite(r->data, 1, r->len, f) == r->len;
+	ok = fclose(f) == 0 && ok;
+	if (!ok) {
+		remove(tmp);
+		return;
+	}
+	remove(path);
+	rename(tmp, path);
+	__atomic_add_fetch(&cache_bytes, (s64)r->len + 8, __ATOMIC_RELAXED);
+}
+
+typedef struct { char name[24]; time_t when; long size; } CacheFile;
+
+static int cmp_cache(const void *a, const void *b)
+{
+	const CacheFile *x = a, *y = b;
+	return x->when < y->when ? -1 : x->when > y->when;
+}
+
+// Cuenta lo que ocupa y, si hace falta, borra (todo, o lo más antiguo hasta bajar del 80 %)
+static void cache_maintain(void)
+{
+	bool clear = cache_clear_req;
+	if (cache_bytes >= 0 && cache_bytes <= CACHE_MAX && !clear) return;
+	DIR *d = opendir(CACHE_DIR);
+	if (!d) {
+		cache_bytes = 0;
+		cache_clear_req = false;
+		return;
+	}
+	int cap = 256, n = 0;
+	CacheFile *files = malloc(cap * sizeof *files);
+	s64 total = 0;
+	struct dirent *e;
+	while ((e = readdir(d))) {
+		if (e->d_name[0] == '.' || strlen(e->d_name) >= sizeof files[0].name) continue;
+		char path[96];
+		snprintf(path, sizeof path, CACHE_DIR "/%s", e->d_name);
+		struct stat st;
+		if (stat(path, &st) != 0) continue;
+		if (clear) {
+			remove(path);
+			continue;
+		}
+		total += st.st_size;
+		if (n == cap) {
+			CacheFile *m = realloc(files, (cap *= 2) * sizeof *files);
+			if (!m) break;
+			files = m;
+		}
+		if (files) {
+			snprintf(files[n].name, sizeof files[n].name, "%s", e->d_name);
+			files[n].when = cache_time_of(path);
+			files[n].size = st.st_size;
+			n++;
+		}
+	}
+	closedir(d);
+	if (!clear && files && total > CACHE_MAX) {
+		qsort(files, n, sizeof *files, cmp_cache);
+		for (int i = 0; i < n && total > CACHE_MAX * 8 / 10; i++) {
+			char path[96];
+			snprintf(path, sizeof path, CACHE_DIR "/%s", files[i].name);
+			if (remove(path) == 0) total -= files[i].size;
+		}
+		netlog("cache: limpiada (quedan %lld KB)", (long long)(total >> 10));
+	}
+	free(files);
+	cache_bytes = clear ? 0 : total;
+	if (clear) netlog("cache: vaciada");
+	cache_clear_req = false;
+}
+
+s64 net_cache_bytes(void) { return cache_clear_req ? 0 : cache_bytes; }
+
+void net_cache_clear(void)
+{
+	cache_clear_req = true;
+	LightEvent_Signal(&log_wake);
+}
+
 static void log_main(void *arg)
 {
 	while (!quitting) {
 		LightEvent_WaitTimeout(&log_wake, 500000000LL);
 		wifi_up = soc_ready && gethostid() != 0;
 		log_flush();
+		cache_maintain();
 	}
 	log_flush();
 }
@@ -537,8 +686,8 @@ static CURLcode perform(Lane *l, CURL *c)
 
 static void run_req(Lane *l, Req *r)
 {
-	if (r->jpeg && raw_get(r)) {
-		// Ya la teníamos: solo se decodifica a este tamaño
+	if (r->jpeg && (raw_get(r) || cache_get(r))) {
+		// Ya la teníamos (en memoria o en la SD): solo se decodifica a este tamaño
 		r->http = 200;
 		if (!decode_jpeg(r)) snprintf(r->err, sizeof r->err, "imagen no válida");
 		free(r->data);
@@ -615,6 +764,7 @@ static void run_req(Lane *l, Req *r)
 	} else if (r->jpeg) {
 		raw_put(r);
 		if (!decode_jpeg(r)) snprintf(r->err, sizeof r->err, "imagen no válida");
+		else cache_put(r);
 	} else if (r->parse && !r->cancel && r->data) {
 		r->parsed = r->parse(r);
 	}
@@ -685,6 +835,7 @@ void net_init(void)
 {
 	mkdir("sdmc:/3ds", 0777);
 	mkdir(APP_DIR, 0777);
+	mkdir(CACHE_DIR, 0777);
 	LightLock_Init(&log_lock);
 	LightLock_Init(&soc_lock);
 	LightLock_Init(&ref_lock);

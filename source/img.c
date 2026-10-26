@@ -60,9 +60,17 @@ static bool upload(Slot *s, const u8 *tiled, int w, int h, int tw, int th)
 	return true;
 }
 
+static bool holding;
+
+void img_hold(bool hold)
+{
+	holding = hold;
+}
+
 void img_update(void)
 {
 	frame++;
+	if (holding) return;   // se suben al acabar la animación (siguen descargándose)
 	// Como mucho una subida por frame para no dar tirones
 	for (int i = 0; i < ALL_SLOTS; i++) {
 		Slot *s = &slots[i];

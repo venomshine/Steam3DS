@@ -66,6 +66,9 @@ void net_release(Req *r);
 // Estado de la conexión, para mostrar el motivo real en pantalla.
 bool net_wifi_ok(void);
 bool net_busy(void);           // hay algo descargándose
+// Caché de imágenes en la SD: lo que ocupa (-1 mientras se cuenta al arrancar) y vaciarla
+s64 net_cache_bytes(void);
+void net_cache_clear(void);
 // Hora UTC según los servidores de Steam = time(NULL) + g_server_delta (cuando g_server_known)
 extern long long g_server_delta;
 extern bool g_server_known;

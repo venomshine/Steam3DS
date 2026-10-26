@@ -21,6 +21,7 @@ wait 30
 press DOWN
 press DOWN
 press DOWN
+press DOWN
 press A
 wait 300
 press X
@@ -59,6 +60,7 @@ press A
 wait 120
 press START
 wait 30
+press DOWN
 press DOWN
 press DOWN
 press DOWN

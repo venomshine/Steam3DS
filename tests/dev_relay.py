@@ -275,8 +275,17 @@ def fake_get(path, q):
         ids = [int(x) for x in inp.get("steamids", [])]
         # El avatar de «?» que Steam pone a las cuentas sin avatar
         sha = base64.b64encode(bytes.fromhex("fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb")).decode()
+        # Estado: Kenji jugando a Hades, Lucía en línea y Marco desconectado desde hace dos días
+        now = int(time.time())
+        priv = {76561190000000101: {"persona_state": 1, "game_id": "1145360", "game_extra_info": "Hades"},
+                76561190000000102: {"persona_state": 1}, 76561190000000103: {"persona_state": 0, "last_logoff_time": now - 2 * 86400}}
         return {"response": {"accounts": [{"public_data": {"steamid": str(i), "persona_name": NAMES.get(i, "Amigo"),
-                                                            "sha_digest_avatar": sha}} for i in ids]}}
+                                                            "sha_digest_avatar": sha}, "private_data": priv.get(i, {"persona_state": 1})}
+                                          for i in ids]}}
+    if path.endswith("IFriendsListService/GetFriendsList/v1/"):
+        return {"response": {"friendslist": {"bincremental": False, "friends":
+                [{"ulfriendid": str(f), "efriendrelationship": 3} for f in FRIENDS] +
+                [{"ulfriendid": "76561190000000109", "efriendrelationship": 2}]}}}
     if path.endswith("GetSteamLevel/v1/"):
         return {"response": {"player_level": 23}}
     if path.endswith("GetOwnedGames/v1/"):

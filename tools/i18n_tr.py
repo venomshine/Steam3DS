@@ -4,6 +4,7 @@
 # Textos que llegan a _() a través de una variable (pestañas, apartados, pistas, clasificaciones)
 INDIRECT = [
     "Marcar", "Mantener para pagar", "Precio", "Notificaciones",
+    'En línea', 'Ocupado', 'Ausente', 'Durmiendo', 'Quiere intercambiar', 'Quiere jugar', 'Jugando', 'Desconectados', 'Ver la lista', 'Ver el juego',
     'Acuerdo de Suscriptor de Steam', 'Tu cuenta y las licencias de lo que compras', 'El contrato entre tú y Valve para usar Steam: tu cuenta, las licencias del contenido que compras, las suscripciones y las normas de uso del servicio.', 'Política de privacidad', 'Qué datos se recogen y para qué', 'Qué datos recoge Valve cuando usas Steam, para qué los usa, con quién los comparte y cómo ejercer tus derechos sobre ellos.', 'Reembolsos de Steam', 'Cuándo y cómo pedir un reembolso', 'Puedes pedir el reembolso de casi cualquier compra en los 14 días siguientes si has jugado menos de 2 horas. Se solicita desde la ayuda de Steam.', 'Normas de conducta en línea', 'Reseñas, foros, perfiles y chat', 'Lo que no está permitido en las partes de Steam con contenido de los usuarios: reseñas, foros, perfiles, chat y Workshop.', 'Información legal', 'Marcas y derechos de autor', 'Avisos de marcas, derechos de autor y el resto de la información legal de Valve y de Steam.',
     "Explora la tienda de Steam, consulta ofertas y reseñas, gestiona tu lista de deseos y tu carrito, y compra con los métodos de pago de tu cuenta, todo desde la consola.",
     "Steam3DS es un proyecto independiente y no está afiliado, patrocinado ni respaldado por Valve Corporation ni por Nintendo. Steam y el logotipo de Steam son marcas comerciales o marcas registradas de Valve Corporation. Nintendo 3DS es una marca registrada de Nintendo.",
@@ -18,6 +19,33 @@ INDIRECT = [
 ]
 
 TR = {
+    # Amigos
+    '%d solicitud': ('%d request', '%d 件のリクエスト'),
+    '%d solicitudes': ('%d requests', '%d 件のリクエスト'),
+    'Amigos · %d': ('Friends · %d', 'フレンド · %d'),
+    'Añadir amigo': ('Add friend', 'フレンドを追加'),
+    'Cargando tus amigos…': ('Loading your friends…', 'フレンドを読み込んでいます…'),
+    'Comprueba la conexión y vuelve a entrar': ('Check your connection and open it again', '接続を確認して、もう一度開いてください'),
+    'Código de amigo: %lu': ('Friend code: %lu', 'フレンドコード: %lu'),
+    'Desconectado': ('Offline', 'オフライン'),
+    'Desconectado · %s': ('Offline · %s', 'オフライン · %s'),
+    'Escanea el código con el móvil: se abrirá tu perfil de Steam, donde tu amigo puede pulsar «Añadir amigo».': ('Scan the code with a phone: your Steam profile will open, where your friend can tap “Add Friend”.', 'スマホでコードを読み取ると Steam プロフィールが開き、「フレンドを追加」を押せます。'),
+    'Jugando a %s': ('Playing %s', '%s をプレイ中'),
+    'No se pudo cargar tu lista de amigos': ("Your friends list couldn't be loaded", 'フレンドリストを読み込めませんでした'),
+    'Todavía no tienes amigos en Steam': ("You don't have any friends on Steam yet", 'Steam のフレンドはまだいません'),
+    'Todavía no tienes amigos en Steam. Escanea el código con el móvil de un amigo: se abrirá tu perfil, donde puede pulsar «Añadir amigo».': ("You don't have any friends on Steam yet. Scan the code with a friend's phone: your profile will open, where they can tap “Add Friend”.", 'Steam のフレンドはまだいません。友達のスマホでコードを読み取るとプロフィールが開き、「フレンドを追加」を押せます。'),
+    'un juego': ('a game', 'ゲーム'),
+    'En línea': ('Online', 'オンライン'),
+    'Ocupado': ('Busy', '取り込み中'),
+    'Ausente': ('Away', '退席中'),
+    'Durmiendo': ('Snooze', 'スヌーズ'),
+    'Quiere intercambiar': ('Looking to trade', 'トレード希望'),
+    'Quiere jugar': ('Looking to play', 'プレイ相手募集中'),
+    'Jugando': ('Playing', 'プレイ中'),
+    'Desconectados': ('Offline', 'オフライン'),
+    'Ver la lista': ('View list', 'リストを表示'),
+    'Ver el juego': ('View game', 'ゲームを表示'),
+
     # Perfil: activar un producto
     'Activando…': ('Activating…', 'アクティベート中…'),
     'Activar': ('Activate', 'アクティベート'),

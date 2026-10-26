@@ -134,6 +134,16 @@ int main(void) {
 		"{\"notification_id\":\"124\",\"notification_type\":2,\"body_data\":\"{}\",\"read\":true,\"timestamp\":1790000100},"
 		"{\"notification_id\":\"125\",\"notification_type\":9,\"hidden\":true}]}}", nt, 4, &unread) == 2);
 	CHECK(unread == 1 && nt[0].id == 123 && nt[0].type == 7 && nt[0].appid == 367520 && !nt[0].read && nt[1].read);
+	// Amigos: las dos formas de la lista y los datos de cada cuenta
+	u64 fids[8];
+	int pend;
+	CHECK(steam_parse_friends("{\"response\":{\"friendslist\":{\"friends\":[{\"ulfriendid\":\"76561190000000101\",\"efriendrelationship\":3},"
+		"{\"ulfriendid\":\"76561190000000109\",\"efriendrelationship\":2}]}}}", fids, 8, &pend) == 1 && fids[0] == 76561190000000101ULL && pend == 1);
+	CHECK(steam_parse_friends("{\"friendslist\":{\"friends\":[{\"steamid\":\"76561190000000102\",\"relationship\":\"friend\"}]}}", fids, 8, &pend) == 1 && fids[0] == 76561190000000102ULL);
+	SteamPerson pp[2];
+	CHECK(steam_parse_people("{\"response\":{\"accounts\":[{\"public_data\":{\"steamid\":\"76561190000000101\",\"persona_name\":\"Kenji\"},"
+		"\"private_data\":{\"persona_state\":1,\"game_id\":\"1145360\",\"game_extra_info\":\"Hades\"}}]}}", pp, 2) == 1);
+	CHECK(pp[0].state == 1 && pp[0].game == 1145360 && !strcmp(pp[0].game_name, "Hades") && !strcmp(pp[0].name, "Kenji"));
 	// Las etiquetas populares
 	StoreTag tg[4];
 	CHECK(steam_parse_tags("{\"response\":{\"tags\":[{\"tagid\":492,\"name\":\"Indie\"},{\"tagid\":19,\"name\":\"Acción\"}]}}", tg, 4) == 2);

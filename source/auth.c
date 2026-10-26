@@ -476,15 +476,7 @@ void auth_update(void)
 		const cJSON *pd = acc ? cJSON_GetObjectItemCaseSensitive(acc, "public_data") : NULL;
 		const char *name = jstr(pd, "persona_name"), *av = jstr(pd, "sha_digest_avatar");
 		if (name) snprintf(A.persona, sizeof A.persona, "%s", name);
-		if (av) {
-			unsigned char sha[20];
-			size_t n = b64_decode(av, strlen(av), sha, sizeof sha);
-			if (n == 20) {
-				char hex[41];
-				for (int i = 0; i < 20; i++) snprintf(hex + i * 2, 3, "%02x", sha[i]);
-				snprintf(A.avatar, sizeof A.avatar, "https://avatars.steamstatic.com/%s_medium.jpg", hex);
-			}
-		}
+		if (av) auth_avatar_url(av, A.avatar, sizeof A.avatar);
 		if (!pd) netlog("sesion: perfil sin datos (%s)", profile_req->err[0] ? profile_req->err : "json");
 		A.changed = now;
 		cJSON_Delete(root);
@@ -531,3 +523,13 @@ bool auth_web_cookies(const char *host, char *out, size_t sz)
 }
 
 const char *auth_sessionid(void) { return sessionid; }
+
+bool auth_avatar_url(const char *sha_b64, char *out, size_t n)
+{
+	unsigned char sha[20];
+	if (!sha_b64 || b64_decode(sha_b64, strlen(sha_b64), sha, sizeof sha) != 20) return false;
+	char hex[41];
+	for (int i = 0; i < 20; i++) snprintf(hex + i * 2, 3, "%02x", sha[i]);
+	snprintf(out, n, "https://avatars.steamstatic.com/%s_medium.jpg", hex);
+	return true;
+}

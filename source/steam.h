@@ -219,6 +219,22 @@ typedef struct {
 Req *steam_req_notifications(const char *token);
 int steam_parse_notifications(const char *json, SteamNotif *out, int max, int *unread);   // -1 si falla
 Req *steam_req_notifications_read(const char *token);   // las marca todas como leídas
+
+// Amigos: la lista (IFriendsListService; si no responde, ISteamUser/GetFriendList) y los datos de
+// cada cuenta (GetPlayerLinkDetails: nombre, avatar, estado y el juego al que está jugando)
+Req *steam_req_friends(u64 steamid, const char *token, bool fallback);
+int steam_parse_friends(const char *json, u64 *ids, int max, int *pending);   // -1 si falla
+typedef struct {
+	u64 id;
+	char name[40];
+	char avatar_sha[32];    // sha_digest_avatar (base64); la URL la hace auth_avatar_url
+	int state;              // 0 desconectado, 1 en línea, 2 ocupado, 3 ausente, 4 durmiendo…
+	u32 game;               // a qué está jugando (0 nada)
+	char game_name[64];
+	u32 last_off;           // última vez que se desconectó
+} SteamPerson;
+Req *steam_req_people(const u64 *ids, int n, const char *token);
+int steam_parse_people(const char *json, SteamPerson *out, int max);
 Req *steam_get_service(const char *iface_method, cJSON *input, const char *token);   // los que solo van por GET
 bool steam_parse_cart(const char *json, CartInfo *c);           // respuesta con «cart»
 Req *steam_req_cart_names(const CartInfo *c);

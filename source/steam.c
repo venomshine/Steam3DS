@@ -1255,6 +1255,102 @@ Req *steam_req_notifications_read(const char *token)
 	return steam_post_service("ISteamNotificationService/MarkNotificationsRead", in, token);
 }
 
+Req *steam_req_friends(u64 steamid, const char *token, bool fallback)
+{
+	char url[1400];
+	if (fallback)
+		snprintf(url, sizeof url, "https://api.steampowered.com/ISteamUser/GetFriendList/v1/?access_token=%s&steamid=%llu&relationship=all",
+			token, (unsigned long long)steamid);
+	else
+		snprintf(url, sizeof url, "https://api.steampowered.com/IFriendsListService/GetFriendsList/v1/?access_token=%s", token);
+	return net_get(url, LANE_API);
+}
+
+// Las dos respuestas: {"response":{"friendslist":{"friends":[{"ulfriendid","efriendrelationship"}]}}}
+// o {"friendslist":{"friends":[{"steamid","relationship":"friend"}]}}. 3/friend es amigo; 2 o
+// requestrecipient, una solicitud que te han mandado
+int steam_parse_friends(const char *json, u64 *ids, int max, int *pending)
+{
+	*pending = 0;
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	const cJSON *fl = cJSON_GetObjectItemCaseSensitive(resp ? resp : root, "friendslist");
+	const cJSON *list = fl ? cJSON_GetObjectItemCaseSensitive(fl, "friends") : NULL;
+	if (!list) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *f;
+	cJSON_ArrayForEach(f, list) {
+		const char *sid = jstr(f, "ulfriendid");
+		if (!sid) sid = jstr(f, "steamid");
+		u64 id = sid ? strtoull(sid, NULL, 10) : 0;
+		const char *rel_s = jstr(f, "relationship");
+		int rel = rel_s ? (!strcmp(rel_s, "friend") ? 3 : !strcmp(rel_s, "requestrecipient") ? 2 : 0) : (int)jnum(f, "efriendrelationship", 0);
+		if (rel == 2) (*pending)++;
+		if (rel != 3 || !id || n >= max) continue;
+		ids[n++] = id;
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
+Req *steam_req_people(const u64 *ids, int n, const char *token)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON *arr = cJSON_AddArrayToObject(in, "steamids");
+	for (int i = 0; i < n; i++) {
+		char s[24];
+		snprintf(s, sizeof s, "%llu", (unsigned long long)ids[i]);
+		cJSON_AddItemToArray(arr, cJSON_CreateString(s));
+	}
+	char *js = cJSON_PrintUnformatted(in);
+	char *esc = url_escape(js);
+	size_t len = strlen(esc) + strlen(token) + 160;
+	char *url = malloc(len);
+	snprintf(url, len, "https://api.steampowered.com/IPlayerService/GetPlayerLinkDetails/v1/?access_token=%s&input_json=%s", token, esc);
+	Req *r = net_get(url, LANE_API);
+	free(url);
+	free(esc);
+	free(js);
+	cJSON_Delete(in);
+	return r;
+}
+
+int steam_parse_people(const char *json, SteamPerson *out, int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *a;
+	cJSON_ArrayForEach(a, cJSON_GetObjectItemCaseSensitive(resp, "accounts")) {
+		if (n >= max) break;
+		const cJSON *pd = cJSON_GetObjectItemCaseSensitive(a, "public_data");
+		const cJSON *pv = cJSON_GetObjectItemCaseSensitive(a, "private_data");
+		const char *sid = jstr(pd, "steamid");
+		if (!sid) continue;
+		SteamPerson *p = &out[n++];
+		memset(p, 0, sizeof *p);
+		p->id = strtoull(sid, NULL, 10);
+		copy_utf8(p->name, sizeof p->name, jstr(pd, "persona_name"));
+		copy(p->avatar_sha, sizeof p->avatar_sha, jstr(pd, "sha_digest_avatar"));
+		if (pv) {
+			p->state = (int)jnum(pv, "persona_state", 0);
+			const char *g = jstr(pv, "game_id");
+			p->game = g ? (u32)strtoull(g, NULL, 10) : (u32)jnum(pv, "game_id", 0);
+			copy_utf8(p->game_name, sizeof p->game_name, jstr(pv, "game_extra_info"));
+			p->last_off = (u32)jnum(pv, "last_logoff_time", 0);
+		}
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
 Req *steam_post_service(const char *iface_method, cJSON *input, const char *token)
 {
 	char *js = cJSON_PrintUnformatted(input);

@@ -5013,9 +5013,7 @@ int main(int argc, char **argv)
 
 	u64 last = osGetTime();
 	while (aptMainLoop() && !S.quit) {
-#ifdef DEV_RELAY
 		u64 tick0 = svcGetSystemTick();
-#endif
 		u64 now = osGetTime();
 		float dt = (now - last) / 1000.0f;
 		last = now;
@@ -5217,9 +5215,7 @@ int main(int argc, char **argv)
 			S.rscroll = approach(S.rscroll, rt, 18);
 		}
 
-#ifdef DEV_RELAY
 		u64 tick_upd = svcGetSystemTick();
-#endif
 		C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 		ui_begin_frame();
 		C2D_TargetClear(top, COL_BG);
@@ -5248,9 +5244,7 @@ int main(int argc, char **argv)
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
 		if (S.quit_fade >= 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(S.quit_fade / 0.3f, 0, 1))));
 
-#ifdef DEV_RELAY
 		u64 tick_top = svcGetSystemTick();
-#endif
 		C2D_TargetClear(bot, COL_BG);
 		C2D_SceneBegin(bot);
 		if (S.scene != SC_SPLASH) fx_backdrop(GFX_BOTTOM, BOT_W, SCR_H);
@@ -5277,6 +5271,18 @@ int main(int argc, char **argv)
 		}
 		draw_overlays_bottom();
 		if (S.quit_fade >= 0) ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(S.quit_fade / 0.3f, 0, 1))));
+		// Un frame lento: en qué parte se fue el tiempo y cuántas imágenes se estaban cargando (también
+		// en la versión normal, como mucho una línea por segundo, para poder verlo en la consola)
+		{
+			static u64 last_slow;
+			u64 tick_end = svcGetSystemTick();
+			double k = 1000.0 / SYSCLOCK_ARM11, ms = (tick_end - tick0) * k;
+			if (ms > 45 && S.scene != SC_SPLASH && now - last_slow > 1000) {
+				last_slow = now;
+				netlog("lento: %.1fms escena=%d actualizar=%.1f arriba=%.1f abajo=%.1f imagenes=%d", ms, S.scene,
+					(tick_upd - tick0) * k, (tick_top - tick_upd) * k, (tick_end - tick_top) * k, img_pending());
+			}
+		}
 #ifdef DEV_RELAY
 		// Solo en pruebas: tiempo de CPU por frame (ticks de la consola), medio cada 2 s en net.log
 		{
@@ -5285,12 +5291,6 @@ int main(int argc, char **argv)
 			static u64 last_log;
 			u64 tick_end = svcGetSystemTick();
 			double ms = (tick_end - tick0) / (double)SYSCLOCK_ARM11 * 1000.0;
-			// Un frame lento: en qué parte se fue el tiempo
-			if (ms > 40) {
-				double k = 1000.0 / SYSCLOCK_ARM11;
-				netlog("lento: %.1fms escena=%d pago=%d actualizar=%.1f arriba=%.1f abajo=%.1f", ms, S.scene, pay_info()->state,
-					(tick_upd - tick0) * k, (tick_top - tick_upd) * k, (tick_end - tick_top) * k);
-			}
 			acc += ms;
 			if (ms > worst) worst = ms;
 			n++;

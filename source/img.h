@@ -15,6 +15,7 @@ void img_exit(void);
 void img_update(void);                          // una vez por frame: sube a la GPU lo que llegó
 const Pic *img_get(const char *url, int max_w); // NULL mientras se descarga
 bool img_failed(const char *url);
+int img_pending(void);   // imágenes que se están descargando o decodificando
 
 // Dibuja la imagen para que cubra el rectángulo (recortando lo que sobre) o que quepa dentro.
 // Las imágenes recién llegadas aparecen fundiéndose; alpha multiplica ese fundido.

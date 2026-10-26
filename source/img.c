@@ -114,6 +114,13 @@ const Pic *img_get(const char *url, int max_w)
 	return s->ready ? &s->pic : NULL;
 }
 
+int img_pending(void)
+{
+	int n = 0;
+	for (int i = 0; i < ALL_SLOTS; i++) n += slots[i].req != NULL;
+	return n;
+}
+
 bool img_failed(const char *url)
 {
 	for (int i = 0; url && i < ALL_SLOTS; i++)

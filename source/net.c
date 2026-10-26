@@ -387,12 +387,14 @@ static bool decode_jpeg(Req *r)
 {
 	struct jpeg_decompress_struct ci;
 	struct jerr je;
-	u8 *out = NULL;
+	u8 *volatile line = NULL;   // volatile: se suelta después del longjmp
 	ci.err = jpeg_std_error(&je.mgr);
 	je.mgr.error_exit = jerr_exit;
 	if (setjmp(je.jb)) {
 		jpeg_destroy_decompress(&ci);
-		free(out);
+		free(line);
+		free(r->pixels);   // una imagen a medias no se sube
+		r->pixels = NULL;
 		return false;
 	}
 	jpeg_create_decompress(&ci);
@@ -410,38 +412,35 @@ static bool decode_jpeg(Req *r)
 	}
 	jpeg_start_decompress(&ci);
 	int w = ci.output_width, h = ci.output_height;
-	out = malloc((size_t)w * h * 3);
-	if (!out) longjmp(je.jb, 1);
-	while (ci.output_scanline < ci.output_height) {
-		u8 *row = out + (size_t)ci.output_scanline * w * 3;
-		jpeg_read_scanlines(&ci, &row, 1);
-	}
-	jpeg_finish_decompress(&ci);
-	jpeg_destroy_decompress(&ci);
-	// Se reordena aquí, en el hilo de red, al mosaico 8×8 (Morton) BGR que espera la GPU:
-	// así la interfaz solo copia y no pierde un frame cada vez que llega una imagen
 	int tw = 8, th = 8;
 	while (tw < w) tw <<= 1;
 	while (th < h) th <<= 1;
-	if (tw > 1024 || th > 1024) {
-		free(out);
-		return false;
-	}
+	if (tw > 1024 || th > 1024) longjmp(je.jb, 1);
+	// Cada línea va directa al mosaico 8×8 (Morton) BGR que espera la GPU, sin pasar por una imagen
+	// entera intermedia: una pasada menos por la memoria, que la 3DS comparte con la GPU. Y a tramos,
+	// con una pausa corta, para no acapararla mientras la interfaz dibuja
 	u8 *sw = calloc((size_t)tw * th, 3);
-	if (!sw) {
-		free(out);
-		return false;
-	}
-	for (int y = 0; y < h; y++) {
-		for (int x = 0; x < w; x++) {
-			u32 off = ((((y >> 3) * (tw >> 3) + (x >> 3)) << 6) +
-				((x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) | ((x & 4) << 2) | ((y & 4) << 3))) * 3;
-			const u8 *p = out + ((size_t)y * w + x) * 3;
+	r->pixels = sw;
+	u8 *out = malloc((size_t)w * 3);
+	line = out;
+	if (!sw || !out) longjmp(je.jb, 1);
+	while (ci.output_scanline < ci.output_height) {
+		int y = ci.output_scanline;
+		jpeg_read_scanlines(&ci, &out, 1);
+		const u8 *p = out;
+		u32 rowbase = ((y >> 3) * (tw >> 3)) << 6;
+		u32 ybits = ((y & 1) << 1) | ((y & 2) << 2) | ((y & 4) << 3);
+		for (int x = 0; x < w; x++, p += 3) {
+			u32 off = (rowbase + ((x >> 3) << 6) + ((x & 1) | ((x & 2) << 1) | ((x & 4) << 2) | ybits)) * 3;
 			sw[off + 0] = p[2];
 			sw[off + 1] = p[1];
 			sw[off + 2] = p[0];
 		}
+		if ((y & 15) == 15) svcSleepThread(250000);
 	}
+	jpeg_finish_decompress(&ci);
+	jpeg_destroy_decompress(&ci);
+	line = NULL;
 	free(out);
 	r->pixels = sw;
 	r->w = w;
@@ -629,16 +628,24 @@ static void lane_main(void *arg)
 	curl_easy_cleanup(l->curl);
 }
 
-static Thread start_thread(ThreadFunc f, void *arg)
+// Los hilos de red van en otro núcleo para no quitarle tiempo a la interfaz (que va en el 0): el 2
+// de la New 3DS o, si no, el 1 (con un tope de CPU). Se apunta en net.log dónde quedó cada uno
+static Thread start_thread(ThreadFunc f, void *arg, const char *name)
 {
 	s32 prio = 0x30;
 	svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+	int core = 2;
 	Thread t = threadCreate(f, arg, 64 * 1024, prio + 1, 2, false);
 	if (!t) {
 		APT_SetAppCpuTimeLimit(30);
+		core = 1;
 		t = threadCreate(f, arg, 64 * 1024, prio + 1, 1, false);
 	}
-	if (!t) t = threadCreate(f, arg, 64 * 1024, prio + 1, -2, false);
+	if (!t) {
+		core = 0;
+		t = threadCreate(f, arg, 64 * 1024, prio + 1, -2, false);
+	}
+	netlog("hilo %s: %s", name, !t ? "no se pudo crear" : core == 2 ? "núcleo 2" : core == 1 ? "núcleo 1 (30 %)" : "núcleo 0 (el de la interfaz)");
 	return t;
 }
 
@@ -656,13 +663,13 @@ void net_init(void)
 	acInit();
 	soc_try_init();
 	curl_global_init(CURL_GLOBAL_DEFAULT);
-	log_thread = start_thread(log_main, NULL);
+	log_thread = start_thread(log_main, NULL, "registro");
 	for (int i = 0; i < LANE_COUNT; i++) {
 		Lane *l = &lanes[i];
 		l->lane = i;
 		LightLock_Init(&l->lock);
 		LightEvent_Init(&l->wake, RESET_ONESHOT);
-		l->thread = start_thread(lane_main, l);
+		l->thread = start_thread(lane_main, l, i == LANE_API ? "tienda" : "imágenes");
 	}
 }
 

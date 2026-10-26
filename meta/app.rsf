@@ -70,7 +70,7 @@ AccessControlInfo:
   MemoryType                    : Application # Application/System/Base
   SystemMode                    : 64MB # 64MB(Default)/96MB/80MB/72MB/32MB
   IdealProcessor                : 0
-  AffinityMask                  : 1
+  AffinityMask                  : 3 # núcleos 0 y 1: la red puede ir al 1 si no hay núcleo 2 (vieja 3DS)
   Priority                      : 16
   MaxCpu                        : 0x9E # Default
   HandleTableSize               : 0x200

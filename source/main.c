@@ -462,7 +462,11 @@ static void tab_more(int ti)
 	} else if (tab_paged(ti)) {
 		if (t->list.end) return;
 		static const StoreQuery q[TAB_COUNT] = {[TAB_OFFERS] = Q_OFFERS, [TAB_DEMOS] = Q_DEMOS, [TAB_BETAS] = Q_EARLY};
-		t->list.req = steam_req_query(q[ti], t->list.count, PAGE);
+		// Betas quita lo que ya no está en acceso anticipado: la página siguiente va por lo que se
+		// pidió a Steam, no por lo que queda (si no, se repetían juegos)
+		int start = ti == TAB_BETAS ? t->raw_next : t->list.count;
+		t->list.req = steam_req_query(q[ti], start, PAGE);
+		if (ti == TAB_BETAS) t->raw_next += PAGE;
 	}
 	t->started = true;
 }
@@ -4772,14 +4776,19 @@ int main(int argc, char **argv)
 			else if (ti == TAB_LIBRARY) owned_poll(t);
 			else if (ti == TAB_WISHLIST) wish_poll(t);
 			else if (ti == TAB_SEARCH) search_poll(t);
-			else list_poll(&t->list, tab_paged(ti));
+			else {
+				// Betas: si una página falla, se vuelve a pedir la misma
+				if (ti == TAB_BETAS && t->list.req && t->list.req->state == REQ_FAILED) t->raw_next -= PAGE;
+				list_poll(&t->list, tab_paged(ti));
+			}
 			if (ti == TAB_BETAS) {
 				// La etiqueta «Acceso anticipado» la ponen los usuarios y se queda en juegos que ya
 				// salieron (PUBG): solo se dejan los que Steam marca como acceso anticipado de verdad
-				int n = 0;
+				int total = t->list.total, n = 0;
 				for (int k = 0; k < t->list.count; k++)
 					if (t->list.rows[k].early) t->list.rows[n++] = t->list.rows[k];
 				t->list.count = n;
+				if (total && t->raw_next >= total) t->list.end = true;
 				if (t->sel >= n) t->sel = n ? n - 1 : 0;
 			}
 			if (t->list.err[0] && !t->list.req) {

@@ -2161,6 +2161,8 @@ static bool friends_text(char *out, size_t n)
 static void fmt_date(u32 t, char *out, size_t n);
 static void draw_review_preview(const AppInfo *a);
 static void review_editor_close(void);
+static void remote_close(void);
+static void remote_poll(const AppInfo *a);
 static int press_update(u32 kd, u32 kh, u32 ku, touchPosition *tp, const int *ids, int n);
 static bool key_repeat(u32 down, u32 held, u32 mask);
 
@@ -2195,6 +2197,7 @@ static void open_game(u32 appid, bool push)
 	S.rsel = auth_logged() && owned_app(appid) ? -1 : 0;   // tu reseña, la primera
 	S.rscroll = 0;
 	review_editor_close();
+	remote_close();
 	S.lsel = 0;
 	S.lscroll = 0;
 	S.lsel_y = 0;
@@ -2398,6 +2401,7 @@ static void game_poll(const AppInfo *a)
 	ach_poll(a);
 	myshots_poll(a);
 	myreview_poll(a);
+	remote_poll(a);
 	if (S.sec == SEC_EXTRAS && S.dlc_for != a->appid) {
 		rowlist_free(&S.dlc);
 		S.dlc_for = a->appid;
@@ -2998,6 +3002,149 @@ static void draw_pick(const AppInfo *a)
 }
 
 
+// ---------------------------------------------------------------------------- Instalar en tu PC de forma remota
+
+#define RP_MAX 6
+static struct {
+	bool open;
+	float anim;
+	u32 appid;
+	Req *req, *apps[RP_MAX], *inst;
+	RemotePC pc[RP_MAX];
+	int n, sel, inst_i;
+	bool loaded, failed;
+} RP;
+
+static void remote_close(void)
+{
+	RP.open = false;
+}
+
+static void remote_open(const AppInfo *a)
+{
+	if (RP.req) net_release(RP.req);
+	for (int i = 0; i < RP_MAX; i++)
+		if (RP.apps[i]) net_release(RP.apps[i]), RP.apps[i] = NULL;
+	RP.req = steam_req_remote_pcs(auth_token());
+	RP.appid = a->appid;
+	RP.n = RP.sel = 0;
+	RP.loaded = RP.failed = false;
+	RP.open = true;
+}
+
+static void remote_poll(const AppInfo *a)
+{
+	if (RP.req && RP.req->state >= REQ_DONE) {
+		int n = RP.req->state == REQ_DONE ? steam_parse_remote_pcs(RP.req->data, RP.pc, RP_MAX) : -1;
+		netlog("instalar en el PC: %d equipos (HTTP %ld)", n, RP.req->http);
+		RP.failed = n < 0;
+		RP.n = n < 0 ? 0 : n;
+		RP.loaded = true;
+		net_release(RP.req);
+		RP.req = NULL;
+		// En cada uno, si ya lo tienes instalado
+		for (int i = 0; i < RP.n; i++) RP.apps[i] = steam_req_remote_apps(RP.pc[i].id, RP.appid, auth_token());
+	}
+	for (int i = 0; i < RP.n; i++) {
+		Req *r = RP.apps[i];
+		if (!r || r->state < REQ_DONE) continue;
+		RP.pc[i].installed = r->state == REQ_DONE ? steam_parse_remote_app(r->data, RP.appid) : -1;
+		netlog("instalar en el PC: %s -> %d", RP.pc[i].name, RP.pc[i].installed);
+		net_release(r);
+		RP.apps[i] = NULL;
+	}
+	if (RP.inst && RP.inst->state >= REQ_DONE) {
+		Req *r = RP.inst;
+		// {"response":{}} con x-eresult 1, o un resultado distinto de 1 si el PC no puede
+		cJSON *root = r->state == REQ_DONE ? cJSON_Parse(r->data) : NULL;
+		const cJSON *res = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "response"), "result");
+		bool ok = r->state == REQ_DONE && r->http == 200 && (r->eresult == 1 || r->eresult == 0) && root &&
+			(!cJSON_IsNumber(res) || res->valueint == 1);
+		netlog("instalar en el PC: orden -> %s (HTTP %ld, eresult %d, result %d)", ok ? "ok" : "fallo", r->http, r->eresult,
+			cJSON_IsNumber(res) ? res->valueint : -1);
+		cJSON_Delete(root);
+		char t[160];
+		const char *pc = RP.inst_i < RP.n ? RP.pc[RP.inst_i].name : "";
+		if (ok && RP.inst_i < RP.n) RP.pc[RP.inst_i].installed = 2;
+		if (ok) snprintf(t, sizeof t, _("Se ha empezado a instalar %s en %s"), a ? a->name : "", pc);
+		else snprintf(t, sizeof t, _("%s no ha podido empezar la instalación. Comprueba que Steam sigue abierto en ese PC"), pc);
+		toast_icon(t, IC_PC);
+		net_release(r);
+		RP.inst = NULL;
+	}
+}
+
+static float remote_y(void)
+{
+	int rows = RP.n ? RP.n : 2;
+	return SCR_H - (34 + rows * PICK_ROW + 12);
+}
+
+static void draw_remote(const AppInfo *a)
+{
+	float an = ease_out_cubic(RP.anim);
+	if (an <= 0.01f) return;
+	ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x90 * an)));
+	float y0 = remote_y() + (1 - an) * 60;
+	fx_panel(6, y0, BOT_W - 12, SCR_H - y0 + 16, 16, an);
+	ui_rrect(BOT_W / 2 - 16, y0 + 6, 32, 3, 1.5f, col_alpha(COL_DIM, an * 0.6f));
+	ui_text(18, y0 + 12, _("Instalar en tu PC de forma remota"), SZ_BODY, col_alpha(COL_WHITE, an), AL_LEFT, BOT_W - 36);
+	float y = y0 + 34;
+	if (!RP.loaded) {
+		ui_spinner(BOT_W / 2, y + PICK_ROW, 6, COL_DIM);
+		return;
+	}
+	if (!RP.n) {
+		ui_text_wrap(20, y + 2, BOT_W - 40, RP.failed ? _("No se pudo consultar tus equipos. Inténtalo de nuevo.")
+			: _("No hay ningún PC con Steam abierto con tu cuenta. Abre Steam en tu PC y vuelve a intentarlo."), SZ_SMALL, COL_TXT, 4, 15);
+		return;
+	}
+	for (int i = 0; i < RP.n; i++) {
+		const RemotePC *pc = &RP.pc[i];
+		float ry = y + i * PICK_ROW;
+		bool on = i == RP.sel;
+		if (on) fx_select(12, ry, BOT_W - 24, PICK_ROW - 3, 10, an);
+		ui_icon(IC_PC, 20, ry + 8, 13, col_alpha(COL_ACC, an));
+		ui_text(40, ry + 2, pc->name[0] ? pc->name : _("PC"), SZ_SMALL, col_alpha(on ? COL_WHITE : COL_TXT, an), AL_LEFT, BOT_W - 140);
+		ui_text(40, ry + 15, pc->os, SZ_TINY, col_alpha(COL_DIM, an), AL_LEFT, BOT_W - 140);
+		const char *st = RP.inst && RP.inst_i == i ? _("Enviando…") : pc->installed == 1 ? _("Ya está instalado") : pc->installed == 2 ? _("Instalación iniciada") : RP.apps[i] ? "" : _("Pulsa A para instalar");
+		ui_text(BOT_W - 20, ry + 9, st, SZ_TINY, col_alpha(pc->installed >= 1 ? COL_LIME : COL_ACC, an), AL_RIGHT, 120);
+		if (RP.apps[i]) ui_spinner(BOT_W - 30, ry + 14, 4, COL_DIM);
+	}
+	(void)a;
+}
+
+static void input_remote(const AppInfo *a, u32 kd, u32 kh, touchPosition *tp)
+{
+	if (kd & KEY_B) {
+		RP.open = false;
+		return;
+	}
+	if (key_repeat(kd, kh, KEY_DOWN) && RP.sel + 1 < RP.n) RP.sel++;
+	if (key_repeat(kd, kh, KEY_UP) && RP.sel > 0) RP.sel--;
+	int pick = -1;
+	if ((kd & KEY_A) && RP.sel < RP.n) pick = RP.sel;
+	if (kd & KEY_TOUCH) {
+		float y = remote_y() + 34;
+		if (tp->py < remote_y()) {
+			RP.open = false;   // fuera del panel: se cierra
+			return;
+		}
+		int i = (int)((tp->py - y) / PICK_ROW);
+		if (tp->py >= y && i >= 0 && i < RP.n) {
+			if (i == RP.sel) pick = i;
+			else RP.sel = i;
+		}
+	}
+	if (pick < 0 || RP.inst) return;
+	if (RP.pc[pick].installed >= 1) {
+		toast(RP.pc[pick].installed == 1 ? _("Ya está instalado en ese PC") : _("La instalación ya se ha iniciado en ese PC"));
+		return;
+	}
+	RP.inst_i = pick;
+	RP.inst = steam_req_remote_install(RP.pc[pick].id, a->appid, auth_token());
+}
+
 // ---------------------------------------------------------------------------- Editor de tu reseña
 
 static const Box B_RUP = {12, 64, 145, 30};
@@ -3251,6 +3398,7 @@ static void draw_game_bottom(void)
 	}
 	if (a) draw_pick(a);
 	if (a && RE.open) draw_review_editor(a);
+	if (a) draw_remote(a);
 }
 
 // ============================================================================
@@ -6721,6 +6869,10 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		input_review_editor(a, kd, kh, ku, tp);
 		return;
 	}
+	if (RP.open && a) {
+		input_remote(a, kd, kh, tp);
+		return;
+	}
 	if (S.show_qr) {
 		// El QR para comprar en el móvil tapa la ficha: solo se cierra
 		if (kd & (KEY_B | KEY_Y)) S.show_qr = false;
@@ -6815,7 +6967,8 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
 		else shop_ignore(a->appid, a->name, !shop_ignored(a->appid));
 	} else if (b == BT_INST) {
-		toast(_("La instalación remota estará disponible en una próxima actualización"));
+		if (!owned_app(a->appid)) toast(_("La instalación remota requiere tener el juego en tu biblioteca"));
+		else remote_open(a);
 	} else if (b == BT_DEMO) {
 		if (owned_app(a->demo)) toast(_("Ya está en tu biblioteca"));
 		else if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
@@ -7256,6 +7409,7 @@ int main(int argc, char **argv)
 		S.exit_anim = approach(S.exit_anim, S.ask_exit ? 1 : 0, S.ask_exit ? 7 : 16);
 		S.menu_anim = approach(S.menu_anim, S.menu_open ? 1 : 0, S.menu_open ? 12 : 18);
 		S.pick_anim = approach(S.pick_anim, S.pick_open ? 1 : 0, S.pick_open ? 12 : 18);
+		RP.anim = approach(RP.anim, RP.open && S.scene == SC_GAME ? 1 : 0, RP.open ? 12 : 18);
 		S.sub_anim = approach(S.sub_anim, S.scene == SC_STORE && (S.tab == TAB_HOME || S.tab == TAB_SEARCH) ? 1 : 0, 14);
 		S.price_x = approach(S.price_x, S.price, 16);
 		price_apply();

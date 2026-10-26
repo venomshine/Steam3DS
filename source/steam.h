@@ -343,3 +343,16 @@ typedef struct {
 } MyReview;
 Req *steam_req_my_review(u64 steamid, u32 appid, const char *token);
 bool steam_parse_my_review(const char *json, u32 appid, MyReview *out);   // false si falla
+
+// Instalar en tu PC de forma remota (lo mismo que el botón «Instalar» de la tienda con sesión): los
+// equipos con Steam abierto con tu cuenta y la orden de instalar
+typedef struct {
+	u64 id;                 // client_instanceid
+	char name[64], os[48];
+	int installed;          // 1 ya está instalado, 0 no, -1 no se sabe (2: instalación pedida desde aquí)
+} RemotePC;
+Req *steam_req_remote_pcs(const char *token);
+int steam_parse_remote_pcs(const char *json, RemotePC *out, int max);   // -1 si falla
+Req *steam_req_remote_apps(u64 client, u32 appid, const char *token);
+int steam_parse_remote_app(const char *json, u32 appid);   // 1 instalado, 0 no, -1 no se sabe
+Req *steam_req_remote_install(u64 client, u32 appid, const char *token);

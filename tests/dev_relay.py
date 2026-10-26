@@ -287,6 +287,8 @@ def fake_post_api(path, body):
             {"statid": i, "bit": 0, "name": a["localized_name"], "desc": a["localized_desc"], "icon": a["icon"],
              "icon_gray": a["icon_gray"], "hidden": a["hidden"], "player_percent_unlocked": a["player_percent_unlocked"]}
             for i, a in enumerate(mine)]}]}}
+    if path.endswith("InstallClientApp/v1/"):
+        return {"response": {}}, 1
     if path.endswith("MarkNotificationsRead/v1/"):
         for n in NOTIFS:
             n["read"] = True
@@ -326,6 +328,16 @@ def fake_get(path, q):
         return {"response": {"friendslist": {"bincremental": False, "friends":
                 [{"ulfriendid": str(f), "efriendrelationship": 3} for f in FRIENDS] +
                 [{"ulfriendid": "76561190000000109", "efriendrelationship": 2}]}}}
+    # Dos PCs con Steam abierto; en el del salón ya está instalado Cyberpunk
+    if path.endswith("GetAllClientLogonInfo/v1/"):
+        return {"response": {"sessions": [
+            {"client_instanceid": "7001", "protocol_version": 2, "os_name": "Windows 11", "machine_name": "PC-ESCRITORIO", "os_type": 20},
+            {"client_instanceid": "7002", "protocol_version": 2, "os_name": "SteamOS", "machine_name": "PC-SALON", "os_type": -203}],
+            "refresh_interval": 60}}
+    if path.endswith("GetClientAppList/v1/"):
+        cid = str(inp.get("client_instanceid", ""))
+        apps = [{"appid": 1091500, "app": "Cyberpunk 2077", "installed": True}] if cid == "7002" else []
+        return {"response": {"apps": apps, "bytes_available": "512000000000"}}
     if path.endswith("GetIndividualRecommendations/v1/"):
         out = []
         for r in inp.get("requests", []):

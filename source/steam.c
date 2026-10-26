@@ -2127,3 +2127,79 @@ bool steam_parse_my_review(const char *json, u32 appid, MyReview *out)
 	cJSON_Delete(root);
 	return true;
 }
+
+// ----------------------------------------------------------------------------
+// Instalación remota (IClientCommService)
+
+Req *steam_req_remote_pcs(const char *token)
+{
+	return steam_get_service("IClientCommService/GetAllClientLogonInfo", cJSON_CreateObject(), token);
+}
+
+int steam_parse_remote_pcs(const char *json, RemotePC *out, int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *it;
+	cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(resp, "sessions")) {
+		if (n >= max) break;
+		u64 id = jid(it, "client_instanceid");
+		if (!id) continue;
+		RemotePC *pc = &out[n++];
+		memset(pc, 0, sizeof *pc);
+		pc->id = id;
+		copy_utf8(pc->name, sizeof pc->name, jstr(it, "machine_name"));
+		copy_utf8(pc->os, sizeof pc->os, jstr(it, "os_name"));
+		pc->installed = -1;
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
+static cJSON *client_input(u64 client, u32 appid)
+{
+	cJSON *in = cJSON_CreateObject();
+	char t[24];
+	snprintf(t, sizeof t, "%llu", (unsigned long long)client);
+	cJSON_AddStringToObject(in, "client_instanceid", t);
+	cJSON_AddNumberToObject(in, "appid", appid);
+	return in;
+}
+
+Req *steam_req_remote_apps(u64 client, u32 appid, const char *token)
+{
+	cJSON *in = client_input(client, appid);
+	cJSON_DeleteItemFromObject(in, "appid");
+	cJSON_AddStringToObject(in, "fields", "games");
+	cJSON *f = cJSON_AddArrayToObject(in, "filter_appids");
+	cJSON_AddItemToArray(f, cJSON_CreateNumber(appid));
+	cJSON_AddBoolToObject(in, "include_client_info", false);
+	return steam_get_service("IClientCommService/GetClientAppList", in, token);
+}
+
+int steam_parse_remote_app(const char *json, u32 appid)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	const cJSON *apps = resp ? cJSON_GetObjectItemCaseSensitive(resp, "apps") : NULL;
+	int st = resp ? 0 : -1;
+	if (resp && !apps && !cJSON_GetObjectItemCaseSensitive(resp, "bytes_available")) st = -1;   // respuesta vacía: no se sabe
+	const cJSON *it;
+	cJSON_ArrayForEach(it, apps) {
+		if ((u32)jnum(it, "appid", 0) != appid) continue;
+		st = jbool(it, "installed") ? 1 : 0;
+		break;
+	}
+	cJSON_Delete(root);
+	return st;
+}
+
+Req *steam_req_remote_install(u64 client, u32 appid, const char *token)
+{
+	return steam_post_service("IClientCommService/InstallClientApp", client_input(client, appid), token);
+}

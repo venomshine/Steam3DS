@@ -264,6 +264,13 @@ int main(void) {
 	CHECK(steam_parse_my_review("{\"response\":{\"recommendations\":[{\"recommendationid\":\"123\",\"appid\":367520,\"review\":\"Muy bueno\",\"voted_up\":true,\"timestamp_created\":1700000000,\"votes_up\":4}]}}", 367520, &mr));
 	CHECK(mr.has && mr.up && !strcmp(mr.text, "Muy bueno") && mr.votes_up == 4);
 	CHECK(steam_parse_my_review("{\"response\":{}}", 367520, &mr) && !mr.has);
+	// Instalación remota
+	RemotePC pcs[4];
+	CHECK(steam_parse_remote_pcs("{\"response\":{\"sessions\":[{\"client_instanceid\":\"8812345678901\",\"machine_name\":\"PC-MARIO\",\"os_name\":\"Windows 11\"},{\"machine_name\":\"sin id\"}]}}", pcs, 4) == 1);
+	CHECK(pcs[0].id == 8812345678901ULL && !strcmp(pcs[0].name, "PC-MARIO") && pcs[0].installed == -1);
+	CHECK(steam_parse_remote_app("{\"response\":{\"apps\":[{\"appid\":570,\"installed\":true}],\"bytes_available\":\"1\"}}", 570) == 1);
+	CHECK(steam_parse_remote_app("{\"response\":{\"apps\":[],\"bytes_available\":\"1\"}}", 570) == 0);
+	CHECK(steam_parse_remote_app("{\"response\":{}}", 570) == -1);
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

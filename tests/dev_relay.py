@@ -100,6 +100,22 @@ IGNORED = {}   # juegos ignorados (appid -> motivo), como rgIgnoredApps
 
 def fake_post(host, path, body):
     """Devuelve (json, cabeceras extra) o None."""
+    # Activar un producto: AAAAA-BBBBB-CCCCC es buena (Hollow Knight), TAKEN-TAKEN-TAKEN ya la usó otro,
+    # WALLETCODE12345 es un código del monedero de 20 €; lo demás no es válido
+    if host == "store.steampowered.com" and path in ("account/ajaxregisterkey/", "account/ajaxredeemwalletcode/"):
+        raw = body.decode() if isinstance(body, bytes) else (body or "")
+        f = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+        if path.endswith("registerkey/"):
+            key = f.get("product_key", "")
+            if key == "AAAAA-BBBBB-CCCCC":
+                return {"success": 1, "purchase_result_details": 0, "purchase_receipt_info": {"line_items": [
+                    {"packageid": 52600, "line_item_description": "Hollow Knight"}]}}, []
+            return {"success": 2, "purchase_result_details": 15 if key == "TAKEN-TAKEN-TAKEN" else 14,
+                    "purchase_receipt_info": {}}, []
+        if f.get("wallet_code") == "WALLETCODE12345":
+            WALLET_CENTS[0] += 2000
+            return {"success": 1, "detail": 0, "formattednewwalletbalance": "%d,%02d€" % divmod(WALLET_CENTS[0], 100)}, []
+        return {"success": 2, "detail": 14}, []
     if host == "store.steampowered.com" and path.startswith("recommended/ignorerecommendation"):
         raw = body.decode() if isinstance(body, bytes) else (body or "")
         f = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}

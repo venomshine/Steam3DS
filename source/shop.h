@@ -6,7 +6,7 @@
 // Acciones con tu cuenta: carrito, deseados y juegos gratis. Una a la vez; la interfaz
 // pregunta cada frame y enseña el resultado con shop_event().
 
-typedef enum { SH_CART_ADD, SH_CART_REMOVE, SH_WISH_ADD, SH_WISH_REMOVE, SH_FREE, SH_IGNORE, SH_UNIGNORE } ShopKind;
+typedef enum { SH_CART_ADD, SH_CART_REMOVE, SH_WISH_ADD, SH_WISH_REMOVE, SH_FREE, SH_IGNORE, SH_UNIGNORE, SH_ACTIVATE, SH_WALLET } ShopKind;
 
 typedef struct {
 	ShopKind kind;
@@ -45,4 +45,9 @@ void shop_free(u32 appid, const char *name);
 void shop_ignore(u32 appid, const char *name, bool ignore);
 bool shop_ignored(u32 appid);
 void shop_set_ignored(const u32 *ids, int n);
+
+// Activar un producto: una clave de juego (XXXXX-XXXXX-XXXXX) o, si Steam dice que no es una clave
+// válida, un código del monedero. El evento es SH_ACTIVATE (what: lo que se activó) o SH_WALLET
+// (what: el saldo nuevo); si falla, code es 2000 + el detalle de Steam (14 no válido, 15 ya usado…)
+void shop_activate(const char *code);
 bool shop_busy_with(ShopKind k, u32 appid);

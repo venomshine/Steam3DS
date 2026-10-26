@@ -18,6 +18,25 @@ INDIRECT = [
 ]
 
 TR = {
+    # Perfil: activar un producto
+    'Activando…': ('Activating…', 'アクティベート中…'),
+    'Activar': ('Activate', 'アクティベート'),
+    'Activar un producto': ('Activate a product', '製品をアクティベート'),
+    'Amigos': ('Friends', 'フレンド'),
+    'Clave del producto o código del monedero': ('Product key or wallet code', 'プロダクトキーまたはウォレットコード'),
+    'Consulta tu biblioteca, tus amigos y tu cuenta': ('See your library, your friends and your account', 'ライブラリ、フレンド、アカウントを確認'),
+    'Demasiados intentos. Espera un rato antes de volver a probar': ('Too many attempts. Wait a while before trying again', '試行回数が多すぎます。しばらく待ってからもう一度お試しください'),
+    'El código no es válido. Revisa que esté bien escrito': ("The code isn't valid. Check that it's typed correctly", 'コードが無効です。入力に誤りがないか確認してください'),
+    'Este código no se puede activar en tu país': ("This code can't be activated in your country", 'このコードはお住まいの国ではアクティベートできません'),
+    'Este código ya lo ha activado otra cuenta': ('This code has already been activated by another account', 'このコードは別のアカウントでアクティベート済みです'),
+    'Fondos añadidos a tu monedero de Steam': ('Funds added to your Steam Wallet', 'Steam ウォレットに残高が追加されました'),
+    'Fondos añadidos a tu monedero. Saldo: %s': ('Funds added to your wallet. Balance: %s', 'ウォレットに残高が追加されました。残高: %s'),
+    'Necesitas tener el juego base para activar este código': ('You need the base game to activate this code', 'このコードをアクティベートするにはベースゲームが必要です'),
+    'No se pudo activar el código. Inténtalo de nuevo más tarde': ("The code couldn't be activated. Try again later", 'コードをアクティベートできませんでした。後でもう一度お試しください'),
+    'Producto activado. Ya está en tu biblioteca': ("Product activated. It's now in your library", '製品をアクティベートしました。ライブラリに追加されています'),
+    'Producto activado: %s. Ya está en tu biblioteca': ("Product activated: %s. It's now in your library", '製品をアクティベートしました: %s。ライブラリに追加されています'),
+    'Ya tienes este producto en tu cuenta': ('You already own this product', 'この製品はすでに所有しています'),
+
     # Notificaciones
     '%s, de tu lista de deseos, está en oferta': ('%s, from your wishlist, is on sale', 'ウィッシュリストの %s がセール中です'),
     'Aquí verás los regalos, las ofertas de tu lista de deseos y más': ('Gifts, wishlist sales and more will show up here', 'ギフトやウィッシュリストのセールなどがここに表示されます'),
@@ -263,7 +282,6 @@ TR = {
     "%d juegos · %ld h jugadas": ("%d games · %ld h played", "%d 本 · %ld 時間プレイ"),
     "LO MÁS JUGADO": ("MOST PLAYED", "よくプレイしたゲーム"),
     "Tu cuenta de Steam": ("Your Steam account", "あなたのSteamアカウント"),
-    'Consulta tu biblioteca, tu lista de deseos y tu cuenta': ('View your library, wishlist and account', 'ライブラリ、ウィッシュリスト、アカウントを確認できます'),
     "Biblioteca (%d)": ("Library (%d)", "ライブラリ (%d)"),
     "Lista de deseos (%d)": ("Wishlist (%d)", "ウィッシュリスト (%d)"),
 

@@ -234,6 +234,37 @@ void shop_ignore(u32 appid, const char *name, bool ignore)
 	memset(ck, 0, sizeof ck);
 }
 
+// ---------------------------------------------------------------------------- Activar un producto
+
+static char act_code[48];
+
+// Los mismos formularios que la tienda web (account/ajaxregisterkey y ajaxredeemwalletcode)
+static bool activate_send(bool wallet)
+{
+	char ck[1200];
+	if (!auth_web_cookies("store.steampowered.com", ck, sizeof ck)) return false;
+	char body[160];
+	snprintf(body, sizeof body, "%s=%s&sessionid=%s", wallet ? "wallet_code" : "product_key", act_code, auth_sessionid());
+	H.act = net_request(wallet ? "https://store.steampowered.com/account/ajaxredeemwalletcode/"
+	                           : "https://store.steampowered.com/account/ajaxregisterkey/", body, ck);
+	memset(ck, 0, sizeof ck);
+	return H.act != NULL;
+}
+
+void shop_activate(const char *code)
+{
+	// Solo letras, números y guiones (lo demás sobra o rompería el formulario), en mayúsculas
+	int n = 0;
+	for (const char *p = code; *p && n < (int)sizeof act_code - 1; p++) {
+		char c = *p;
+		if (c >= 'a' && c <= 'z') c -= 32;
+		if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') act_code[n++] = c;
+	}
+	act_code[n] = 0;
+	if (!n || !start_action(SH_ACTIVATE, 0, act_code)) return;
+	if (!activate_send(false)) push_event(false, -1);
+}
+
 // ---------------------------------------------------------------------------- Cada frame
 
 // ¿Salió bien? Steam dice el resultado en la cabecera x-eresult (1 = OK)
@@ -279,7 +310,35 @@ void shop_update(void)
 		Req *r = H.act;
 		bool ok = req_ok(r);
 		int code = req_code(r);
-		if (H.kind == SH_IGNORE || H.kind == SH_UNIGNORE) {
+		if (H.kind == SH_ACTIVATE || H.kind == SH_WALLET) {
+			cJSON *root = r->state == REQ_DONE ? cJSON_Parse(r->data) : NULL;
+			int success = root ? (int)cJSON_GetNumberValue(cJSON_GetObjectItemCaseSensitive(root, "success")) : 0;
+			const cJSON *d = cJSON_GetObjectItemCaseSensitive(root, H.kind == SH_WALLET ? "detail" : "purchase_result_details");
+			int detail = cJSON_IsNumber(d) ? d->valueint : 0;
+			netlog("cuenta: activar %s -> success %d, detalle %d (HTTP %ld)", H.kind == SH_WALLET ? "monedero" : "clave", success, detail, r->http);
+			ok = success == 1;
+			code = ok ? 0 : root ? 2000 + detail : req_code(r);
+			if (ok && H.kind == SH_ACTIVATE) {
+				// Lo que se ha activado, como lo llama Steam
+				const cJSON *ri = cJSON_GetObjectItemCaseSensitive(root, "purchase_receipt_info");
+				const cJSON *li = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(ri, "line_items"), 0);
+				const cJSON *nm = li ? cJSON_GetObjectItemCaseSensitive(li, "line_item_description") : NULL;
+				snprintf(H.what, sizeof H.what, "%s", cJSON_IsString(nm) ? nm->valuestring : "");
+			} else if (ok) {
+				const cJSON *b = cJSON_GetObjectItemCaseSensitive(root, "formattednewwalletbalance");
+				snprintf(H.what, sizeof H.what, "%s", cJSON_IsString(b) ? b->valuestring : "");
+			}
+			cJSON_Delete(root);
+			if (!ok && H.kind == SH_ACTIVATE && detail == 14) {
+				// No es una clave de producto: quizá sea un código del monedero
+				net_release(r);
+				H.act = NULL;
+				H.kind = SH_WALLET;
+				if (activate_send(true)) return;
+				push_event(false, code);
+				return;
+			}
+		} else if (H.kind == SH_IGNORE || H.kind == SH_UNIGNORE) {
 			// La tienda web contesta con un 200 (sin x-eresult)
 			ok = r->state == REQ_DONE && r->http == 200;
 			if (ok) ignored_mark(H.appid, H.kind == SH_IGNORE);

@@ -68,6 +68,7 @@ static struct {
 	int touch_y0, touch_x0, touch_moved;
 	float drag_scroll0;
 	bool want_kb;                // abrir el teclado (fuera del frame de dibujo)
+	bool want_key;               // el teclado para activar un producto
 	char recents[8][64];         // búsquedas recientes
 	int nrecents;
 
@@ -150,7 +151,7 @@ static struct {
 } S;
 
 enum { BT_NONE, BT_IGNORE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
-	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO };
+	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO };
 
 // Pestañas de la tienda
 #define HOME_PARTS 4
@@ -2986,9 +2987,11 @@ static void open_account_list(int ti)
 
 // ---------------------------------------------------------------------------- Perfil
 
-static const Box B_PLIB = {12, 104, 296, 30};
-static const Box B_PWISH = {12, 140, 296, 30};
-static const Box B_PLOGOUT = {12, 176, 296, 30};
+static const Box B_PLIB = {12, 78, 296, 30};
+static const Box B_PWISH = {12, 112, 296, 30};
+static const Box B_PFRIENDS = {12, 146, 145, 30};
+static const Box B_PACT = {163, 146, 145, 30};
+static const Box B_PLOGOUT = {12, 180, 296, 30};
 
 static void draw_profile_top(void)
 {
@@ -3054,8 +3057,8 @@ static void draw_profile_top(void)
 
 static void draw_profile_bottom(void)
 {
-	ui_text(BOT_W / 2, 30, _("Tu cuenta de Steam"), SZ_LARGE, COL_WHITE, AL_CENTER, 300);
-	ui_text(BOT_W / 2, 54, _("Consulta tu biblioteca, tu lista de deseos y tu cuenta"), SZ_SMALL, COL_DIM, AL_CENTER, 300);
+	ui_text(BOT_W / 2, 18, _("Tu cuenta de Steam"), SZ_LARGE, COL_WHITE, AL_CENTER, 300);
+	ui_text(BOT_W / 2, 42, _("Consulta tu biblioteca, tus amigos y tu cuenta"), SZ_SMALL, COL_DIM, AL_CENTER, 300);
 	char lib[48], wish[48];
 	Tab *l = &tabs[TAB_LIBRARY], *w = &tabs[TAB_WISHLIST];
 	if (l->list.count) snprintf(lib, sizeof lib, _("Biblioteca (%d)"), l->list.count);
@@ -3064,8 +3067,11 @@ static void draw_profile_bottom(void)
 	else snprintf(wish, sizeof wish, "%s", _("Lista de deseos"));
 	draw_button_k(&B_PLIB, NULL, S.pfocus == 0, IC_PAD, lib, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PLIB);
 	draw_button_k(&B_PWISH, NULL, S.pfocus == 1, IC_HEART, wish, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PWISH);
+	bool act_busy = shop_busy_with(SH_ACTIVATE, 0) || shop_busy_with(SH_WALLET, 0);
+	draw_button_k(&B_PFRIENDS, NULL, S.pfocus == 2, IC_USERS, _("Amigos"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PFRIENDS);
+	draw_button_k(&B_PACT, NULL, S.pfocus == 3, IC_CODE, act_busy ? _("Activando…") : _("Activar un producto"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PACT);
 	u32 red = C2D_Color32(0x6a, 0x26, 0x22, 0xff);
-	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 2, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
+	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 4, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
 	static const char *hh[] = {"↑↓", "Elegir", "A", "Abrir", "B", "Volver", "START", "Menú"};
 	draw_hints(hh, 4);
 }
@@ -3089,14 +3095,21 @@ static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		go_scene(SC_STORE, -1);
 		return;
 	}
-	static const int ids[] = {BT_PLIB, BT_PWISH, BT_PLOGOUT};
-	int b = press_update(kd, kh, ku, tp, ids, 3);
-	// Con la cruceta se elige uno de los tres botones y A lo pulsa
-	if (key_repeat(kd, kh, KEY_DOWN)) S.pfocus = (S.pfocus + 1) % 3;
-	if (key_repeat(kd, kh, KEY_UP)) S.pfocus = (S.pfocus + 2) % 3;
+	static const int ids[] = {BT_PLIB, BT_PWISH, BT_PFRIENDS, BT_PACT, BT_PLOGOUT};
+	int b = press_update(kd, kh, ku, tp, ids, 5);
+	// Con la cruceta se elige un botón (amigos y activar van en la misma fila) y A lo pulsa
+	static const int down[] = {1, 2, 4, 4, 0}, up[] = {4, 0, 1, 1, 2};
+	if (key_repeat(kd, kh, KEY_DOWN)) S.pfocus = down[S.pfocus];
+	if (key_repeat(kd, kh, KEY_UP)) S.pfocus = up[S.pfocus];
+	if ((kd & (KEY_LEFT | KEY_RIGHT)) && (S.pfocus == 2 || S.pfocus == 3)) S.pfocus = 5 - S.pfocus;
 	if (kd & KEY_A) b = ids[S.pfocus];
 	if (b == BT_PLIB) open_account_list(TAB_LIBRARY);
 	if (b == BT_PWISH) open_account_list(TAB_WISHLIST);
+	if (b == BT_PFRIENDS) toast(_("Disponible próximamente"));
+	if (b == BT_PACT) {
+		if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
+		else S.want_key = true;
+	}
 	if (b == BT_PLOGOUT) {
 		do_logout();
 		go_scene(SC_STORE, -1);
@@ -4518,6 +4531,21 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 }
 
 // Teclado del sistema para Buscar (se abre fuera del frame de dibujo)
+// Teclado para activar un producto: la clave de un juego o un código del monedero
+static void open_key_keyboard(void)
+{
+	SwkbdState kb;
+	char buf[48] = "";
+	swkbdInit(&kb, SWKBD_TYPE_QWERTY, 2, 40);
+	swkbdSetHintText(&kb, _("Clave del producto o código del monedero"));
+	swkbdSetButton(&kb, SWKBD_BUTTON_LEFT, _("Cancelar"), false);
+	swkbdSetButton(&kb, SWKBD_BUTTON_RIGHT, _("Activar"), true);
+	swkbdSetFeatures(&kb, SWKBD_DARKEN_TOP_SCREEN | SWKBD_ALLOW_HOME | SWKBD_ALLOW_RESET | SWKBD_ALLOW_POWER);
+	swkbdSetValidation(&kb, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
+	if (swkbdInputText(&kb, buf, sizeof buf) != SWKBD_BUTTON_RIGHT) return;
+	shop_activate(buf);
+}
+
 static void open_keyboard(void)
 {
 	SwkbdState kb;
@@ -5000,6 +5028,8 @@ static const Box *button_box(int id)
 	case BT_PLIB: return &B_PLIB;
 	case BT_PWISH: return &B_PWISH;
 	case BT_PLOGOUT: return &B_PLOGOUT;
+	case BT_PFRIENDS: return &B_PFRIENDS;
+	case BT_PACT: return &B_PACT;
 	case BT_PAYW: return &B_PAYW;
 	case BT_PAYC: return &B_PAYC;
 	case BT_PAYQ: return &B_PAYQ;
@@ -5256,6 +5286,21 @@ static const char *shop_err(int code)
 	return _("Steam ha rechazado la solicitud");
 }
 
+// Por qué no se activó un código (2000 + el detalle de la compra que da Steam)
+static const char *activate_err(int code)
+{
+	switch (code - 2000) {
+	case 9: return _("Ya tienes este producto en tu cuenta");
+	case 13: return _("Este código no se puede activar en tu país");
+	case 14: return _("El código no es válido. Revisa que esté bien escrito");
+	case 15: return _("Este código ya lo ha activado otra cuenta");
+	case 24: return _("Necesitas tener el juego base para activar este código");
+	case 53: return _("Demasiados intentos. Espera un rato antes de volver a probar");
+	}
+	if (code < 0) return _("No se puede conectar con Steam");
+	return _("No se pudo activar el código. Inténtalo de nuevo más tarde");
+}
+
 static void shop_events(void)
 {
 	ShopEvent ev;
@@ -5292,6 +5337,19 @@ static void shop_events(void)
 				snprintf(t, sizeof t, _("No se pudo añadir a tu biblioteca: %s"), shop_err(ev.code));
 			}
 			break;
+		case SH_ACTIVATE:
+		case SH_WALLET:
+			if (ev.ok && ev.kind == SH_ACTIVATE) {
+				library_changed();
+				if (ev.what[0]) snprintf(t, sizeof t, _("Producto activado: %s. Ya está en tu biblioteca"), ev.what);
+				else snprintf(t, sizeof t, "%s", _("Producto activado. Ya está en tu biblioteca"));
+			} else if (ev.ok) {
+				if (ev.what[0]) snprintf(t, sizeof t, _("Fondos añadidos a tu monedero. Saldo: %s"), ev.what);
+				else snprintf(t, sizeof t, "%s", _("Fondos añadidos a tu monedero de Steam"));
+			} else {
+				snprintf(t, sizeof t, "%s", activate_err(ev.code));
+			}
+			break;
 		case SH_IGNORE:
 		case SH_UNIGNORE:
 			if (ev.ok && ev.kind == SH_IGNORE) snprintf(t, sizeof t, _("Has ignorado %s: no saldrá en tus recomendaciones"), ev.what);
@@ -5300,7 +5358,8 @@ static void shop_events(void)
 			break;
 		}
 		static const Icon ic[] = {[SH_CART_ADD] = IC_CART, [SH_CART_REMOVE] = IC_CART, [SH_WISH_ADD] = IC_HEART,
-			[SH_WISH_REMOVE] = IC_HEART, [SH_FREE] = IC_PAD, [SH_IGNORE] = IC_HIDE, [SH_UNIGNORE] = IC_HIDE};
+			[SH_WISH_REMOVE] = IC_HEART, [SH_FREE] = IC_PAD, [SH_IGNORE] = IC_HIDE, [SH_UNIGNORE] = IC_HIDE,
+			[SH_ACTIVATE] = IC_CODE, [SH_WALLET] = IC_COIN};
 		toast_icon(t, ic[ev.kind]);
 	}
 }
@@ -5490,6 +5549,11 @@ int main(int argc, char **argv)
 		if (S.want_kb) {
 			S.want_kb = false;
 			open_keyboard();
+			kd = kh = ku = 0;
+		}
+		if (S.want_key) {
+			S.want_key = false;
+			open_key_keyboard();
 			kd = kh = ku = 0;
 		}
 		if (S.want_cvv) {

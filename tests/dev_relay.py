@@ -311,6 +311,18 @@ def fake_get(path, q):
         return {"response": {"friendslist": {"bincremental": False, "friends":
                 [{"ulfriendid": str(f), "efriendrelationship": 3} for f in FRIENDS] +
                 [{"ulfriendid": "76561190000000109", "efriendrelationship": 2}]}}}
+    if path.endswith("GetUserFiles/v1/"):
+        # Tus capturas: cuatro imágenes públicas de verdad, en los juegos que tiene la cuenta simulada
+        app = int(inp.get("appid", 0))
+        if app not in [a for a, *_ in OWNED]:
+            return {"response": {"total": 0}}
+        now = int(time.time())
+        ugc = ["1749057862502509881/D744FA2A1B2FF091CA773F5CDCE31E72CA339CAF", "941714934209988401/AAB1E89AA35E1E28F705AFF3DF7BE84399640DCA",
+               "813307680284614858/D85825CF385135A2C07571F4CA0F36718D0F5FD0", "1749057862502418702/7739A308ADD910E2BE423AB8D4A5A4D8086CE659"]
+        notes = ["Por fin el jefe final", "", "Atardecer", ""]
+        return {"response": {"total": len(ugc), "publishedfiledetails": [
+            {"publishedfileid": str(1000 + i), "consumer_appid": app, "file_type": 5, "time_created": now - (i + 1) * 5 * 86400,
+             "file_url": "https://images.steamusercontent.com/ugc/%s/" % u, "short_description": notes[i]} for i, u in enumerate(ugc)]}}
     if path.endswith("GetSteamLevel/v1/"):
         return {"response": {"player_level": 23}}
     if path.endswith("GetOwnedGames/v1/"):

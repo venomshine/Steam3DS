@@ -2225,6 +2225,48 @@ static void reviews_more(void)
 
 static void notif_when(u32 t, char *out, size_t sz);
 
+// Tus capturas del juego (las de tu perfil de Steam), para el visor de capturas
+#define MAX_MYSHOTS 50
+static struct {
+	u32 appid;
+	MyShot s[MAX_MYSHOTS];
+	int n, total;
+	Req *req;
+} MS;
+static bool shots_mine;   // el visor enseña las tuyas en vez de las de la tienda
+
+static void myshots_poll(const AppInfo *a)
+{
+	if (MS.appid != a->appid && auth_logged() && owned_app(a->appid)) {
+		if (MS.req) net_release(MS.req);
+		memset(&MS, 0, sizeof MS);
+		MS.appid = a->appid;
+		MS.req = steam_req_my_shots(auth_info()->steamid, a->appid, auth_token());
+	}
+	if (MS.req && MS.req->state >= REQ_DONE) {
+		int n = MS.req->state == REQ_DONE ? steam_parse_my_shots(MS.req->data, MS.appid, MS.s, MAX_MYSHOTS, &MS.total) : -1;
+		netlog("tus capturas de %lu: %d de %d (HTTP %ld)", (unsigned long)MS.appid, n, MS.total, MS.req->http);
+		MS.n = n > 0 ? n : 0;
+		net_release(MS.req);
+		MS.req = NULL;
+	}
+}
+
+static int my_shots_for(u32 appid)
+{
+	return MS.appid == appid ? MS.n : 0;
+}
+
+static int shots_count(const AppInfo *a)
+{
+	return shots_mine ? my_shots_for(a->appid) : a->nshots;
+}
+
+static const char *shot_url(const AppInfo *a, int i)
+{
+	return shots_mine ? MS.s[i].url : a->shots[i];
+}
+
 static void ach_reset(void)
 {
 	free(S.ach);
@@ -2309,6 +2351,7 @@ static void game_poll(const AppInfo *a)
 		S.ach_req = steam_req_achievements(a->appid);
 	}
 	ach_poll(a);
+	myshots_poll(a);
 	if (S.sec == SEC_EXTRAS && S.dlc_for != a->appid) {
 		rowlist_free(&S.dlc);
 		S.dlc_for = a->appid;
@@ -2948,8 +2991,10 @@ static void draw_game_bottom(void)
 		if (wished) draw_button_k(&B_WISH, own ? NULL : "X+←", false, IC_HEART, busy_wish ? _("Quitando…") : _("En deseados"), C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_WISH);
 		else draw_button_k(&B_WISH, in && !own ? "X+←" : NULL, false, IC_HEART, busy_wish ? _("Añadiendo…") : _("Deseados"), COL_BTN2, COL_BTN2, COL_ACC, in && !own ? 1 : 0.45f, S.pressed == BT_WISH);
 		char shots[40];
-		snprintf(shots, sizeof shots, _("Capturas (%d)"), a->nshots);
-		draw_button_k(&B_SHOTS, a->nshots ? "X+→" : NULL, false, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, a->nshots ? 1 : 0.45f, S.pressed == BT_SHOTS);
+		int mine = my_shots_for(a->appid), nsh = a->nshots + mine;
+		if (!a->nshots && mine) snprintf(shots, sizeof shots, _("Tus capturas (%d)"), mine);
+		else snprintf(shots, sizeof shots, _("Capturas (%d)"), nsh);
+		draw_button_k(&B_SHOTS, nsh ? "X+→" : NULL, false, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, nsh ? 1 : 0.45f, S.pressed == BT_SHOTS);
 		draw_button_k(&B_INST, own ? "X+↓" : NULL, false, IC_PC, has_ignore_btn ? _("Instalar en el PC") : _("Instalar en tu PC de forma remota"),
 			C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, own ? 1 : 0.4f, S.pressed == BT_INST);
 		if (has_ignore_btn) {
@@ -2992,8 +3037,8 @@ static void draw_shots_top(void)
 {
 	InfoEnt *e = info_get(S.app, false);
 	ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, 0xff));
-	if (!e || !e->done || e->info.nshots == 0) return;
-	const char *url = e->info.shots[S.shot];
+	if (!e || !e->done || shots_count(&e->info) == 0) return;
+	const char *url = shot_url(&e->info, S.shot);
 	const Pic *p = img_get(url, 400);   // la pantalla de arriba mide 400
 	// La nueva entra deslizándose desde el lado hacia el que vas
 	float se = ease_out_cubic(S.shot_anim);
@@ -3009,8 +3054,8 @@ static void draw_shots_top(void)
 		ui_spinner(TOP_W / 2, SCR_H / 2, 9, COL_DIM);
 	}
 	// Las de al lado, ya pedidas para que el cambio sea inmediato
-	if (S.shot + 1 < e->info.nshots) img_get(e->info.shots[S.shot + 1], 400);
-	if (S.shot > 0) img_get(e->info.shots[S.shot - 1], 400);
+	if (S.shot + 1 < shots_count(&e->info)) img_get(shot_url(&e->info, S.shot + 1), 400);
+	if (S.shot > 0) img_get(shot_url(&e->info, S.shot - 1), 400);
 }
 
 #define THUMB_W 92
@@ -3019,6 +3064,7 @@ static void draw_shots_top(void)
 #define STRIP_Y 76
 static const Box B_PREV = {12, 156, 140, 34};
 static const Box B_NEXT = {168, 156, 140, 34};
+static const Box B_SHSRC = {70, 3, 180, 20};
 
 static void draw_round_button(const Box *b, const char *key, const char *label, bool enabled, bool pressed)
 {
@@ -3031,23 +3077,39 @@ static void draw_round_button(const Box *b, const char *key, const char *label, 
 	ui_text(x + kw, b->y + (b->h - ui_line_h(SZ_BODY)) / 2 + 1 + dy, label, SZ_BODY, col_alpha(COL_WHITE, enabled ? 1 : 0.4f), AL_LEFT, 0);
 }
 
+static void fmt_date(u32 t, char *out, size_t n);
+
 static void draw_shots_bottom(void)
 {
 	InfoEnt *e = info_get(S.app, false);
 	if (e && e->done) {
 		const AppInfo *a = &e->info;
-		ui_text(BOT_W / 2, 10, a->name, SZ_SMALL, COL_DIM, AL_CENTER, 296);
+		int count = shots_count(a), mine = my_shots_for(a->appid);
+		if (mine && a->nshots) {
+			// De la tienda o tuyas (Y cambia)
+			char t1[40], t2[40];
+			snprintf(t1, sizeof t1, _("Tienda (%d)"), a->nshots);
+			snprintf(t2, sizeof t2, _("Tuyas (%d)"), mine);
+			fx_glass(B_SHSRC.x, B_SHSRC.y, B_SHSRC.w, B_SHSRC.h, B_SHSRC.h / 2, 1, 0);
+			float sw = (B_SHSRC.w - 4) / 2;
+			fx_select(B_SHSRC.x + 2 + (shots_mine ? sw : 0), B_SHSRC.y + 2, sw, B_SHSRC.h - 4, (B_SHSRC.h - 4) / 2, 1);
+			float ty = B_SHSRC.y + (B_SHSRC.h - ui_line_h(SZ_TINY)) / 2 + 1;
+			ui_text(B_SHSRC.x + 2 + sw / 2, ty, t1, SZ_TINY, shots_mine ? COL_DIM : COL_WHITE, AL_CENTER, sw - 4);
+			ui_text(B_SHSRC.x + 2 + sw * 1.5f, ty, t2, SZ_TINY, shots_mine ? COL_WHITE : COL_DIM, AL_CENTER, sw - 4);
+		} else {
+			ui_text(BOT_W / 2, 10, shots_mine ? _("Tus capturas") : a->name, SZ_SMALL, COL_DIM, AL_CENTER, 296);
+		}
 		// «3 / 19», con el total más apagado
 		char cur[16], tot[16];
 		snprintf(cur, sizeof cur, "%d", S.shot + 1);
-		snprintf(tot, sizeof tot, " / %d", a->nshots);
+		snprintf(tot, sizeof tot, " / %d", count);
 		float w1 = ui_text_w(cur, SZ_TITLE), w2 = ui_text_w(tot, SZ_LARGE);
 		float x = (BOT_W - w1 - w2) / 2;
 		ui_text(x, 28, cur, SZ_TITLE, COL_WHITE, AL_LEFT, 0);
 		ui_text(x + w1, 32, tot, SZ_LARGE, COL_DIM, AL_LEFT, 0);
 
 		// Tira de miniaturas: se desliza hasta la actual, que va marcada
-		for (int i = 0; i < a->nshots; i++) {
+		for (int i = 0; i < count; i++) {
 			float cx = BOT_W / 2 + (i - S.strip) * THUMB_STEP;
 			if (cx < -THUMB_W || cx > BOT_W + THUMB_W) continue;
 			float on = 1 - clampf(fabsf(S.strip - i), 0, 1);
@@ -3056,12 +3118,27 @@ static void draw_shots_bottom(void)
 			float x0 = cx - w / 2, y0 = STRIP_Y + (THUMB_H * 1.14f - hh) / 2;
 			if (i == S.shot) fx_select(x0 - 4, y0 - 4, w + 8, hh + 8, 6, on);
 			ui_rect(x0, y0, w, hh, C2D_Color32(0x0b, 0x10, 0x16, 0xff));
-			const Pic *p = img_get(a->shots[i], 150);
+			const Pic *p = img_get(shot_url(a, i), 150);
 			if (p) img_draw_fit_a(p, x0, y0, w, hh, 0.45f + 0.55f * on);
 			else ui_spinner(cx, y0 + hh / 2, 5, COL_DIM);
 		}
 		draw_round_button(&B_PREV, "L", _("Anterior"), S.shot > 0, S.pressed == BT_PREV);
-		draw_round_button(&B_NEXT, "R", _("Siguiente"), S.shot + 1 < a->nshots, S.pressed == BT_NEXT);
+		draw_round_button(&B_NEXT, "R", _("Siguiente"), S.shot + 1 < count, S.pressed == BT_NEXT);
+		// Las tuyas: cuándo la hiciste y su descripción
+		if (shots_mine && S.shot < count) {
+			const MyShot *m = &MS.s[S.shot];
+			char d[40], t[160];
+			d[0] = 0;
+			if (m->when) fmt_date(m->when, d, sizeof d);
+			if (d[0] && m->caption[0]) snprintf(t, sizeof t, "%s · %s", d, m->caption);
+			else snprintf(t, sizeof t, "%s", d[0] ? d : m->caption);
+			if (t[0]) ui_text(BOT_W / 2, 138, t, SZ_TINY, COL_DIM, AL_CENTER, 296);
+		}
+		if (mine && a->nshots) {
+			static const char *h2[] = {"← →", "Cambiar", "Y", "Tienda / Tuyas", "B", "Volver"};
+			draw_hints(h2, 3);
+			return;
+		}
 	}
 	static const char *hh[] = {"← →", "Cambiar", "B", "Volver"};
 	draw_hints(hh, 2);
@@ -3293,6 +3370,8 @@ static int press_update(u32 kd, u32 kh, u32 ku, touchPosition *tp, const int *id
 
 static void do_logout(void)
 {
+	if (MS.req) net_release(MS.req);
+	memset(&MS, 0, sizeof MS);
 	auth_logout();
 	account_lists_clear();
 	friends_reset();
@@ -3305,6 +3384,8 @@ static void do_logout(void)
 // Al cambiar de cuenta se olvida todo lo de la anterior (sin cerrar su sesión en Steam)
 static void do_switch_cleanup(void)
 {
+	if (MS.req) net_release(MS.req);
+	memset(&MS, 0, sizeof MS);
 	if (auth_logged() || auth_info()->state == AUTH_STARTING) auth_switch_out();
 	account_lists_clear();
 	friends_reset();
@@ -6462,7 +6543,8 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	if (has_ignore_btn) ids[nids++] = BT_IGNORE;
 	int b = a ? press_update(kd, kh, ku, tp, ids, nids) : BT_NONE;
 	if (key_b) b = key_b;
-	if (b == BT_SHOTS && a->nshots) {
+	if (b == BT_SHOTS && (a->nshots || my_shots_for(a->appid))) {
+		shots_mine = !a->nshots;
 		go_scene(SC_SHOTS, 1);
 		S.shot = 0;
 		S.strip = 0;
@@ -6504,7 +6586,19 @@ static void set_shot(int n, int count)
 static void input_shots(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 {
 	InfoEnt *e = info_get(S.app, false);
-	int n = (e && e->done) ? e->info.nshots : 0;
+	int n = (e && e->done) ? shots_count(&e->info) : 0;
+	bool both = e && e->done && e->info.nshots && my_shots_for(e->info.appid);
+	if (both && ((kd & KEY_Y) || ((kd & KEY_TOUCH) && hit(&B_SHSRC, tp->px, tp->py)))) {
+		bool m = (kd & KEY_Y) ? !shots_mine : tp->px >= B_SHSRC.x + B_SHSRC.w / 2;
+		if (m != shots_mine) {
+			shots_mine = m;
+			S.shot = 0;
+			S.strip = 0;
+			S.shot_anim = 0;
+			S.shot_dir = m ? 1 : -1;
+		}
+		return;
+	}
 	if (kd & (KEY_LEFT | KEY_L)) set_shot(S.shot - 1, n);
 	if (kd & (KEY_RIGHT | KEY_R)) set_shot(S.shot + 1, n);
 	if (kd & KEY_B) {

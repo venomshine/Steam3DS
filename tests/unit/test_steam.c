@@ -251,6 +251,14 @@ int main(void) {
 	CHECK(steam_parse_files("{\"response\":{\"publishedfiledetails\":[{\"publishedfileid\":\"222\",\"preview_url\":\"https://images.steamusercontent.com/ugc/1/AB/\"}]}}", pfids, 2, furls) == 1);
 	CHECK(!furls[0][0] && strstr(furls[1], "/ugc/1/AB/?imw=400"));
 	CHECK(steam_parse_level("{\"response\":{\"player_level\":42}}") == 42 && steam_parse_level("{\"response\":{}}") == -1);
+	// Tus capturas: solo las del juego, con la imagen ya reducida
+	MyShot ms[4];
+	int mtot = 0;
+	CHECK(steam_parse_my_shots("{\"response\":{\"total\":3,\"publishedfiledetails\":["
+		"{\"consumer_appid\":367520,\"file_url\":\"https://images.steamusercontent.com/ugc/1/A/\",\"short_description\":\"Jefe final\",\"time_created\":1700000000},"
+		"{\"consumer_appid\":730,\"file_url\":\"https://images.steamusercontent.com/ugc/2/B/\"},"
+		"{\"consumer_appid\":367520,\"preview_url\":\"https://images.steamusercontent.com/ugc/3/C/\"}]}}", 367520, ms, 4, &mtot) == 2);
+	CHECK(!strcmp(ms[0].caption, "Jefe final") && ms[0].when == 1700000000 && strstr(ms[1].url, "/ugc/3/C/?imw=400") && mtot == 3);
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

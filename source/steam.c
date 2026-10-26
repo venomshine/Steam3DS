@@ -2028,3 +2028,54 @@ bool steam_parse_file_page(const char *html, char *url, size_t n)
 	ugc_sized(raw, url, n);
 	return url[0] != 0;
 }
+
+// ----------------------------------------------------------------------------
+// Tus capturas
+
+Req *steam_req_my_shots(u64 steamid, u32 appid, const char *token)
+{
+	cJSON *in = cJSON_CreateObject();
+	char sid[24];
+	snprintf(sid, sizeof sid, "%llu", (unsigned long long)steamid);
+	cJSON_AddStringToObject(in, "steamid", sid);
+	cJSON_AddNumberToObject(in, "appid", appid);
+	cJSON_AddNumberToObject(in, "filetype", 4);          // k_EPublishedFileInfoMatchingFileType_Screenshots
+	cJSON_AddNumberToObject(in, "numperpage", 50);
+	cJSON_AddNumberToObject(in, "page", 1);
+	cJSON_AddStringToObject(in, "sortmethod", "created");
+	cJSON_AddBoolToObject(in, "return_short_description", true);
+	cJSON_AddBoolToObject(in, "strip_description_bbcode", true);
+	return steam_get_service("IPublishedFileService/GetUserFiles", in, token);
+}
+
+int steam_parse_my_shots(const char *json, u32 appid, MyShot *out, int max, int *total)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *it, *list = cJSON_GetObjectItemCaseSensitive(resp, "publishedfiledetails");
+	cJSON_ArrayForEach(it, list) {
+		if (n >= max) break;
+		u32 app = (u32)jnum(it, "consumer_appid", 0);
+		if (app && appid && app != appid) continue;   // de otro juego
+		const char *u = jstr(it, "file_url");
+		if (!u || !*u) u = jstr(it, "preview_url");
+		if (!u || !*u) continue;
+		MyShot *m = &out[n];
+		memset(m, 0, sizeof *m);
+		ugc_sized(u, m->url, sizeof m->url);
+		const char *c = jstr(it, "short_description");
+		if (!c || !*c) c = jstr(it, "title");
+		copy_utf8(m->caption, sizeof m->caption, c);
+		m->when = (u32)jnum(it, "time_created", 0);
+		n++;
+	}
+	*total = (int)jnum(resp, "total", n);
+	if (*total < n) *total = n;
+	cJSON_Delete(root);
+	return n;
+}

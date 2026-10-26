@@ -323,3 +323,12 @@ Req *steam_req_files(const u64 *ids, int n, const char *token);
 int steam_parse_files(const char *json, const u64 *ids, int n, char (*urls)[200]);   // cuántas encontró
 Req *steam_req_file_page(u64 id);
 bool steam_parse_file_page(const char *html, char *url, size_t n);
+
+// Tus capturas de un juego (las que subiste a tu perfil de Steam)
+typedef struct {
+	char url[200];          // ya reducida al ancho de la pantalla de arriba
+	char caption[96];
+	u32 when;               // cuándo la hiciste (hora Unix)
+} MyShot;
+Req *steam_req_my_shots(u64 steamid, u32 appid, const char *token);
+int steam_parse_my_shots(const char *json, u32 appid, MyShot *out, int max, int *total);   // -1 si falla

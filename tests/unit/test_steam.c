@@ -94,6 +94,16 @@ int main(void) {
 	RowList ia = {0};
 	CHECK(steam_parse_rows("{\"response\":{\"store_items\":[{\"appid\":367520,\"name\":\"Hollow Knight\",\"assets\":{\"community_icon\":\"f6ab055c2366237200b1a31cccbd6cf81e436d72\"}}]}}", &ia, false));
 	CHECK(ia.count == 1 && !strcmp(ia.rows[0].icon, "f6ab055c2366237200b1a31cccbd6cf81e436d72"));
+	// El precio en céntimos (para la barra de precio de Buscar); -1 si no se vende
+	RowList pc = {0};
+	CHECK(steam_parse_rows(slurp("data/items_self.json"), &pc, false));
+	CHECK(pc.count == 1 && pc.rows[0].cents == 1799 && !pc.rows[0].free);
+	rowlist_free(&pc);
+	CHECK(steam_parse_rows("{\"response\":{\"store_items\":[{\"appid\":4115450,\"name\":\"Phantom Blade Zero\"}]}}", &pc, false));
+	CHECK(pc.count == 1 && pc.rows[0].cents == -1);
+	rowlist_free(&pc);
+	steam_req_query(Q_BROWSE_FREE, 0, 30);
+	CHECK(strstr(last_url, "only_free_items") != NULL);
 	// Lo que no está en la tienda llega sin nombre y con appid 0 (respuesta real de GetItems para 228980)
 	RowList inv = {0};
 	CHECK(steam_parse_rows("{\"response\":{\"store_items\":[{\"item_type\":0,\"id\":228980,\"success\":15,\"visible\":false,\"name\":\"\",\"appid\":0},{\"appid\":730,\"name\":\"Counter-Strike 2\"}]}}", &inv, false));

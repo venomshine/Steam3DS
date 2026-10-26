@@ -12,6 +12,7 @@ typedef struct {
 	int disc;               // % de descuento (0 si no hay)
 	char price[20];         // precio final ya formateado por Steam ("17,99€")
 	char orig[20];          // precio original si hay descuento
+	int cents;              // precio final en céntimos de tu moneda (-1 si no se vende)
 	bool free;
 	char review[40];        // "Muy positivas"
 	int review_pct;
@@ -117,6 +118,8 @@ typedef enum {
 	Q_F2P,      // gratis para jugar
 	Q_DEMOS,    // demos más populares
 	Q_EARLY,    // acceso anticipado
+	Q_BROWSE,       // todo el catálogo por relevancia (Buscar sin escribir nada)
+	Q_BROWSE_FREE,  // lo mismo, solo lo gratuito
 } StoreQuery;
 Req *steam_req_query(StoreQuery q, int start, int count);
 Req *steam_req_offers(int start, int count);

@@ -118,6 +118,7 @@ static cJSON *context(void)
 static void row_from_item(const cJSON *it, StoreRow *row)
 {
 	memset(row, 0, sizeof *row);
+	row->cents = -1;
 	row->appid = (u32)jnum(it, "appid", jnum(it, "id", 0));
 	copy_utf8(row->name, sizeof row->name, jstr(it, "name"));
 	const cJSON *bp = cJSON_GetObjectItemCaseSensitive(it, "best_purchase_option");
@@ -125,7 +126,8 @@ static void row_from_item(const cJSON *it, StoreRow *row)
 		copy(row->price, sizeof row->price, jstr(bp, "formatted_final_price"));
 		row->disc = (int)jnum(bp, "discount_pct", 0);
 		if (row->disc > 0) copy(row->orig, sizeof row->orig, jstr(bp, "formatted_original_price"));
-		if (jnum(bp, "final_price_in_cents", -1) == 0) row->free = true;
+		row->cents = (int)jnum(bp, "final_price_in_cents", -1);
+		if (row->cents == 0) row->free = true;
 	}
 	if (jbool(it, "is_free")) row->free = true;
 	row->type = (int)jnum(it, "type", 0);
@@ -241,6 +243,7 @@ Req *steam_req_query(StoreQuery kind, int start, int count)
 {
 	static const int sorts[] = {
 		[Q_OFFERS] = 10, [Q_TOP] = 12, [Q_NEW] = 12, [Q_SOON] = 10, [Q_F2P] = 12, [Q_DEMOS] = 13, [Q_EARLY] = 12,
+		[Q_BROWSE] = 10, [Q_BROWSE_FREE] = 10,
 	};
 	cJSON *in = cJSON_CreateObject();
 	cJSON *q = cJSON_AddObjectToObject(in, "query");
@@ -255,7 +258,7 @@ Req *steam_req_query(StoreQuery kind, int start, int count)
 	if (kind == Q_OFFERS) {
 		cJSON *pf = cJSON_AddObjectToObject(f, "price_filters");
 		cJSON_AddNumberToObject(pf, "min_discount_percent", 1);
-	} else if (kind == Q_F2P) {
+	} else if (kind == Q_F2P || kind == Q_BROWSE_FREE) {
 		cJSON *pf = cJSON_AddObjectToObject(f, "price_filters");
 		cJSON_AddBoolToObject(pf, "only_free_items", true);
 	} else if (kind == Q_NEW) {

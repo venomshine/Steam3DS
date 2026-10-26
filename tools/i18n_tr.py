@@ -3,7 +3,7 @@
 
 # Textos que llegan a _() a través de una variable (pestañas, apartados, pistas, clasificaciones)
 INDIRECT = [
-    "Marcar", "Mantener para pagar",
+    "Marcar", "Mantener para pagar", "Precio",
     "Explora la tienda de Steam, consulta ofertas y reseñas, gestiona tu lista de deseos y tu carrito, y compra con los métodos de pago de tu cuenta, todo desde la consola.",
     "Steam3DS es un proyecto independiente y no está afiliado, patrocinado ni respaldado por Valve Corporation ni por Nintendo. Steam y el logotipo de Steam son marcas comerciales o marcas registradas de Valve Corporation. Nintendo 3DS es una marca registrada de Nintendo.",
     "Inicio", "Ofertas", "Demos", "Betas",
@@ -17,6 +17,15 @@ INDIRECT = [
 ]
 
 TR = {
+    # Buscar: catálogo y barra de precio
+    "Búsquedas recientes": ("Recent searches", "最近の検索"),
+    "Explorar la tienda": ("Browse the store", "ストアを見る"),
+    "Cualquier precio": ("Any price", "すべての価格"),
+    "Menos de %s": ("Under %s", "%s 未満"),
+    "Precio": ("Price", "価格"),
+    "O explora la tienda abajo y filtra por precio": ("Or browse the store below and filter by price", "または下でストアを見て価格で絞り込めます"),
+    "Prueba con otro precio en la barra de abajo": ("Try another price on the bar below", "下のバーで別の価格を試してください"),
+
     # Pestañas y apartados
     "Inicio": ("Home", "ホーム"),
     "Ofertas": ("Specials", "セール"),
@@ -50,7 +59,6 @@ TR = {
     "Cargando…": ("Loading…", "読み込み中…"),
     "Busca juegos, DLC y demos": ("Search games, DLC and demos", "ゲーム・DLC・体験版を検索"),
     'Toca la barra de búsqueda o pulsa Y para escribir': ('Tap the search bar or press Y to type', '検索バーをタッチするかYで入力'),
-    'Tus búsquedas recientes aparecen abajo': ('Your recent searches appear below', '最近の検索は下に表示されます'),
     "Buscar en la tienda…": ("Search the store…", "ストアを検索…"),
     'No hay búsquedas recientes': ('No recent searches', '最近の検索はありません'),
     "DEMO": ("DEMO", "体験版"),

@@ -134,6 +134,11 @@ static struct {
 	int home_sub;                // Inicio: subcategoría (lo más vendido, novedades, próximamente, gratis)
 	float sub_x, sub_anim;       // píldora de la subcategoría y la barra que sale al estar en Inicio
 	bool search_focus;           // Buscar: el foco está en la píldora de búsqueda (no en la lista)
+	bool price_focus;            // Buscar: el foco está en la barra de precio
+	bool price_drag;             // la barra de precio se está moviendo con el dedo
+	int price;                   // Buscar: paso de la barra de precio (ver price_units)
+	float price_x;               // el tirador, animado hacia price
+	u64 price_changed;           // cuándo se movió la barra (se aplica al soltarla un momento)
 	float search_x;              // la píldora se estira sobre las pestañas (0..1)
 	int pfocus;                  // botón elegido con la cruceta en el perfil
 	bool has_demo_btn;           // la ficha tiene el botón de la demo
@@ -162,6 +167,8 @@ typedef struct {
 	int lib_stage;               // Biblioteca: 0 GetOwnedGames, 1 userdata de la tienda, 2 nombres por tandas
 	int lib_base;                // juegos que ya dio GetOwnedGames (a los que se suman los de la tienda)
 	int anim_count;
+	bool browse;                 // Buscar sin escribir nada: todo el catálogo, por páginas
+	int raw_next, raw_total;     // Buscar: por dónde va en el catálogo de Steam (sin el filtro de precio)
 } Tab;
 static Tab tabs[TAB_ALL];
 // La pestaña de verdad: en Inicio, la lista de la subcategoría elegida
@@ -317,6 +324,7 @@ static const char *home_title[HOME_PARTS] = {"Lo más vendido", "Novedades popul
 static bool tab_paged(int t)
 {
 	return t == TAB_OFFERS || t == TAB_DEMOS || t == TAB_BETAS || t == TAB_WISHLIST || t >= TAB_H0 ||
+		(t == TAB_SEARCH && tabs[TAB_SEARCH].browse) ||
 		(t == TAB_LIBRARY && tabs[TAB_LIBRARY].lib_stage == 2);
 }
 
@@ -332,6 +340,82 @@ static bool tab_can_retry(Tab *t)
 	if (osGetTime() - t->fail_at < (u64)retry_delay(t->list.err) * 1000) return false;
 	t->list.err[0] = 0;
 	return true;
+}
+
+// Barra de precio de Buscar, como la de la web de Steam: de «Gratis» a «Cualquier precio».
+// Steam no deja pedir un precio máximo, así que se filtra aquí con el precio de cada juego
+#define PRICE_STEPS 10
+#define PRICE_ANY (PRICE_STEPS - 1)
+static const int price_units[PRICE_STEPS] = {0, 5, 10, 15, 20, 30, 40, 50, 60, -1};   // 0 gratis, -1 cualquiera
+
+// El formato de tu moneda sale de un precio que ya haya dado Steam («17,99€», «$17.99»…)
+static bool money_template(char *pre, char *suf, char *sep)
+{
+	for (int ti = 0; ti < TAB_ALL; ti++)
+		for (int i = 0; i < tabs[ti].list.count; i++) {
+			const char *p = tabs[ti].list.rows[i].price;
+			const char *a = strpbrk(p, "0123456789");
+			if (!a) continue;
+			const char *b = a;
+			for (const char *q = a; *q; q++)
+				if (*q >= '0' && *q <= '9') b = q;
+			snprintf(pre, 12, "%.*s", (int)(a - p), p);
+			snprintf(suf, 12, "%s", b + 1);
+			*sep = (b - a >= 3 && (b[-2] < '0' || b[-2] > '9')) ? b[-2] : 0;
+			return true;
+		}
+	return false;
+}
+
+// Cuántas unidades de tu moneda son «5 €» en la barra (los pasos van en la moneda de cada país)
+static int money_factor(const char *pre, const char *suf)
+{
+	static const struct { const char *sym; int f; } t[] = {
+		{"¥", 100}, {"￥", 100}, {"₩", 1000}, {"₹", 50}, {"R$", 5}, {"Mex$", 20}, {"CLP", 800}, {"COL$", 3000},
+		{"S/", 3}, {"zł", 4}, {"kr", 10}, {"TL", 30}, {"₺", 30}, {"₴", 40}, {"₸", 400}, {"Rp", 10000},
+		{"₱", 50}, {"฿", 30}, {"RM", 4}, {"NT$", 30}, {"HK$", 8}, {"₪", 3}, {"₫", 20000}, {"pуб", 80},
+	};
+	for (size_t i = 0; i < sizeof t / sizeof t[0]; i++)
+		if (strstr(pre, t[i].sym) || strstr(suf, t[i].sym)) return t[i].f;
+	return 1;
+}
+
+static int price_limit_cents(int step)
+{
+	char pre[12], suf[12], sep;
+	int f = money_template(pre, suf, &sep) ? money_factor(pre, suf) : 1;
+	return price_units[step] * f * 100;
+}
+
+static void price_label(int step, char *out, size_t n)
+{
+	int u = price_units[step];
+	if (u < 0) {
+		snprintf(out, n, "%s", _("Cualquier precio"));
+		return;
+	}
+	if (u == 0) {
+		snprintf(out, n, "%s", _("Gratis"));
+		return;
+	}
+	char pre[12], suf[12], sep, amount[40];
+	if (money_template(pre, suf, &sep)) {
+		int v = u * money_factor(pre, suf);
+		if (sep) snprintf(amount, sizeof amount, "%s%d%c00%s", pre, v, sep, suf);
+		else snprintf(amount, sizeof amount, "%s%d%s", pre, v, suf);
+	} else {
+		snprintf(amount, sizeof amount, "%d €", u);
+	}
+	snprintf(out, n, _("Menos de %s"), amount);
+}
+
+static bool price_ok(const StoreRow *r)
+{
+	int u = price_units[S.price];
+	if (u < 0 || r->header || !r->appid) return true;
+	int c = r->free ? 0 : r->cents;
+	if (u == 0) return c == 0;
+	return c >= 0 && c < price_limit_cents(S.price);
 }
 
 static void tab_more(int ti)
@@ -370,6 +454,11 @@ static void tab_more(int ti)
 	} else if (ti == TAB_CART) {
 		if (!auth_logged()) return;
 		shop_cart_load();
+	} else if (ti == TAB_SEARCH) {
+		// Sin escribir nada: el catálogo entero por relevancia (lo gratuito lo filtra ya Steam)
+		if (!t->browse || t->list.end) return;
+		t->list.req = steam_req_query(price_units[S.price] == 0 ? Q_BROWSE_FREE : Q_BROWSE, t->raw_next, PAGE);
+		t->raw_next += PAGE;
 	} else if (tab_paged(ti)) {
 		if (t->list.end) return;
 		static const StoreQuery q[TAB_COUNT] = {[TAB_OFFERS] = Q_OFFERS, [TAB_DEMOS] = Q_DEMOS, [TAB_BETAS] = Q_EARLY};
@@ -748,40 +837,117 @@ static void recents_add(const char *term)
 	disk_save(APP_DIR "/searches.txt", buf, len);
 }
 
-// Sin búsqueda en marcha, la lista de Buscar son las recientes (filas sin appid)
-static void search_show_recents(void)
+static void add_header(RowList *l, const char *name)
 {
-	Tab *t = &tabs[TAB_SEARCH];
-	if (t->list.req) return;
-	t->list.count = 0;
-	t->term[0] = 0;
-	for (int i = 0; i < S.nrecents; i++) {
-		StoreRow r = {0};
-		snprintf(r.name, sizeof r.name, "%s", S.recents[i]);
-		add_row(&t->list, &r);
-	}
-	t->list.total = t->list.count;
-	t->list.end = true;
-	t->sel = 0;
-	t->sel_y = 0;
-	t->scroll = t->scroll_target = 0;
+	StoreRow r = {0};
+	r.header = true;
+	snprintf(r.name, sizeof r.name, "%s", name);
+	add_row(l, &r);
 }
 
-static void search_start(const char *term)
+// Sin búsqueda: arriba las recientes (filas sin appid) y debajo todo el catálogo por relevancia,
+// por páginas y con el filtro de precio
+static void search_show_browse(void)
 {
 	Tab *t = &tabs[TAB_SEARCH];
-	if (!term[0] || !S.ctx_ready) return;
-	recents_add(term);
 	if (t->list.req) net_release(t->list.req);
-	t->list.req = steam_req_search(term);
+	t->list.req = NULL;
 	t->list.count = 0;
 	t->list.err[0] = 0;
-	t->list.end = true;
-	snprintf(t->term, sizeof t->term, "%s", term);
+	t->term[0] = 0;
+	if (S.nrecents) {
+		add_header(&t->list, _("Búsquedas recientes"));
+		for (int i = 0; i < S.nrecents && i < 4; i++) {
+			StoreRow r = {0};
+			r.cents = -1;
+			snprintf(r.name, sizeof r.name, "%s", S.recents[i]);
+			add_row(&t->list, &r);
+		}
+	}
+	add_header(&t->list, _("Explorar la tienda"));
+	t->browse = true;
+	t->raw_next = t->raw_total = 0;
+	t->list.total = t->list.count;
+	t->list.end = false;
 	t->sel = 0;
 	t->sel_y = 0;
 	t->scroll = t->scroll_target = 0;
 	t->sel_changed = osGetTime();
+	tab_more(TAB_SEARCH);
+}
+
+static void search_run(const char *term)
+{
+	Tab *t = &tabs[TAB_SEARCH];
+	if (!term[0] || !S.ctx_ready) return;
+	if (t->list.req) net_release(t->list.req);
+	t->list.req = steam_req_search(term);
+	t->browse = false;
+	t->list.count = 0;
+	t->list.err[0] = 0;
+	t->list.end = true;
+	if (term != t->term) snprintf(t->term, sizeof t->term, "%s", term);
+	t->sel = 0;
+	t->sel_y = 0;
+	t->scroll = t->scroll_target = 0;
+	t->sel_changed = osGetTime();
+}
+
+static void search_start(const char *term)
+{
+	if (!term[0] || !S.ctx_ready) return;
+	recents_add(term);
+	search_run(term);
+}
+
+// Lo que llega de Buscar: se quita lo que no entra en el precio elegido y, en el catálogo, se
+// siguen pidiendo páginas hasta llenar la pantalla (con un precio bajo pasan pocos de cada página)
+static void search_poll(Tab *t)
+{
+	Req *r = t->list.req;
+	if (!r) {
+		// El catálogo se va pidiendo solo mientras no llene la pantalla (también al empezar sin red)
+		if (t->browse && !t->list.end && !t->list.err[0] && t->list.count < t->sel + 14) tab_more(TAB_SEARCH);
+		return;
+	}
+	if (r->state < REQ_DONE) return;
+	bool ok = r->state == REQ_DONE;
+	int from = t->browse ? t->list.count : 0;
+	list_poll(&t->list, t->browse);
+	if (!ok || t->list.err[0]) {
+		if (t->browse) t->raw_next -= PAGE;   // esa página se vuelve a pedir
+		return;
+	}
+	if (t->browse) t->raw_total = t->list.total;
+	int n = from;
+	for (int i = from; i < t->list.count; i++)
+		if (price_ok(&t->list.rows[i])) t->list.rows[n++] = t->list.rows[i];
+	t->list.count = n;
+	t->list.total = n;
+	if (!t->browse) {
+		t->list.end = true;
+		return;
+	}
+	t->list.end = t->raw_next >= t->raw_total;
+}
+
+static void price_set(int step)
+{
+	if (step < 0) step = 0;
+	if (step > PRICE_ANY) step = PRICE_ANY;
+	if (step == S.price) return;
+	S.price = step;
+	S.price_changed = osGetTime();
+}
+
+// Con la barra quieta un momento, se vuelve a pedir lo que se estaba viendo con el precio nuevo
+static void price_apply(void)
+{
+	if (!S.price_changed || osGetTime() - S.price_changed < 350 || S.price_drag) return;
+	S.price_changed = 0;
+	Tab *t = &tabs[TAB_SEARCH];
+	if (t->term[0]) search_run(t->term);
+	else search_show_browse();
 }
 
 // ============================================================================
@@ -1224,12 +1390,12 @@ static void draw_store_top(void)
 {
 	Tab *t = CUR;
 	const StoreRow *row = cur_row();
-	if (S.tab == TAB_SEARCH && !t->term[0]) {
-		// Buscar, sin búsqueda: qué se puede hacer
+	if (S.tab == TAB_SEARCH && !t->term[0] && (S.search_focus || S.price_focus || !row || !row->appid)) {
+		// Buscar, sin búsqueda (o sin un juego elegido): qué se puede hacer
 		ui_icon(IC_SEARCH, TOP_W / 2 - 18, 62, 36, COL_ACC);
 		ui_text(TOP_W / 2, 112, _("Busca juegos, DLC y demos"), SZ_LARGE, COL_WHITE, AL_CENTER, 380);
 		ui_text(TOP_W / 2, 136, _("Toca la barra de búsqueda o pulsa Y para escribir"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
-		if (S.nrecents) ui_text(TOP_W / 2, 154, _("Tus búsquedas recientes aparecen abajo"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		ui_text(TOP_W / 2, 154, _("O explora la tienda abajo y filtra por precio"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
 		return;
 	}
 	if (S.tab == TAB_CART && S.cart_qr) {
@@ -1264,7 +1430,10 @@ static void draw_store_top(void)
 			char tt[112];
 			snprintf(tt, sizeof tt, _("No hay resultados para «%s»"), t->term);
 			ui_text(TOP_W / 2, 110, tt, SZ_LARGE, COL_TXT, AL_CENTER, 380);
-			ui_text(TOP_W / 2, 134, _("Prueba con otros términos o con el nombre en inglés"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+			if (S.price != PRICE_ANY)
+				ui_text(TOP_W / 2, 134, _("Prueba con otro precio en la barra de abajo"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+			else
+				ui_text(TOP_W / 2, 134, _("Prueba con otros términos o con el nombre en inglés"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
 		} else {
 			draw_net_wait(TOP_W / 2, 120, _("Cargando…"));
 		}
@@ -1288,6 +1457,41 @@ static void draw_store_top(void)
 static const char *home_sub_name[HOME_PARTS] = {"Más vendidos", "Novedades", "Próximamente", "Gratis"};
 
 // Subcategorías de Inicio: una barra que cuelga de la de pestañas (recta arriba, redonda abajo)
+// La barra de precio de Buscar (en el sitio de la de subcategorías de Inicio): el precio elegido a
+// la izquierda y el carril con un punto por paso y el tirador
+#define PRICE_TX0 132.0f
+#define PRICE_TX1 (BOT_W - 26.0f)
+
+static int price_step_at(int px)
+{
+	float f = (px - PRICE_TX0) / (PRICE_TX1 - PRICE_TX0);
+	int st = (int)roundf(f * PRICE_ANY);
+	return st < 0 ? 0 : st > PRICE_ANY ? PRICE_ANY : st;
+}
+
+static void draw_pricebar(float x, float y, float w, float h, float e)
+{
+	bool on = S.price_focus;
+	char lab[48];
+	price_label(S.price, lab, sizeof lab);
+	float lh = ui_line_h(SZ_TINY), ty = y + 3 + (h - 3 - lh) / 2;
+	ui_icon(IC_CART, x + 9, y + 3 + (h - 3 - 10) / 2, 10, col_alpha(on ? COL_ACC : COL_DIM, e));
+	ui_text(x + 24, ty, lab, SZ_TINY, col_alpha(on ? COL_WHITE : COL_TXT, e), AL_LEFT, PRICE_TX0 - x - 34);
+	float cy = y + 3 + (h - 3) / 2, x0 = PRICE_TX0, x1 = PRICE_TX1;
+	float kx = x0 + (x1 - x0) * S.price_x / PRICE_ANY;
+	ui_rrect(x0, cy - 1.5f, x1 - x0, 3, 1.5f, col_alpha(COL_WHITE, 0.14f * e));
+	ui_rrect(x0, cy - 1.5f, kx - x0, 3, 1.5f, col_alpha(COL_ACC, (on ? 0.9f : 0.55f) * e));
+	for (int i = 0; i <= PRICE_ANY; i++) {
+		float px = x0 + (x1 - x0) * i / PRICE_ANY;
+		ui_rect(px - 1, cy - 1, 2, 2, col_alpha(i <= S.price ? COL_WHITE : COL_DIM, 0.7f * e));
+	}
+	if (on) {
+		float br = 0.25f + 0.12f * sinf(g_time * 2.4f);
+		ui_rrect(kx - 8, cy - 8, 16, 16, 8, col_alpha(COL_ACC, br * e));
+	}
+	ui_rrect(kx - 5, cy - 5, 10, 10, 5, col_alpha(on ? COL_WHITE : C2D_Color32(0xc7, 0xd5, 0xe0, 0xff), e));
+}
+
 static void draw_subbar(void)
 {
 	float e = ease_out_cubic(S.sub_anim);
@@ -1297,6 +1501,11 @@ static void draw_subbar(void)
 	ui_rrect_bottom(x, y, w, h, 9, col_alpha(C2D_Color32(0x1c, 0x28, 0x3a, 0xff), 0.96f));
 	ui_rrect_bottom(x, y, w, h, 9, col_alpha(COL_WHITE, 0.05f));
 	ui_rect(x + 9, y + h - 1, w - 18, 1, col_alpha(COL_WHITE, 0.10f));
+	if (S.tab == TAB_SEARCH) {
+		draw_pricebar(x, y, w, h, e);
+		ui_scissor_off();
+		return;
+	}
 	float sw = w / HOME_PARTS;
 	float lh = ui_line_h(SZ_TINY), ty = y + 3 + (h - 3 - lh) / 2;
 	// La elegida: un resplandor suave que respira, sin burbuja
@@ -1403,7 +1612,7 @@ static void draw_store_bottom(void)
 	float top = list_top(), lh = list_h();
 	ui_scissor(GFX_BOTTOM, 0, top, BOT_W, lh);
 	int first = (int)(t->scroll / ROW_H);
-	if (t->list.count && cur_row() && !(S.tab == TAB_SEARCH && S.search_focus)) {
+	if (t->list.count && cur_row() && !(S.tab == TAB_SEARCH && (S.search_focus || S.price_focus))) {
 		float hy = top + t->sel_y * ROW_H - t->scroll;
 		draw_row_sel(hy);
 	}
@@ -1503,13 +1712,17 @@ static void draw_store_bottom(void)
 		draw_hints(ha, 4);
 	} else if (S.tab == TAB_SEARCH) {
 		if (S.search_focus) {
-			static const char *hs[] = {"A", "Escribir", "↓", "Resultados", "L R", "Pestaña", "START", "Menú"};
-			static const char *h1[] = {"A", "Escribir", "L R", "Pestaña", "START", "Menú"};
-			if (t->list.count) draw_hints(hs, 4);
-			else draw_hints(h1, 3);
+			static const char *hs[] = {"A", "Escribir", "↓", "Precio", "L R", "Pestaña", "START", "Menú"};
+			draw_hints(hs, 4);
+		} else if (S.price_focus) {
+			static const char *hp[] = {"← →", "Precio", "↓", "Resultados", "Y", "Escribir", "L R", "Pestaña"};
+			draw_hints(hp, 4);
 		} else if (t->term[0]) {
 			static const char *hs[] = {"A", "Abrir", "↑↓", "Elegir", "Y", "Buscar", "B", "Borrar", "L R", "Pestaña"};
 			draw_hints(hs, 5);
+		} else if (cur_row() && cur_row()->appid) {
+			static const char *hs[] = {"A", "Abrir", "↑↓", "Elegir", "Y", "Escribir", "L R", "Pestaña"};
+			draw_hints(hs, 4);
 		} else {
 			static const char *hs[] = {"A", "Buscar esto", "↑↓", "Elegir", "Y", "Escribir", "L R", "Pestaña"};
 			draw_hints(hs, 4);
@@ -1527,6 +1740,19 @@ static void draw_store_bottom(void)
 }
 
 // Elige una fila de la pestaña actual, saltándose los títulos de apartado
+// La primera fila que se puede elegir (no un título de apartado), o -1 si no hay ninguna
+static int first_row(const Tab *t)
+{
+	for (int i = 0; i < t->list.count; i++)
+		if (!t->list.rows[i].header) return i;
+	return -1;
+}
+
+static bool cur_row_any(const Tab *t)
+{
+	return first_row(t) >= 0;
+}
+
 static void store_select(int sel, int dir)
 {
 	Tab *t = CUR;
@@ -3494,7 +3720,8 @@ static void tab_switch(int nt)
 	t->anim_t = g_time;
 	if (nt == TAB_SEARCH) {
 		S.search_focus = true;
-		if (!t->term[0] && !t->list.req) search_show_recents();
+		S.price_focus = false;
+		if (!t->term[0] && !t->list.req && !t->list.count) search_show_browse();
 	} else if (!t->started) {
 		tab_more(nt);
 	}
@@ -3518,7 +3745,11 @@ static void store_activate(void)
 	const StoreRow *r = cur_row();
 	if (r && r->appid) open_game(r->appid, false);
 	else if (r && S.tab == TAB_SEARCH) search_start(r->name);       // búsqueda reciente
-	else if (S.tab == TAB_SEARCH && !t->term[0]) S.want_kb = true;
+	else if (S.tab == TAB_SEARCH && t->browse && t->list.err[0] && !t->list.req) {
+		t->fail_at = 0;
+		t->list.err[0] = 0;
+		tab_more(TAB_SEARCH);
+	} else if (S.tab == TAB_SEARCH && !t->term[0]) S.want_kb = true;
 	else if (S.tab == TAB_SEARCH && t->term[0] && !t->list.req) search_start(t->term);
 	else if (!t->list.req) {
 		// Reintentar ya, sin esperar la cuenta atrás
@@ -3562,18 +3793,32 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	}
 	Tab *t = CUR;
 	if (S.tab == TAB_SEARCH && S.search_focus) {
-		// Foco en la píldora de búsqueda: A o Y escriben; abajo baja a la lista
-		if (key_repeat(kd, kh, KEY_DOWN) && t->list.count) {
+		// Foco en la píldora de búsqueda: A o Y escriben; abajo baja a la barra de precio
+		if (key_repeat(kd, kh, KEY_DOWN)) {
 			S.search_focus = false;
+			S.price_focus = true;
+		}
+		if (kd & (KEY_A | KEY_Y)) S.want_kb = true;
+		kd &= ~KEY_A;
+	} else if (S.tab == TAB_SEARCH && S.price_focus) {
+		// Foco en la barra de precio: izquierda y derecha la mueven; arriba, la búsqueda; abajo, la lista
+		if (key_repeat(kd, kh, KEY_LEFT)) price_set(S.price - 1);
+		if (key_repeat(kd, kh, KEY_RIGHT)) price_set(S.price + 1);
+		if (key_repeat(kd, kh, KEY_UP)) {
+			S.price_focus = false;
+			S.search_focus = true;
+		}
+		if (key_repeat(kd, kh, KEY_DOWN) && cur_row_any(t)) {
+			S.price_focus = false;
 			store_select(0, 1);
 			t->sel_changed = osGetTime();
 		}
-		if (kd & (KEY_A | KEY_Y)) S.want_kb = true;
+		if (kd & KEY_Y) S.want_kb = true;
 		kd &= ~KEY_A;
 	} else {
 		if (key_repeat(kd, kh, KEY_DOWN)) store_select(t->sel + 1, 1);
 		if (key_repeat(kd, kh, KEY_UP)) {
-			if (S.tab == TAB_SEARCH && t->sel == 0) S.search_focus = true;   // arriba del todo: vuelve a la búsqueda
+			if (S.tab == TAB_SEARCH && first_row(t) >= t->sel) S.price_focus = true;   // arriba del todo: a la barra de precio
 			else store_select(t->sel - 1, -1);
 		}
 		if (S.tab == TAB_HOME) {
@@ -3587,11 +3832,8 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		if ((kd & KEY_Y) && S.tab == TAB_SEARCH) S.want_kb = true;
 	}
 	if ((kd & KEY_B) && S.tab == TAB_SEARCH && t->term[0]) {
-		// B borra la búsqueda y vuelve a las recientes
-		if (t->list.req) net_release(t->list.req);
-		t->list.req = NULL;
-		t->list.err[0] = 0;
-		search_show_recents();
+		// B borra la búsqueda y vuelve a las recientes y al catálogo
+		search_show_browse();
 	}
 	if (kd & KEY_A) store_activate();
 
@@ -3607,6 +3849,15 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		S.touch_moved = 0;
 		S.drag_scroll0 = t->scroll_target;
 		S.dragging = tp->py >= top && tp->py < top + lh;
+		// La barra de precio de Buscar: se toca o se arrastra el tirador
+		S.price_drag = S.tab == TAB_SEARCH && tp->py >= LIST_Y && tp->py < LIST_Y + SUB_H;
+		if (S.price_drag) {
+			S.search_focus = false;
+			S.price_focus = true;
+		}
+	}
+	if ((kh & KEY_TOUCH) && S.price_drag) {
+		price_set(price_step_at(tp->px));
 	} else if ((kh & KEY_TOUCH) && S.dragging) {
 		int dy = tp->py - S.touch_y0;
 		if (abs(dy) > S.touch_moved) S.touch_moved = abs(dy);
@@ -3619,13 +3870,20 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 			if (tab_paged(cur_ti()) && t->scroll_target > max - 3 * ROW_H) tab_more(cur_ti());
 		}
 	}
+	if ((ku & KEY_TOUCH) && S.price_drag) {
+		S.price_drag = false;
+		ku &= ~KEY_TOUCH;
+	}
 	if (ku & KEY_TOUCH) {
 		if (S.touch_moved < 8) {
 			int x = S.touch_x0, y = S.touch_y0;
 			if (y < LIST_Y && S.tab < TAB_COUNT) {
 				if (!(S.tab == TAB_SEARCH && S.search_focus)) {
 					int nt = tab_at(x);
-					if (nt == TAB_SEARCH && S.tab == TAB_SEARCH) S.search_focus = true;   // tocar la lupa sube el foco
+					if (nt == TAB_SEARCH && S.tab == TAB_SEARCH) {
+						S.search_focus = true;   // tocar la lupa sube el foco
+						S.price_focus = false;
+					}
 					else tab_switch(nt);
 				}
 			} else if (S.tab == TAB_HOME && y < LIST_Y + SUB_H) {
@@ -3634,8 +3892,8 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 			} else if (S.dragging) {
 				int i = (int)((y - top + t->scroll) / ROW_H);
 				if (i >= 0 && i < t->list.count && !t->list.rows[i].header) {
-					if (S.tab == TAB_SEARCH && S.search_focus) {
-						S.search_focus = false;
+					if (S.tab == TAB_SEARCH && (S.search_focus || S.price_focus)) {
+						S.search_focus = S.price_focus = false;
 						store_select(i, 0);
 					} else if (i == t->sel) store_activate();
 					else store_select(i, 0);
@@ -4442,6 +4700,8 @@ static void poll_country(void)
 
 int main(int argc, char **argv)
 {
+	S.price = PRICE_ANY;   // Buscar: sin filtro de precio
+	S.price_x = PRICE_ANY;
 	// En la New 3DS: CPU a 804 MHz y la caché L2 (sin esto va a 268 MHz, como la vieja)
 	osSetSpeedupEnable(true);
 	gfxInitDefault();
@@ -4511,6 +4771,7 @@ int main(int argc, char **argv)
 			if (ti == TAB_HOME) continue;   // Inicio no tiene lista propia: son las de TAB_H0…
 			else if (ti == TAB_LIBRARY) owned_poll(t);
 			else if (ti == TAB_WISHLIST) wish_poll(t);
+			else if (ti == TAB_SEARCH) search_poll(t);
 			else list_poll(&t->list, tab_paged(ti));
 			if (ti == TAB_BETAS) {
 				// La etiqueta «Acceso anticipado» la ponen los usuarios y se queda en juegos que ya
@@ -4526,6 +4787,8 @@ int main(int argc, char **argv)
 					t->fail_at = now;
 					t->list.end = false;
 				} else if (!t->list.count && t->started) {
+					tab_more(ti);   // espera sola lo que toque
+				} else if (ti == TAB_SEARCH && t->browse) {
 					tab_more(ti);   // espera sola lo que toque
 				} else if (ti == TAB_SEARCH && t->term[0] && tab_can_retry(t)) {
 					char term[sizeof t->term];
@@ -4654,7 +4917,9 @@ int main(int argc, char **argv)
 		S.exit_anim = approach(S.exit_anim, S.ask_exit ? 1 : 0, S.ask_exit ? 7 : 16);
 		S.menu_anim = approach(S.menu_anim, S.menu_open ? 1 : 0, S.menu_open ? 12 : 18);
 		S.pick_anim = approach(S.pick_anim, S.pick_open ? 1 : 0, S.pick_open ? 12 : 18);
-		S.sub_anim = approach(S.sub_anim, S.scene == SC_STORE && S.tab == TAB_HOME ? 1 : 0, 14);
+		S.sub_anim = approach(S.sub_anim, S.scene == SC_STORE && (S.tab == TAB_HOME || S.tab == TAB_SEARCH) ? 1 : 0, 14);
+		S.price_x = approach(S.price_x, S.price, 16);
+		price_apply();
 		S.sub_x = approach(S.sub_x, S.home_sub, 16);
 		S.oscroll = approach(S.oscroll, S.oscroll_t, 18);
 		// La píldora primero llega a la lupa y solo entonces se estira

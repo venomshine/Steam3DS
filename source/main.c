@@ -95,6 +95,10 @@ static struct {
 	u32 ach_for;
 	Req *ach_req, *ach_mine_req;
 	char ach_err[128];
+	// Comparar con un amigo que lo tiene (cmp_i: cuál de FR.ids, -1 sin comparar)
+	int cmp_i, cmp_n;
+	bool *cmp_done, cmp_loaded;
+	Req *cmp_req;
 	int lsel;
 	float lscroll;
 
@@ -2353,6 +2357,34 @@ static const char *shot_url(const AppInfo *a, int i)
 	return shots_mine ? MS.s[i].url : a->shots[i];
 }
 
+static void ach_cmp_stop(void)
+{
+	if (S.cmp_req) net_release(S.cmp_req);
+	S.cmp_req = NULL;
+	free(S.cmp_done);
+	S.cmp_done = NULL;
+	S.cmp_i = -1;
+	S.cmp_n = 0;
+	S.cmp_loaded = false;
+}
+
+// Los amigos con los que se puede comparar: los que lo tienen (FR los pone primero)
+static int ach_cmp_count(void)
+{
+	int own = FR.in_game + FR.owns;
+	if (!FR.done || own <= 0 || FR.appid != S.app) return 0;
+	return FR.nids < own ? FR.nids : own;
+}
+
+static void ach_cmp_next(const AppInfo *a)
+{
+	int n = ach_cmp_count(), next = S.cmp_i + 1;
+	ach_cmp_stop();
+	if (next >= n || !S.nach) return;   // tras el último, se deja de comparar
+	S.cmp_i = next;
+	S.cmp_req = steam_req_my_achievements(a->appid, FR.ids[next], auth_token());
+}
+
 static void ach_reset(void)
 {
 	free(S.ach);
@@ -2364,6 +2396,7 @@ static void ach_reset(void)
 	if (S.ach_req) net_release(S.ach_req);
 	if (S.ach_mine_req) net_release(S.ach_mine_req);
 	S.ach_req = S.ach_mine_req = NULL;
+	ach_cmp_stop();
 }
 
 // Como en Steam: primero los que tienes y luego los demás, de más comunes a más raros
@@ -2408,6 +2441,27 @@ static void ach_poll(const AppInfo *a)
 		}
 		net_release(S.ach_mine_req);
 		S.ach_mine_req = NULL;
+	}
+	if (S.cmp_req && S.cmp_req->state >= REQ_DONE) {
+		// Sus logros se casan igual que los tuyos, sobre una copia (los tuyos no se tocan)
+		Achievement *tmp = S.nach ? malloc(sizeof *tmp * S.nach) : NULL;
+		int n = -1;
+		if (tmp && S.cmp_req->state == REQ_DONE) {
+			memcpy(tmp, S.ach, sizeof *tmp * S.nach);
+			for (int i = 0; i < S.nach; i++) tmp[i].done = false;
+			n = steam_mark_unlocked(S.cmp_req->data, tmp, S.nach);
+		}
+		if (n >= 0) {
+			S.cmp_done = malloc(sizeof *S.cmp_done * S.nach);
+			for (int i = 0; S.cmp_done && i < S.nach; i++) S.cmp_done[i] = tmp[i].done;
+			S.cmp_n = n;
+			S.cmp_loaded = S.cmp_done != NULL;
+		}
+		netlog("logros %lu: comparar con %llu -> %d", (unsigned long)a->appid, (unsigned long long)(S.cmp_i >= 0 ? FR.ids[S.cmp_i] : 0), n);
+		if (n < 0) toast(_("No se pudieron ver sus logros (puede que su perfil sea privado)"));
+		free(tmp);
+		net_release(S.cmp_req);
+		S.cmp_req = NULL;
 	}
 }
 
@@ -2815,9 +2869,17 @@ static void draw_ach_top(const AppInfo *a)
 		ui_text(TOP_W - 12, 24, t, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
 		if (S.ach_mine_req) ui_spinner(TOP_W - 24 - ui_text_w(t, SZ_SMALL), 31, 5, COL_DIM);
 	}
+	// Comparando con un amigo: su progreso en la misma línea que tu actividad
+	if (S.cmp_i >= 0) {
+		const char *fn = S.cmp_i < FR.nnames ? FR.name[S.cmp_i] : _("tu amigo");
+		if (S.cmp_loaded) snprintf(t, sizeof t, _("%s: %d de %d"), fn, S.cmp_n, S.nach);
+		else snprintf(t, sizeof t, _("Cargando los logros de %s…"), fn);
+		ui_icon(IC_USER, TOP_W - 18 - ui_text_w(t, SZ_TINY) - 14, 49, 11, C2D_Color32(0x67, 0xc1, 0xf5, 0xff));
+		ui_text(TOP_W - 18, 48, t, SZ_TINY, C2D_Color32(0x67, 0xc1, 0xf5, 0xff), AL_RIGHT, 180);
+	}
 	// Tu actividad: horas y última vez (de la biblioteca)
 	const StoreRow *own = auth_logged() ? owned_row(a->appid) : NULL;
-	bool act = own && own->minutes;
+	bool act = (own && own->minutes) || S.cmp_i >= 0;
 	if (act) {
 		char hrs[32], when[40];
 		if (own->minutes >= 60) snprintf(hrs, sizeof hrs, _("%d h jugadas"), (own->minutes + 30) / 60);
@@ -2829,7 +2891,7 @@ static void draw_ach_top(const AppInfo *a)
 			snprintf(t, sizeof t, "%s", hrs);
 		}
 		ui_icon(IC_PAD, 12, 49, 11, COL_DIM);
-		ui_text(27, 48, t, SZ_TINY, COL_DIM, AL_LEFT, TOP_W - 40);
+		ui_text(27, 48, t, SZ_TINY, COL_DIM, AL_LEFT, S.cmp_i >= 0 ? 180 : TOP_W - 40);
 	}
 
 	// El elegido, en grande
@@ -2850,6 +2912,12 @@ static void draw_ach_top(const AppInfo *a)
 		SZ_TINY, COL_TXT, 1, 12);
 	snprintf(t, sizeof t, _("Lo tiene el %.1f %% de los jugadores"), x->pct);
 	ui_text(64, cy + 33, t, SZ_TINY, x->pct < 10 ? C2D_Color32(0xe8, 0xb8, 0x4a, 0xff) : COL_DIM, AL_LEFT, 0);
+	if (S.cmp_loaded && S.cmp_done && S.cmp_i >= 0) {
+		char ft[80];
+		const char *fn = S.cmp_i < FR.nnames ? FR.name[S.cmp_i] : _("tu amigo");
+		snprintf(ft, sizeof ft, S.cmp_done[sel] ? _("%s lo tiene") : _("%s no lo tiene"), fn);
+		ui_text(TOP_W - 18, cy + 33, ft, SZ_TINY, S.cmp_done[sel] ? C2D_Color32(0x67, 0xc1, 0xf5, 0xff) : COL_DIM, AL_RIGHT, 140);
+	}
 
 	// La lista
 	float top = ach_top, bottom = SCR_H - 4, rh = ACH_RH;
@@ -2864,7 +2932,12 @@ static void draw_ach_top(const AppInfo *a)
 		bool on = i == S.lsel;
 		draw_ach_icon(a, r, 18, y + 2, rh - 5);
 		u32 nc = r->done || S.ach_mine < 0 ? (on ? COL_WHITE : COL_TXT) : COL_DIM;
-		ui_text(44, y + 4, ach_secret(r) ? _("Logro oculto") : r->name, SZ_SMALL, nc, AL_LEFT, TOP_W - 44 - 80);
+		ui_text(44, y + 4, ach_secret(r) ? _("Logro oculto") : r->name, SZ_SMALL, nc, AL_LEFT, TOP_W - 44 - (S.cmp_loaded ? 100 : 80));
+		if (S.cmp_loaded && S.cmp_done) {
+			// Su marca, en azul, a la izquierda de la tuya
+			if (S.cmp_done[i]) ui_icon(IC_USER, TOP_W - 64, y + 6, 11, C2D_Color32(0x67, 0xc1, 0xf5, 0xff));
+			else ui_text(TOP_W - 59, y + 4, "·", SZ_SMALL, COL_DIM, AL_CENTER, 0);
+		}
 		if (r->done) {
 			ui_icon(IC_CHECK, TOP_W - 30, y + 6, 11, COL_LIME);
 		} else {
@@ -3429,6 +3502,9 @@ static void draw_game_bottom(void)
 	} else if (S.sec >= SEC_EXTRAS) {
 		static const char *h[] = {"↑↓", "Elegir", "A", "Abrir", "L R", "Apartado", "B", "Volver", "START", "Menú"};
 		draw_hints(h, 5);
+	} else if (S.sec == SEC_ACH && ach_cmp_count()) {
+		static const char *h[] = {"↑↓", "Elegir", "Y", "Comparar", "L R", "Apartado", "B", "Volver"};
+		draw_hints(h, 4);
 	} else if (S.sec == SEC_ACH) {
 		static const char *h[] = {"↑↓", "Elegir", "L R", "Apartado", "B", "Volver", "START", "Menú"};
 		draw_hints(h, 4);
@@ -7267,7 +7343,7 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	int key_b = BT_NONE;
 	bool combo = kh & KEY_X;
 	if (a) {
-		if (kd & KEY_Y) key_b = auth_logged() ? BT_CART : -1;
+		if ((kd & KEY_Y) && !(S.sec == SEC_ACH && ach_cmp_count())) key_b = auth_logged() ? BT_CART : -1;   // en Logros, Y compara
 		if (combo && (kd & KEY_RIGHT)) key_b = BT_SHOTS;
 		if (combo && (kd & KEY_LEFT)) key_b = BT_WISH;
 		if (combo && (kd & KEY_DOWN)) key_b = BT_INST;
@@ -7305,6 +7381,10 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		if (key_repeat(kd, kh, KEY_DOWN) && S.lsel + 1 < l->count) S.lsel++;
 		if (key_repeat(kd, kh, KEY_UP) && S.lsel > 0) S.lsel--;
 		if ((kd & KEY_A) && S.lsel < l->count) { open_game(l->rows[S.lsel].appid, true); return; }
+	}
+	if (S.sec == SEC_ACH && a && (kd & KEY_Y) && ach_cmp_count()) {
+		ach_cmp_next(a);
+		return;
 	}
 	if (S.sec == SEC_ACH) {
 		if (key_repeat(kd, kh, KEY_DOWN) && S.lsel + 1 < S.nach) S.lsel++;

@@ -305,6 +305,10 @@ def fake_post_api(path, body):
                 if c.get("customization_type") == 17:
                     keys += [sl["title"] for sl in c.get("slots", []) if sl.get("appid") == appid and sl.get("title") and sl["title"] not in keys]
             ach.sort(key=lambda a: float(a["player_percent_unlocked"]))
+            if not keys:   # sin vitrina de ese juego: la mitad de los logros (para comparar)
+                return {"response": {"games": [{"appid": appid, "total_achievements": len(ach), "achievements": [
+                    {"statid": i, "bit": 0, "name": a["localized_name"], "icon": a["icon"], "icon_gray": a["icon_gray"],
+                     "player_percent_unlocked": a["player_percent_unlocked"]} for i, a in enumerate(ach[1::2])]}]}}
             return {"response": {"games": [{"appid": appid, "total_achievements": len(ach), "achievements": [
                 {"statid": int(k.split("_")[0]), "bit": int(k.split("_")[1]), "name": a["localized_name"], "desc": a["localized_desc"],
                  "icon": a["icon"], "icon_gray": a["icon_gray"], "player_percent_unlocked": a["player_percent_unlocked"]}

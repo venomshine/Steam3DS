@@ -106,6 +106,9 @@ settoken_calls = []
 
 
 IGNORED = {}   # juegos ignorados (appid -> motivo), como rgIgnoredApps
+# Tus reseñas (appid -> datos), como las da IUserReviewsService; Cyberpunk ya tiene una
+REVIEWS = {1091500: {"review": "Después de las actualizaciones es otro juego. Night City es increíble y la historia de V engancha muchísimo.",
+                     "voted_up": True, "created": int(time.time()) - 40 * 86400, "votes_up": 12}}
 
 
 def fake_post(host, path, body):
@@ -126,6 +129,18 @@ def fake_post(host, path, body):
             WALLET_CENTS[0] += 2000
             return {"success": 1, "detail": 0, "formattednewwalletbalance": "%d,%02d€" % divmod(WALLET_CENTS[0], 100)}, []
         return {"success": 2, "detail": 14}, []
+    if host == "store.steampowered.com" and path == "friends/recommendgame":
+        raw = body.decode() if isinstance(body, bytes) else (body or "")
+        f = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+        a = int(f.get("appid", "0") or 0)
+        if not f.get("sessionid") or not a:
+            return {"success": False}, []
+        if a not in [x for x, *_ in OWNED]:
+            return {"success": False, "strError": "Debes tener este producto para escribir una reseña."}, []
+        old = REVIEWS.get(a, {})
+        REVIEWS[a] = {"review": f.get("comment", ""), "voted_up": f.get("rated_up") == "true",
+                      "created": old.get("created", int(time.time())), "updated": int(time.time()), "votes_up": old.get("votes_up", 0)}
+        return {"success": True}, []
     if host == "store.steampowered.com" and path.startswith("recommended/ignorerecommendation"):
         raw = body.decode() if isinstance(body, bytes) else (body or "")
         f = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
@@ -311,6 +326,16 @@ def fake_get(path, q):
         return {"response": {"friendslist": {"bincremental": False, "friends":
                 [{"ulfriendid": str(f), "efriendrelationship": 3} for f in FRIENDS] +
                 [{"ulfriendid": "76561190000000109", "efriendrelationship": 2}]}}}
+    if path.endswith("GetIndividualRecommendations/v1/"):
+        out = []
+        for r in inp.get("requests", []):
+            a = int(r.get("appid", 0))
+            if a in REVIEWS:
+                v = REVIEWS[a]
+                out.append({"recommendationid": str(5000 + a), "appid": a, "review": v["review"], "voted_up": v["voted_up"],
+                            "timestamp_created": v["created"], "timestamp_updated": v.get("updated", v["created"]),
+                            "votes_up": v["votes_up"], "votes_funny": 0, "comment_count": 0, "language": "spanish"})
+        return {"response": {"recommendations": out}}
     if path.endswith("GetUserFiles/v1/"):
         # Tus capturas: cuatro imágenes públicas de verdad, en los juegos que tiene la cuenta simulada
         app = int(inp.get("appid", 0))

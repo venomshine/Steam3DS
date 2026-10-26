@@ -158,7 +158,7 @@ static struct {
 } S;
 
 enum { BT_NONE, BT_IGNORE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
-	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW };
+	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW, BT_RUP, BT_RDOWN, BT_RTEXT, BT_RVIS, BT_RCANCEL, BT_RSEND };
 
 // Pestañas de la tienda
 #define HOME_PARTS 4
@@ -2158,6 +2158,12 @@ static bool friends_text(char *out, size_t n)
 	return true;
 }
 
+static void fmt_date(u32 t, char *out, size_t n);
+static void draw_review_preview(const AppInfo *a);
+static void review_editor_close(void);
+static int press_update(u32 kd, u32 kh, u32 ku, touchPosition *tp, const int *ids, int n);
+static bool key_repeat(u32 down, u32 held, u32 mask);
+
 static void open_game(u32 appid, bool push)
 {
 	if (push && S.scene == SC_GAME && S.depth < 8) {
@@ -2186,8 +2192,9 @@ static void open_game(u32 appid, bool push)
 	if (S.rreq) net_release(S.rreq);
 	S.rreq = NULL;
 	S.rend = false;
-	S.rsel = 0;
+	S.rsel = auth_logged() && owned_app(appid) ? -1 : 0;   // tu reseña, la primera
 	S.rscroll = 0;
+	review_editor_close();
 	S.lsel = 0;
 	S.lscroll = 0;
 	S.lsel_y = 0;
@@ -2249,6 +2256,44 @@ static void myshots_poll(const AppInfo *a)
 		MS.n = n > 0 ? n : 0;
 		net_release(MS.req);
 		MS.req = NULL;
+	}
+}
+
+// Tu reseña del juego (Opiniones) y el editor para escribirla o cambiarla
+static struct {
+	u32 appid;
+	MyReview r;
+	Req *req;
+	bool loaded;
+} MR;
+#define REV_MAX 6000
+static struct {
+	bool open, up, pub, want_kb;
+	int focus;                   // 0 recomendar, 1 texto, 2 visibilidad, 3 cancelar/publicar
+	bool on_publish;             // en la última fila: publicar (si no, cancelar)
+	char text[REV_MAX];
+} RE;
+
+static bool my_review_shown(const AppInfo *a)
+{
+	return auth_logged() && owned_app(a->appid);
+}
+
+static void myreview_poll(const AppInfo *a)
+{
+	if (MR.appid != a->appid && my_review_shown(a)) {
+		if (MR.req) net_release(MR.req);
+		free(MR.r.text);
+		memset(&MR, 0, sizeof MR);
+		MR.appid = a->appid;
+		MR.req = steam_req_my_review(auth_info()->steamid, a->appid, auth_token());
+	}
+	if (MR.req && MR.req->state >= REQ_DONE) {
+		bool ok = MR.req->state == REQ_DONE && steam_parse_my_review(MR.req->data, MR.appid, &MR.r);
+		netlog("tu reseña de %lu: %s (HTTP %ld)", (unsigned long)MR.appid, !ok ? "falló" : MR.r.has ? (MR.r.up ? "recomendado" : "no recomendado") : "no hay", MR.req->http);
+		MR.loaded = ok;
+		net_release(MR.req);
+		MR.req = NULL;
 	}
 }
 
@@ -2352,6 +2397,7 @@ static void game_poll(const AppInfo *a)
 	}
 	ach_poll(a);
 	myshots_poll(a);
+	myreview_poll(a);
 	if (S.sec == SEC_EXTRAS && S.dlc_for != a->appid) {
 		rowlist_free(&S.dlc);
 		S.dlc_for = a->appid;
@@ -2558,6 +2604,42 @@ static float review_h(int i)
 	return 26 + 12 * n;
 }
 
+// La tarjeta «Tu reseña» va la primera de la lista (rsel == -1)
+static float my_review_h(const AppInfo *a)
+{
+	if (!my_review_shown(a)) return 0;
+	if (!MR.r.has || !MR.r.text) return 40;
+	int n = ui_text_lines(MR.r.text, SZ_TINY, TOP_W - 36);
+	return 26 + 12 * (n < 1 ? 1 : n > 4 ? 4 : n);
+}
+
+static void draw_my_review(const AppInfo *a, float y)
+{
+	float h = my_review_h(a);
+	bool on = S.rsel == -1;
+	ui_rrect(12, y, TOP_W - 24, h, 10, col_alpha(COL_ACC, on ? 0.20f + 0.05f * sinf(g_time * 2.4f) : 0.10f));
+	ui_rrect(12, y, 3, h, 1, col_alpha(COL_ACC, 0.9f));
+	if (!MR.loaded) {
+		ui_text(22, y + 4, _("TU RESEÑA"), SZ_TINY, COL_ACC, AL_LEFT, 0);
+		ui_spinner(TOP_W / 2, y + 26, 5, COL_DIM);
+		return;
+	}
+	if (!MR.r.has) {
+		ui_text(22, y + 4, _("TU RESEÑA"), SZ_TINY, COL_ACC, AL_LEFT, 0);
+		ui_text(22, y + 19, _("Aún no has escrito una reseña de este juego · Pulsa A para escribirla"), SZ_SMALL, COL_TXT, AL_LEFT, TOP_W - 44);
+		return;
+	}
+	ui_icon(MR.r.up ? IC_THUMB_UP : IC_THUMB_DOWN, 20, y + 5, 11, MR.r.up ? COL_ACC : COL_NEG);
+	char t[96];
+	snprintf(t, sizeof t, "%s · %s", _("Tu reseña"), MR.r.up ? _("Recomendado") : _("No recomendado"));
+	ui_text(36, y + 4, t, SZ_SMALL, COL_WHITE, AL_LEFT, 0);
+	char d[40];
+	fmt_date(MR.r.updated ? MR.r.updated : MR.r.created, d, sizeof d);
+	snprintf(t, sizeof t, MR.r.votes_up == 1 ? _("%s · %d persona la ha valorado útil") : _("%s · %d personas la han valorado útil"), d, MR.r.votes_up);
+	ui_text(TOP_W - 18, y + 5, MR.r.updated || MR.r.created ? t : "", SZ_TINY, COL_DIM, AL_RIGHT, 0);
+	ui_text_wrap(18, y + 20, TOP_W - 36, MR.r.text, SZ_TINY, COL_TXT, 4, 12);
+}
+
 static void draw_reviews_top(const AppInfo *a)
 {
 	if (a->review_label[0]) {
@@ -2569,18 +2651,25 @@ static void draw_reviews_top(const AppInfo *a)
 		ui_rrect(12, 42, TOP_W - 24, 4, 2, col_alpha(COL_NEG, 0.8f));
 		ui_rrect(12, 42, bw, 4, 2, COL_ACC);
 	}
-	float top = 52, bottom = SCR_H - 20;
+	float top = 52, bottom = SCR_H - 20, clip = top;
+	float mine_h = my_review_h(a);
+	if (mine_h > 0) {
+		ui_scissor(GFX_TOP, 0, clip, TOP_W, bottom - clip);
+		if (top - S.rscroll + mine_h > clip) draw_my_review(a, top - S.rscroll);
+		ui_scissor_off();
+		top += mine_h + 5;   // las demás, debajo (se desplaza todo junto)
+	}
 	if (S.nreviews == 0) {
 		if (S.rend) ui_text(TOP_W / 2, 120, _("Todavía no hay reseñas en tu idioma"), SZ_BODY, COL_DIM, AL_CENTER, 0);
 		else draw_net_wait(TOP_W / 2, 125, NULL);
 		return;
 	}
-	ui_scissor(GFX_TOP, 0, top, TOP_W, bottom - top);
+	ui_scissor(GFX_TOP, 0, clip, TOP_W, bottom - clip);
 	float y = top - S.rscroll;
 	for (int i = 0; i < S.nreviews; i++) {
 		const Review *r = &S.reviews[i];
 		float h = review_h(i);
-		if (y + h > top && y < bottom) {
+		if (y + h > clip && y < bottom) {
 			bool on = i == S.rsel;
 			ui_rrect(12, y, TOP_W - 24, h, 10, col_alpha(COL_WHITE, on ? 0.10f + 0.035f * sinf(g_time * 2.4f) : 0.045f));
 			ui_icon(r->voted_up ? IC_THUMB_UP : IC_THUMB_DOWN, 18, y + 5, 11, r->voted_up ? COL_ACC : COL_NEG);
@@ -2772,6 +2861,11 @@ static void draw_game_top(void)
 	C2D_ViewSave(&view);
 	float se = ease_out_cubic(S.sec_anim);
 	C2D_ViewTranslate(S.sec_dir * (1 - se) * 22, 0);
+	if (RE.open) {
+		draw_review_preview(a);
+		C2D_ViewRestore(&view);
+		return;
+	}
 	switch (S.sec) {
 	case SEC_SUMMARY: draw_summary_top(a); break;
 	case SEC_REQS: draw_reqs_top(a); break;
@@ -2903,6 +2997,130 @@ static void draw_pick(const AppInfo *a)
 	}
 }
 
+
+// ---------------------------------------------------------------------------- Editor de tu reseña
+
+static const Box B_RUP = {12, 64, 145, 30};
+static const Box B_RDOWN = {163, 64, 145, 30};
+static const Box B_RTEXT = {12, 102, 296, 44};
+static const Box B_RVIS = {12, 152, 296, 26};
+static const Box B_RCANCEL = {12, 186, 145, 30};
+static const Box B_RSEND = {163, 186, 145, 30};
+
+static void review_editor_close(void)
+{
+	RE.open = false;
+}
+
+static void review_editor_open(const AppInfo *a)
+{
+	(void)a;
+	RE.open = true;
+	RE.up = MR.r.has ? MR.r.up : true;
+	RE.pub = true;
+	snprintf(RE.text, sizeof RE.text, "%s", MR.r.has && MR.r.text ? MR.r.text : "");
+	RE.focus = MR.r.has ? 1 : 0;
+	RE.on_publish = true;
+}
+
+static void open_review_keyboard(void)
+{
+	SwkbdState kb;
+	swkbdInit(&kb, SWKBD_TYPE_NORMAL, 2, 2000);
+	swkbdSetHintText(&kb, _("Escribe tu reseña"));
+	swkbdSetInitialText(&kb, RE.text);
+	swkbdSetButton(&kb, SWKBD_BUTTON_LEFT, _("Cancelar"), false);
+	swkbdSetButton(&kb, SWKBD_BUTTON_RIGHT, _("Aceptar"), true);
+	swkbdSetFeatures(&kb, SWKBD_DARKEN_TOP_SCREEN | SWKBD_ALLOW_HOME | SWKBD_ALLOW_RESET | SWKBD_ALLOW_POWER | SWKBD_MULTILINE);
+	static char buf[REV_MAX];
+	if (swkbdInputText(&kb, buf, sizeof buf) != SWKBD_BUTTON_RIGHT) return;
+	snprintf(RE.text, sizeof RE.text, "%s", buf);
+	RE.focus = 2;
+}
+
+static bool review_text_empty(void)
+{
+	for (const char *p = RE.text; *p; p++)
+		if (*p != ' ' && *p != '\n') return false;
+	return true;
+}
+
+// Lo que se va a publicar, en grande arriba
+static void draw_review_preview(const AppInfo *a)
+{
+	ui_text(12, 24, _("VISTA PREVIA DE TU RESEÑA"), SZ_SMALL, COL_ACC, AL_LEFT, 0);
+	ui_text(TOP_W - 12, 25, a->name, SZ_SMALL, COL_DIM, AL_RIGHT, 220);
+	fx_glass(10, 44, TOP_W - 20, SCR_H - 52, 12, 1, 0);
+	ui_icon(RE.up ? IC_THUMB_UP : IC_THUMB_DOWN, 20, 53, 14, RE.up ? COL_ACC : COL_NEG);
+	ui_text(40, 52, RE.up ? _("Recomendado") : _("No recomendado"), SZ_BODY, COL_WHITE, AL_LEFT, 0);
+	ui_text(TOP_W - 22, 54, RE.pub ? _("Pública") : _("Solo amigos"), SZ_TINY, COL_DIM, AL_RIGHT, 0);
+	if (review_text_empty()) ui_text(20, 78, _("Todavía no has escrito nada"), SZ_SMALL, COL_DIM, AL_LEFT, 0);
+	else ui_text_wrap(20, 78, TOP_W - 40, RE.text, SZ_SMALL, COL_TXT, 10, 14);
+}
+
+static void draw_review_editor(const AppInfo *a)
+{
+	ui_rect(0, 0, BOT_W, SCR_H, col_alpha(COL_BG, 0.97f));
+	ui_text(BOT_W / 2, 8, MR.r.has ? _("Editar tu reseña") : _("Escribir una reseña"), SZ_LARGE, COL_WHITE, AL_CENTER, 300);
+	ui_text(BOT_W / 2, 30, a->name, SZ_TINY, COL_DIM, AL_CENTER, 300);
+	ui_text(BOT_W / 2, 47, _("¿Recomiendas este juego?"), SZ_SMALL, COL_TXT, AL_CENTER, 300);
+	u32 g1 = C2D_Color32(0x3a, 0x6f, 0x96, 0xff), g2 = C2D_Color32(0x2a, 0x55, 0x78, 0xff);
+	u32 r1 = C2D_Color32(0x8a, 0x34, 0x2c, 0xff), r2 = C2D_Color32(0x6a, 0x26, 0x22, 0xff);
+	if (RE.up) draw_button_k(&B_RUP, NULL, RE.focus == 0, IC_THUMB_UP, _("Sí"), g1, g2, COL_WHITE, 1, S.pressed == BT_RUP);
+	else draw_button_k(&B_RUP, NULL, RE.focus == 0, IC_THUMB_UP, _("Sí"), COL_BTN2, COL_BTN2, COL_DIM, 1, S.pressed == BT_RUP);
+	if (!RE.up) draw_button_k(&B_RDOWN, NULL, RE.focus == 0, IC_THUMB_DOWN, _("No"), r1, r2, COL_WHITE, 1, S.pressed == BT_RDOWN);
+	else draw_button_k(&B_RDOWN, NULL, RE.focus == 0, IC_THUMB_DOWN, _("No"), COL_BTN2, COL_BTN2, COL_DIM, 1, S.pressed == BT_RDOWN);
+	// El texto: un recuadro que abre el teclado
+	FxButton fb = {0, 1, S.pressed == BT_RTEXT, RE.focus == 1};
+	fx_button(B_RTEXT.x, B_RTEXT.y, B_RTEXT.w, B_RTEXT.h, 10, &fb);
+	ui_icon(IC_DOC, B_RTEXT.x + 10, B_RTEXT.y + 6, 12, COL_ACC);
+	if (review_text_empty()) ui_text(B_RTEXT.x + 28, B_RTEXT.y + 5, _("Escribe tu reseña…"), SZ_SMALL, COL_DIM, AL_LEFT, B_RTEXT.w - 40);
+	else ui_text_wrap(B_RTEXT.x + 28, B_RTEXT.y + 5, B_RTEXT.w - 40, RE.text, SZ_TINY, COL_TXT, 3, 12);
+	char vis[64];
+	snprintf(vis, sizeof vis, _("Visibilidad: %s"), RE.pub ? _("Pública") : _("Solo amigos"));
+	draw_button_k(&B_RVIS, NULL, RE.focus == 2, RE.pub ? IC_USERS : IC_LOCK, vis, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_RVIS);
+	draw_button_k(&B_RCANCEL, NULL, RE.focus == 3 && !RE.on_publish, IC_POWER, _("Cancelar"), COL_BTN2, COL_BTN2, COL_DIM, 1, S.pressed == BT_RCANCEL);
+	bool busy = shop_busy_with(SH_REVIEW, a->appid);
+	draw_button_k(&B_RSEND, NULL, RE.focus == 3 && RE.on_publish, IC_CHECK, busy ? _("Publicando…") : MR.r.has ? _("Guardar cambios") : _("Publicar"),
+		C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), COL_WHITE, review_text_empty() ? 0.45f : 1, S.pressed == BT_RSEND);
+	static const char *h[] = {"↑↓", "Elegir", "A", "Aceptar", "B", "Cancelar"};
+	draw_hints(h, 3);
+}
+
+static void input_review_editor(const AppInfo *a, u32 kd, u32 kh, u32 ku, touchPosition *tp)
+{
+	if (kd & KEY_B) {
+		RE.open = false;
+		return;
+	}
+	static const int ids[] = {BT_RUP, BT_RDOWN, BT_RTEXT, BT_RVIS, BT_RCANCEL, BT_RSEND};
+	int b = press_update(kd, kh, ku, tp, ids, 6);
+	if (key_repeat(kd, kh, KEY_DOWN) && RE.focus < 3) RE.focus++;
+	if (key_repeat(kd, kh, KEY_UP) && RE.focus > 0) RE.focus--;
+	if (kd & (KEY_LEFT | KEY_RIGHT)) {
+		if (RE.focus == 0) RE.up = !(kd & KEY_RIGHT);
+		if (RE.focus == 3) RE.on_publish = (kd & KEY_RIGHT) != 0;
+	}
+	if (kd & KEY_A) {
+		static const int by_focus[] = {0, BT_RTEXT, BT_RVIS, 0};
+		b = RE.focus == 3 ? (RE.on_publish ? BT_RSEND : BT_RCANCEL) : by_focus[RE.focus];
+		if (RE.focus == 0) RE.focus = 1;   // elegido: al texto
+	}
+	if (b == BT_RUP) RE.up = true, RE.focus = 0;
+	if (b == BT_RDOWN) RE.up = false, RE.focus = 0;
+	if (b == BT_RTEXT) RE.want_kb = true;
+	if (b == BT_RVIS) RE.pub = !RE.pub;
+	if (b == BT_RCANCEL) RE.open = false;
+	if (b == BT_RSEND) {
+		if (review_text_empty()) toast(_("Escribe algo en tu reseña antes de publicarla"));
+		else if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
+		else {
+			shop_review(a->appid, a->name, RE.up, RE.text, RE.pub);
+			RE.open = false;
+		}
+	}
+}
+
 static void draw_game_bottom(void)
 {
 	InfoEnt *e = info_get(S.app, false);
@@ -3017,6 +3235,10 @@ static void draw_game_bottom(void)
 	} else if (S.sec == SEC_ACH) {
 		static const char *h[] = {"↑↓", "Elegir", "L R", "Apartado", "B", "Volver", "START", "Menú"};
 		draw_hints(h, 4);
+	} else if (S.sec == SEC_REVIEWS && S.rsel == -1 && MR.loaded) {
+		static const char *hw[] = {"A", "Escribir reseña", "↑↓", "Leer", "L R", "Apartado", "B", "Volver"};
+		static const char *he[] = {"A", "Editar reseña", "↑↓", "Leer", "L R", "Apartado", "B", "Volver"};
+		draw_hints(MR.r.has ? he : hw, 4);
 	} else if (S.sec == SEC_REVIEWS) {
 		static const char *h[] = {"↑↓", "Leer", "L R", "Apartado", "B", "Volver", "START", "Menú"};
 		draw_hints(h, 4);
@@ -3028,6 +3250,7 @@ static void draw_game_bottom(void)
 		draw_hints(h, 3);
 	}
 	if (a) draw_pick(a);
+	if (a && RE.open) draw_review_editor(a);
 }
 
 // ============================================================================
@@ -6390,6 +6613,12 @@ static const Box *button_box(int id)
 	case BT_UGAME: return &B_UGAME;
 	case BT_UQR: return &B_UQR;
 	case BT_PVIEW: return &B_PVIEW;
+	case BT_RUP: return &B_RUP;
+	case BT_RDOWN: return &B_RDOWN;
+	case BT_RTEXT: return &B_RTEXT;
+	case BT_RVIS: return &B_RVIS;
+	case BT_RCANCEL: return &B_RCANCEL;
+	case BT_RSEND: return &B_RSEND;
 	}
 	return NULL;
 }
@@ -6488,6 +6717,10 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		input_pick(a, kd, kh, tp);
 		return;
 	}
+	if (RE.open && a) {
+		input_review_editor(a, kd, kh, ku, tp);
+		return;
+	}
 	if (S.show_qr) {
 		// El QR para comprar en el móvil tapa la ficha: solo se cierra
 		if (kd & (KEY_B | KEY_Y)) S.show_qr = false;
@@ -6544,8 +6777,14 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		if (key_repeat(kd, kh, KEY_UP) && S.lsel > 0) S.lsel--;
 	}
 	if (S.sec == SEC_REVIEWS) {
+		bool mine = a && my_review_shown(a);
 		if (key_repeat(kd, kh, KEY_DOWN) && S.rsel + 1 < S.nreviews) S.rsel++;
-		if (key_repeat(kd, kh, KEY_UP) && S.rsel > 0) S.rsel--;
+		if (key_repeat(kd, kh, KEY_UP) && S.rsel > (mine ? -1 : 0)) S.rsel--;
+		if (!mine && S.rsel < 0) S.rsel = 0;
+		if (mine && S.rsel == -1 && (kd & KEY_A) && MR.loaded) {
+			review_editor_open(a);
+			return;
+		}
 		if (S.rsel >= S.nreviews - 3) reviews_more();
 	}
 
@@ -6721,6 +6960,16 @@ static void shop_events(void)
 				snprintf(t, sizeof t, "%s", activate_err(ev.code));
 			}
 			break;
+		case SH_REVIEW:
+			if (ev.ok) {
+				MR.appid = 0;   // se vuelve a pedir para enseñarla tal cual quedó
+				snprintf(t, sizeof t, "%s", _("Tu reseña se ha publicado"));
+			} else if (ev.what[0]) {
+				snprintf(t, sizeof t, _("No se pudo publicar tu reseña: %s"), ev.what);
+			} else {
+				snprintf(t, sizeof t, _("No se pudo publicar tu reseña: %s"), shop_err(ev.code));
+			}
+			break;
 		case SH_IGNORE:
 		case SH_UNIGNORE:
 			if (ev.ok && ev.kind == SH_IGNORE) snprintf(t, sizeof t, _("Has ignorado %s: no saldrá en tus recomendaciones"), ev.what);
@@ -6730,7 +6979,7 @@ static void shop_events(void)
 		}
 		static const Icon ic[] = {[SH_CART_ADD] = IC_CART, [SH_CART_REMOVE] = IC_CART, [SH_WISH_ADD] = IC_HEART,
 			[SH_WISH_REMOVE] = IC_HEART, [SH_FREE] = IC_PAD, [SH_IGNORE] = IC_HIDE, [SH_UNIGNORE] = IC_HIDE,
-			[SH_ACTIVATE] = IC_CODE, [SH_WALLET] = IC_COIN};
+			[SH_ACTIVATE] = IC_CODE, [SH_WALLET] = IC_COIN, [SH_REVIEW] = IC_CHAT};
 		toast_icon(t, ic[ev.kind]);
 	}
 }
@@ -6926,6 +7175,11 @@ int main(int argc, char **argv)
 			open_keyboard();
 			kd = kh = ku = 0;
 		}
+		if (RE.want_kb) {
+			RE.want_kb = false;
+			open_review_keyboard();
+			kd = kh = ku = 0;
+		}
 		if (S.want_key) {
 			S.want_key = false;
 			open_key_keyboard();
@@ -7031,8 +7285,10 @@ int main(int argc, char **argv)
 				S.lscroll = approach(S.lscroll, t, 18);
 			}
 			float rvis = SCR_H - 20 - 52, ry = 0, rt = S.rscroll;
+			float mine = ge && ge->done ? my_review_h(&ge->info) : 0;
+			if (mine > 0 && S.rsel >= 0) ry += mine + 5;
 			for (int i = 0; i < S.rsel && i < S.nreviews; i++) ry += review_h(i) + 5;
-			float card = S.rsel < S.nreviews ? review_h(S.rsel) + 5 : 0;
+			float card = S.rsel < 0 ? mine + 5 : S.rsel < S.nreviews ? review_h(S.rsel) + 5 : 0;
 			if (ry < rt) rt = ry;
 			if (ry + card > rt + rvis) rt = ry + card - rvis;
 			S.rscroll = approach(S.rscroll, rt, 18);

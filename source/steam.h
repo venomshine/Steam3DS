@@ -332,3 +332,14 @@ typedef struct {
 } MyShot;
 Req *steam_req_my_shots(u64 steamid, u32 appid, const char *token);
 int steam_parse_my_shots(const char *json, u32 appid, MyShot *out, int max, int *total);   // -1 si falla
+
+// Tu reseña de un juego (has = false si no has escrito ninguna)
+typedef struct {
+	bool has;
+	bool up;                // la recomiendas
+	char *text;             // malloc
+	u32 created, updated;
+	int votes_up, votes_funny, comments;
+} MyReview;
+Req *steam_req_my_review(u64 steamid, u32 appid, const char *token);
+bool steam_parse_my_review(const char *json, u32 appid, MyReview *out);   // false si falla

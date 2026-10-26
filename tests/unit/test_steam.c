@@ -259,6 +259,11 @@ int main(void) {
 		"{\"consumer_appid\":730,\"file_url\":\"https://images.steamusercontent.com/ugc/2/B/\"},"
 		"{\"consumer_appid\":367520,\"preview_url\":\"https://images.steamusercontent.com/ugc/3/C/\"}]}}", 367520, ms, 4, &mtot) == 2);
 	CHECK(!strcmp(ms[0].caption, "Jefe final") && ms[0].when == 1700000000 && strstr(ms[1].url, "/ugc/3/C/?imw=400") && mtot == 3);
+	// Tu reseña
+	MyReview mr = {0};
+	CHECK(steam_parse_my_review("{\"response\":{\"recommendations\":[{\"recommendationid\":\"123\",\"appid\":367520,\"review\":\"Muy bueno\",\"voted_up\":true,\"timestamp_created\":1700000000,\"votes_up\":4}]}}", 367520, &mr));
+	CHECK(mr.has && mr.up && !strcmp(mr.text, "Muy bueno") && mr.votes_up == 4);
+	CHECK(steam_parse_my_review("{\"response\":{}}", 367520, &mr) && !mr.has);
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

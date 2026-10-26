@@ -2082,3 +2082,48 @@ int steam_parse_my_shots(const char *json, u32 appid, MyShot *out, int max, int 
 	cJSON_Delete(root);
 	return n;
 }
+
+// ----------------------------------------------------------------------------
+// Tu reseña (el servicio con el que el cliente de Steam enseña la tuya)
+
+Req *steam_req_my_review(u64 steamid, u32 appid, const char *token)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON *reqs = cJSON_AddArrayToObject(in, "requests");
+	cJSON *r = cJSON_CreateObject();
+	char sid[24];
+	snprintf(sid, sizeof sid, "%llu", (unsigned long long)steamid);
+	cJSON_AddStringToObject(r, "steamid", sid);
+	cJSON_AddNumberToObject(r, "appid", appid);
+	cJSON_AddItemToArray(reqs, r);
+	return steam_get_service("IUserReviewsService/GetIndividualRecommendations", in, token);
+}
+
+bool steam_parse_my_review(const char *json, u32 appid, MyReview *out)
+{
+	free(out->text);
+	memset(out, 0, sizeof *out);
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return false;
+	}
+	const cJSON *it;
+	cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(resp, "recommendations")) {
+		u32 app = (u32)jnum(it, "appid", 0);
+		if ((app && app != appid) || !jid(it, "recommendationid")) continue;
+		out->has = true;
+		out->up = jbool(it, "voted_up");
+		const char *t = jstr(it, "review");
+		out->text = strdup(t ? t : "");
+		out->created = (u32)jnum(it, "timestamp_created", 0);
+		out->updated = (u32)jnum(it, "timestamp_updated", 0);
+		out->votes_up = (int)jnum(it, "votes_up", 0);
+		out->votes_funny = (int)jnum(it, "votes_funny", 0);
+		out->comments = (int)jnum(it, "comment_count", 0);
+		break;
+	}
+	cJSON_Delete(root);
+	return true;
+}

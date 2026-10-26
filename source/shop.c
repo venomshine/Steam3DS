@@ -265,6 +265,29 @@ void shop_activate(const char *code)
 	if (!activate_send(false)) push_event(false, -1);
 }
 
+// ---------------------------------------------------------------------------- Tu reseña
+
+void shop_review(u32 appid, const char *name, bool up, const char *text, bool is_public)
+{
+	char ck[1200];
+	if (!auth_web_cookies("store.steampowered.com", ck, sizeof ck)) return;
+	if (!start_action(SH_REVIEW, appid, name)) return;
+	char *esc = url_escape(text);
+	size_t n = strlen(esc) + 400;
+	char *body = malloc(n);
+	if (body) {
+		snprintf(body, n, "appid=%lu&steamworksappid=%lu&comment=%s&rated_up=%s&is_public=%s&language=%s"
+			"&received_compensation=0&disable_comments=0&sessionid=%s",
+			(unsigned long)appid, (unsigned long)appid, esc, up ? "true" : "false", is_public ? "true" : "false",
+			steam_lang(), auth_sessionid());
+		H.act = net_request("https://store.steampowered.com/friends/recommendgame", body, ck);
+	}
+	free(body);
+	free(esc);
+	memset(ck, 0, sizeof ck);
+	if (!H.act) push_event(false, -1);
+}
+
 // ---------------------------------------------------------------------------- Cada frame
 
 // ¿Salió bien? Steam dice el resultado en la cabecera x-eresult (1 = OK)
@@ -338,6 +361,17 @@ void shop_update(void)
 				push_event(false, code);
 				return;
 			}
+		} else if (H.kind == SH_REVIEW) {
+			// {"success":true} o {"success":false,"strError":"…"}
+			cJSON *root = r->state == REQ_DONE ? cJSON_Parse(r->data) : NULL;
+			const cJSON *sc = cJSON_GetObjectItemCaseSensitive(root, "success");
+			ok = cJSON_IsTrue(sc) || (cJSON_IsNumber(sc) && sc->valueint == 1);
+			const cJSON *er = cJSON_GetObjectItemCaseSensitive(root, "strError");
+			if (!ok && cJSON_IsString(er)) snprintf(H.what, sizeof H.what, "%s", er->valuestring);
+			else if (!ok) H.what[0] = 0;
+			netlog("cuenta: reseña -> %s (HTTP %ld)", ok ? "publicada" : "rechazada", r->http);
+			code = ok ? 0 : req_code(r);
+			cJSON_Delete(root);
 		} else if (H.kind == SH_IGNORE || H.kind == SH_UNIGNORE) {
 			// La tienda web contesta con un 200 (sin x-eresult)
 			ok = r->state == REQ_DONE && r->http == 200;

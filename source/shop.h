@@ -6,7 +6,7 @@
 // Acciones con tu cuenta: carrito, deseados y juegos gratis. Una a la vez; la interfaz
 // pregunta cada frame y enseña el resultado con shop_event().
 
-typedef enum { SH_CART_ADD, SH_CART_REMOVE, SH_WISH_ADD, SH_WISH_REMOVE, SH_FREE, SH_IGNORE, SH_UNIGNORE, SH_ACTIVATE, SH_WALLET } ShopKind;
+typedef enum { SH_CART_ADD, SH_CART_REMOVE, SH_WISH_ADD, SH_WISH_REMOVE, SH_FREE, SH_IGNORE, SH_UNIGNORE, SH_ACTIVATE, SH_WALLET, SH_REVIEW } ShopKind;
 
 typedef struct {
 	ShopKind kind;
@@ -51,3 +51,7 @@ void shop_set_ignored(const u32 *ids, int n);
 // (what: el saldo nuevo); si falla, code es 2000 + el detalle de Steam (14 no válido, 15 ya usado…)
 void shop_activate(const char *code);
 bool shop_busy_with(ShopKind k, u32 appid);
+
+// Publicar o cambiar tu reseña (el formulario de la tienda web: friends/recommendgame). Si falla,
+// what lleva el motivo que da Steam
+void shop_review(u32 appid, const char *name, bool up, const char *text, bool is_public);

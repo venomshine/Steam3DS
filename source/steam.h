@@ -18,6 +18,7 @@ typedef struct {
 	int review_pct;
 	int type;               // 0 juego, 1 demo, 4 DLC… (como lo da Steam)
 	bool header;            // fila de título de apartado (Inicio), no es un juego
+	u32 tagid;              // Buscar: fila de búsqueda popular (una etiqueta), no es un juego
 	bool coming_soon;
 	bool early;             // sigue en acceso anticipado (dato de Steam, no la etiqueta de los usuarios)
 	int minutes;            // biblioteca: minutos jugados
@@ -118,10 +119,15 @@ typedef enum {
 	Q_F2P,      // gratis para jugar
 	Q_DEMOS,    // demos más populares
 	Q_EARLY,    // acceso anticipado
-	Q_BROWSE,       // todo el catálogo por relevancia (Buscar sin escribir nada)
-	Q_BROWSE_FREE,  // lo mismo, solo lo gratuito
 } StoreQuery;
 Req *steam_req_query(StoreQuery q, int start, int count);
+// Buscar sin escribir nada: todo el catálogo por relevancia (o solo lo gratuito, o solo lo que tiene
+// la etiqueta tagid si no es 0)
+Req *steam_req_browse(int start, int count, bool free_only, u32 tagid);
+// Las etiquetas más usadas de la tienda (las «búsquedas populares» de Buscar), en tu idioma
+Req *steam_req_popular_tags(void);
+typedef struct { u32 id; char name[40]; } StoreTag;
+int steam_parse_tags(const char *json, StoreTag *out, int max);
 Req *steam_req_offers(int start, int count);
 Req *steam_req_search(const char *term);
 bool steam_parse_rows(const char *json, RowList *list, bool append);

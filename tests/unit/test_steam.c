@@ -102,8 +102,14 @@ int main(void) {
 	CHECK(steam_parse_rows("{\"response\":{\"store_items\":[{\"appid\":4115450,\"name\":\"Phantom Blade Zero\"}]}}", &pc, false));
 	CHECK(pc.count == 1 && pc.rows[0].cents == -1);
 	rowlist_free(&pc);
-	steam_req_query(Q_BROWSE_FREE, 0, 30);
-	CHECK(strstr(last_url, "only_free_items") != NULL);
+	steam_req_browse(0, 30, true, 0);
+	CHECK(strstr(last_url, "only_free_items") != NULL && strstr(last_url, "tagids_must_match") == NULL);
+	steam_req_browse(30, 30, false, 1716);
+	CHECK(strstr(last_url, "only_free_items") == NULL && strstr(last_url, "1716") != NULL);
+	// Las etiquetas populares
+	StoreTag tg[4];
+	CHECK(steam_parse_tags("{\"response\":{\"tags\":[{\"tagid\":492,\"name\":\"Indie\"},{\"tagid\":19,\"name\":\"Acción\"}]}}", tg, 4) == 2);
+	CHECK(tg[1].id == 19 && !strcmp(tg[1].name, "Acción"));
 	// Lo que no está en la tienda llega sin nombre y con appid 0 (respuesta real de GetItems para 228980)
 	RowList inv = {0};
 	CHECK(steam_parse_rows("{\"response\":{\"store_items\":[{\"item_type\":0,\"id\":228980,\"success\":15,\"visible\":false,\"name\":\"\",\"appid\":0},{\"appid\":730,\"name\":\"Counter-Strike 2\"}]}}", &inv, false));

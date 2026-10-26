@@ -243,7 +243,6 @@ Req *steam_req_query(StoreQuery kind, int start, int count)
 {
 	static const int sorts[] = {
 		[Q_OFFERS] = 10, [Q_TOP] = 12, [Q_NEW] = 12, [Q_SOON] = 10, [Q_F2P] = 12, [Q_DEMOS] = 13, [Q_EARLY] = 12,
-		[Q_BROWSE] = 10, [Q_BROWSE_FREE] = 10,
 	};
 	cJSON *in = cJSON_CreateObject();
 	cJSON *q = cJSON_AddObjectToObject(in, "query");
@@ -258,7 +257,7 @@ Req *steam_req_query(StoreQuery kind, int start, int count)
 	if (kind == Q_OFFERS) {
 		cJSON *pf = cJSON_AddObjectToObject(f, "price_filters");
 		cJSON_AddNumberToObject(pf, "min_discount_percent", 1);
-	} else if (kind == Q_F2P || kind == Q_BROWSE_FREE) {
+	} else if (kind == Q_F2P) {
 		cJSON *pf = cJSON_AddObjectToObject(f, "price_filters");
 		cJSON_AddBoolToObject(pf, "only_free_items", true);
 	} else if (kind == Q_NEW) {
@@ -281,6 +280,63 @@ Req *steam_req_query(StoreQuery kind, int start, int count)
 	cJSON_AddBoolToObject(dr, "include_reviews", true);
 	cJSON_AddBoolToObject(dr, "include_release", true);
 	return service_rows("IStoreQueryService/Query", in);
+}
+
+Req *steam_req_browse(int start, int count, bool free_only, u32 tagid)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON *q = cJSON_AddObjectToObject(in, "query");
+	cJSON_AddNumberToObject(q, "start", start);
+	cJSON_AddNumberToObject(q, "count", count);
+	cJSON_AddNumberToObject(q, "sort", 10);   // relevancia, como la web
+	cJSON *f = cJSON_AddObjectToObject(q, "filters");
+	cJSON_AddBoolToObject(f, "released_only", true);
+	cJSON *tf = cJSON_AddObjectToObject(f, "type_filters");
+	cJSON_AddBoolToObject(tf, "include_games", true);
+	if (free_only) {
+		cJSON *pf = cJSON_AddObjectToObject(f, "price_filters");
+		cJSON_AddBoolToObject(pf, "only_free_items", true);
+	}
+	if (tagid) {
+		cJSON *tags = cJSON_AddArrayToObject(f, "tagids_must_match");
+		cJSON *tm = cJSON_CreateObject();
+		cJSON *ids = cJSON_AddArrayToObject(tm, "tagids");
+		cJSON_AddItemToArray(ids, cJSON_CreateNumber(tagid));
+		cJSON_AddItemToArray(tags, tm);
+	}
+	cJSON_AddItemToObject(in, "context", context());
+	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
+	cJSON_AddBoolToObject(dr, "include_reviews", true);
+	cJSON_AddBoolToObject(dr, "include_release", true);
+	return service_rows("IStoreQueryService/Query", in);
+}
+
+Req *steam_req_popular_tags(void)
+{
+	char url[160];
+	snprintf(url, sizeof url, "https://api.steampowered.com/IStoreService/GetMostPopularTags/v1/?language=%s", g_lang);
+	return net_get(url, LANE_API);
+}
+
+int steam_parse_tags(const char *json, StoreTag *out, int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	const cJSON *tags = resp ? cJSON_GetObjectItemCaseSensitive(resp, "tags") : NULL;
+	const cJSON *t;
+	int n = 0;
+	cJSON_ArrayForEach(t, tags) {
+		if (n >= max) break;
+		const char *name = jstr(t, "name");
+		u32 id = (u32)jnum(t, "tagid", 0);
+		if (!name || !*name || !id) continue;
+		out[n].id = id;
+		copy_utf8(out[n].name, sizeof out[n].name, name);
+		n++;
+	}
+	bool ok = root != NULL;
+	cJSON_Delete(root);
+	return ok ? n : -1;
 }
 
 Req *steam_req_search(const char *term)

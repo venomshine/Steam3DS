@@ -629,6 +629,12 @@ void ui_icon(Icon ic, float x, float y, float s, u32 c)
 		seg(X(1.6), Y(6.4), X(4.6), Y(9.4), 1.8f * u, c);
 		seg(X(4.6), Y(9.4), X(10.6), Y(2.8), 1.8f * u, c);
 		break;
+	case IC_TAG:
+		// Etiqueta de precio: punta a la izquierda con su agujero
+		ui_rrect(X(4.2), Y(2.6), 7.2f * u, 6.8f * u, 1.2f * u, c);
+		C2D_DrawTriangle(X(0.8), Y(6), c, X(4.6), Y(2.6), c, X(4.6), Y(9.4), c, 0.5f);
+		ui_circle(X(4.4), Y(6), 1.1f * u, C2D_Color32(0, 0, 0, 0xa0));
+		break;
 	case IC_LOCK:
 		ring(X(6), Y(4.6), 2.8f * u, 1.3f * u, c);
 		ui_rrect(X(2), Y(5.4), 8 * u, 6.2f * u, 1 * u, c);

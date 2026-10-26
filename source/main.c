@@ -2915,7 +2915,7 @@ static void draw_ach_top(const AppInfo *a)
 	if (S.cmp_loaded && S.cmp_done && S.cmp_i >= 0) {
 		char ft[80];
 		const char *fn = S.cmp_i < FR.nnames ? FR.name[S.cmp_i] : _("tu amigo");
-		snprintf(ft, sizeof ft, S.cmp_done[sel] ? _("%s lo tiene") : _("%s no lo tiene"), fn);
+		snprintf(ft, sizeof ft, S.cmp_done[sel] ? _("%s lo ha desbloqueado") : _("%s no lo ha desbloqueado"), fn);
 		ui_text(TOP_W - 18, cy + 33, ft, SZ_TINY, S.cmp_done[sel] ? C2D_Color32(0x67, 0xc1, 0xf5, 0xff) : COL_DIM, AL_RIGHT, 140);
 	}
 

@@ -25,6 +25,20 @@ typedef struct {
 	u64 changed;            // osGetTime() del último cambio (para animar)
 } AuthInfo;
 
+// Varias cuentas (hasta 3) guardadas en la consola: con dos o más, al arrancar se elige cuál usar
+#define AUTH_MAX_ACCOUNTS 3
+typedef struct {
+	u64 steamid;
+	char account[64];
+	char persona[64];
+	char avatar[128];
+} AuthAccount;
+int auth_accounts(AuthAccount *out);   // las guardadas (out puede ser NULL)
+bool auth_choosing(void);              // hay que elegir cuenta (al arrancar con varias o al cambiar)
+void auth_use(int i);                  // entra con la cuenta guardada i
+void auth_switch_out(void);            // sale de la cuenta sin cerrarla en Steam (para cambiar de cuenta)
+void auth_forget_account(int i);       // la quita de la consola
+
 void auth_init(void);
 void auth_exit(void);
 void auth_update(void);           // una vez por frame

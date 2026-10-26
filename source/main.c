@@ -23,7 +23,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
@@ -151,7 +151,7 @@ static struct {
 } S;
 
 enum { BT_NONE, BT_IGNORE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
-	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO };
+	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO };
 
 // Pestañas de la tienda
 #define HOME_PARTS 4
@@ -2993,7 +2993,8 @@ static const Box B_PLIB = {12, 78, 296, 30};
 static const Box B_PWISH = {12, 112, 296, 30};
 static const Box B_PFRIENDS = {12, 146, 145, 30};
 static const Box B_PACT = {163, 146, 145, 30};
-static const Box B_PLOGOUT = {12, 180, 296, 30};
+static const Box B_PSWITCH = {12, 180, 145, 30};
+static const Box B_PLOGOUT = {163, 180, 145, 30};
 
 static void draw_profile_top(void)
 {
@@ -3073,7 +3074,8 @@ static void draw_profile_bottom(void)
 	draw_button_k(&B_PFRIENDS, NULL, S.pfocus == 2, IC_USERS, _("Amigos"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PFRIENDS);
 	draw_button_k(&B_PACT, NULL, S.pfocus == 3, IC_CODE, act_busy ? _("Activando…") : _("Activar un producto"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PACT);
 	u32 red = C2D_Color32(0x6a, 0x26, 0x22, 0xff);
-	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 4, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
+	draw_button_k(&B_PSWITCH, NULL, S.pfocus == 4, IC_USERS, _("Cambiar de cuenta"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PSWITCH);
+	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 5, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
 	static const char *hh[] = {"↑↓", "Elegir", "A", "Abrir", "B", "Volver", "START", "Menú"};
 	draw_hints(hh, 4);
 }
@@ -3091,7 +3093,19 @@ static void do_logout(void)
 	toast_icon(_("Sesión cerrada"), IC_LOCK);
 }
 
+// Al cambiar de cuenta se olvida todo lo de la anterior (sin cerrar su sesión en Steam)
+static void do_switch_cleanup(void)
+{
+	if (auth_logged() || auth_info()->state == AUTH_STARTING) auth_switch_out();
+	account_lists_clear();
+	friends_reset();
+	shop_reset();
+	S.cart_seen = 0;
+	S.pick_open = false;
+}
+
 static void open_friends(void);
+static void open_accounts(void);
 
 static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 {
@@ -3099,17 +3113,23 @@ static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		go_scene(SC_STORE, -1);
 		return;
 	}
-	static const int ids[] = {BT_PLIB, BT_PWISH, BT_PFRIENDS, BT_PACT, BT_PLOGOUT};
-	int b = press_update(kd, kh, ku, tp, ids, 5);
-	// Con la cruceta se elige un botón (amigos y activar van en la misma fila) y A lo pulsa
-	static const int down[] = {1, 2, 4, 4, 0}, up[] = {4, 0, 1, 1, 2};
+	static const int ids[] = {BT_PLIB, BT_PWISH, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PLOGOUT};
+	int b = press_update(kd, kh, ku, tp, ids, 6);
+	// Con la cruceta se elige un botón (las dos últimas filas tienen dos cada una) y A lo pulsa
+	static const int down[] = {1, 2, 4, 5, 0, 0}, up[] = {4, 0, 1, 1, 2, 3};
+	if (S.pfocus > 5) S.pfocus = 0;
 	if (key_repeat(kd, kh, KEY_DOWN)) S.pfocus = down[S.pfocus];
 	if (key_repeat(kd, kh, KEY_UP)) S.pfocus = up[S.pfocus];
-	if ((kd & (KEY_LEFT | KEY_RIGHT)) && (S.pfocus == 2 || S.pfocus == 3)) S.pfocus = 5 - S.pfocus;
+	if ((kd & (KEY_LEFT | KEY_RIGHT)) && S.pfocus >= 2) S.pfocus ^= 1;
 	if (kd & KEY_A) b = ids[S.pfocus];
 	if (b == BT_PLIB) open_account_list(TAB_LIBRARY);
 	if (b == BT_PWISH) open_account_list(TAB_WISHLIST);
 	if (b == BT_PFRIENDS) open_friends();
+	if (b == BT_PSWITCH) {
+		do_switch_cleanup();
+		open_accounts();
+		return;
+	}
 	if (b == BT_PACT) {
 		if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
 		else S.want_key = true;
@@ -3906,11 +3926,131 @@ static void input_friends(u32 kd, u32 kh, touchPosition *tp)
 	}
 }
 
+// ---------------------------------------------------------------------------- Elegir cuenta
+
+static int acc_sel;
+static u64 acc_forget_at;    // Y pulsado una vez: se pide otra para quitar la cuenta
+static int acc_forget_i = -1;
+
+static void open_accounts(void)
+{
+	acc_sel = 0;
+	acc_forget_i = -1;
+	go_scene(SC_ACCOUNTS, 1);
+}
+
+static void draw_accounts_top(void)
+{
+	AuthAccount a[AUTH_MAX_ACCOUNTS];
+	int n = auth_accounts(a);
+	draw_logo(TOP_W / 2, 62, 64, 1);
+	ui_text(TOP_W / 2, 104, _("Elige una cuenta de Steam"), SZ_LARGE, COL_WHITE, AL_CENTER, 380);
+	if (acc_sel < n) {
+		char t[160];
+		snprintf(t, sizeof t, _("Entrarás como %s"), a[acc_sel].persona[0] ? a[acc_sel].persona : a[acc_sel].account);
+		ui_text(TOP_W / 2, 132, t, SZ_BODY, COL_ACC, AL_CENTER, 380);
+	} else if (n < AUTH_MAX_ACCOUNTS) {
+		ui_text(TOP_W / 2, 132, _("Inicia sesión con otra cuenta escaneando un QR con la app de Steam"), SZ_SMALL, COL_ACC, AL_CENTER, 380);
+	} else {
+		ui_text(TOP_W / 2, 132, _("Seguirás en la tienda sin iniciar sesión"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+	}
+	char m[96];
+	snprintf(m, sizeof m, _("Puedes guardar hasta %d cuentas en la consola"), AUTH_MAX_ACCOUNTS);
+	ui_text(TOP_W / 2, 196, m, SZ_SMALL, COL_DIM, AL_CENTER, 380);
+}
+
+// Las cuentas, «Añadir otra cuenta» (si cabe) y «Seguir sin iniciar sesión»
+static int accounts_rows(int n)
+{
+	return n + (n < AUTH_MAX_ACCOUNTS ? 1 : 0) + 1;
+}
+
+static void draw_accounts_bottom(void)
+{
+	AuthAccount a[AUTH_MAX_ACCOUNTS];
+	int n = auth_accounts(a), rows = accounts_rows(n);
+	if (acc_sel >= rows) acc_sel = rows - 1;
+	const float RH = 44, y0 = 18;
+	for (int i = 0; i < rows; i++) {
+		float y = y0 + i * (RH + 6);
+		bool on = i == acc_sel;
+		FxButton fb = {0, 1, false, on};
+		fx_button(12, y, BOT_W - 24, RH, 12, &fb);
+		if (i < n) {
+			const Pic *p = a[i].avatar[0] ? img_get(a[i].avatar, 64) : NULL;
+			ui_rect(21, y + 5, 34, 34, col_alpha(COL_WHITE, 0.25f));
+			if (p) img_draw_cover(p, 22, y + 6, 32, 32, 0.5f);
+			else ui_icon(IC_USER, 30, y + 14, 16, COL_DIM);
+			ui_text(64, y + 7, a[i].persona[0] ? a[i].persona : a[i].account, SZ_BODY, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 90);
+			ui_text(64, y + 24, a[i].account, SZ_TINY, COL_DIM, AL_LEFT, BOT_W - 90);
+			if (acc_forget_i == i && osGetTime() - acc_forget_at < 3000)
+				ui_text(BOT_W - 24, y + 15, _("Pulsa Y otra vez"), SZ_TINY, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), AL_RIGHT, 0);
+		} else if (i == n && n < AUTH_MAX_ACCOUNTS) {
+			ui_icon(IC_PHONE, 32, y + 16, 12, COL_ACC);
+			ui_text(64, y + 14, _("Añadir otra cuenta"), SZ_BODY, on ? COL_WHITE : COL_ACC, AL_LEFT, BOT_W - 90);
+		} else {
+			ui_icon(IC_HOME, 32, y + 16, 12, COL_DIM);
+			ui_text(64, y + 14, _("Seguir sin iniciar sesión"), SZ_BODY, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 90);
+		}
+	}
+	static const char *h[] = {"A", "Entrar", "↑↓", "Elegir", "Y", "Quitar cuenta"};
+	static const char *h2[] = {"A", "Aceptar", "↑↓", "Elegir"};
+	if (acc_sel < n) draw_hints(h, 3);
+	else draw_hints(h2, 2);
+}
+
+static void input_accounts(u32 kd, u32 kh, touchPosition *tp)
+{
+	AuthAccount a[AUTH_MAX_ACCOUNTS];
+	int n = auth_accounts(a), rows = accounts_rows(n);
+	if (key_repeat(kd, kh, KEY_DOWN) && acc_sel + 1 < rows) acc_sel++;
+	if (key_repeat(kd, kh, KEY_UP) && acc_sel > 0) acc_sel--;
+	const float RH = 44, y0 = 18;
+	if ((kd & KEY_TOUCH) && tp->py >= y0) {
+		int i = (int)((tp->py - y0) / (RH + 6));
+		if (i >= 0 && i < rows) {
+			if (i == acc_sel) kd |= KEY_A;
+			acc_sel = i;
+		}
+	}
+	if ((kd & KEY_Y) && acc_sel < n) {
+		// Quitar una cuenta de la consola pide pulsarlo dos veces
+		if (acc_forget_i == acc_sel && osGetTime() - acc_forget_at < 3000) {
+			char t[128];
+			snprintf(t, sizeof t, _("Se ha quitado %s de la consola"), a[acc_sel].persona[0] ? a[acc_sel].persona : a[acc_sel].account);
+			auth_forget_account(acc_sel);
+			acc_forget_i = -1;
+			toast_icon(t, IC_USER);
+			if (acc_sel >= accounts_rows(auth_accounts(NULL))) acc_sel = 0;
+		} else {
+			acc_forget_i = acc_sel;
+			acc_forget_at = osGetTime();
+		}
+		return;
+	}
+	if (kd & KEY_A) {
+		if (acc_sel < n) {
+			do_switch_cleanup();
+			auth_use(acc_sel);
+			go_scene(SC_STORE, 1);
+		} else if (acc_sel == n && n < AUTH_MAX_ACCOUNTS) {
+			do_switch_cleanup();
+			open_login();
+		} else {
+			go_scene(SC_STORE, 1);
+		}
+	}
+}
+
 static void menu_choose(int item)
 {
 	S.menu_open = false;
 	switch (item) {
-	case MI_LOGIN: open_login(); break;
+	case MI_LOGIN:
+		// Con cuentas guardadas, primero se elige (o se añade otra)
+		if (auth_accounts(NULL)) open_accounts();
+		else open_login();
+		break;
 	case MI_LOGOUT:
 		do_logout();
 		if (S.tab >= TAB_COUNT || S.scene == SC_PROFILE) {
@@ -4131,7 +4271,7 @@ static void input_login(u32 kd, float dt)
 	const AuthInfo *ai = auth_info();
 	if (ai->state == AUTH_IN) {
 		S.login_done += dt;
-		if (S.login_done > 1.8f || (kd & (KEY_A | KEY_B))) go_scene(S.login_back, -1);
+		if (S.login_done > 1.8f || (kd & (KEY_A | KEY_B))) go_scene(S.login_back == SC_ACCOUNTS ? SC_STORE : S.login_back, -1);
 		return;
 	}
 	if (kd & KEY_B) {
@@ -4587,7 +4727,8 @@ static void splash_update(float dt, u32 kd)
 	} else {
 		splash_out += dt;
 		if (splash_out > 0.35f) {
-			go_scene(SC_STORE, 0);
+			// Con varias cuentas guardadas, primero se elige con cuál entrar
+			go_scene(auth_choosing() ? SC_ACCOUNTS : SC_STORE, 0);
 			// El resto de la app no usa estos sprites: se liberan en cuanto la GPU acabe con ellos
 			sprites_free_in = 2;
 		}
@@ -5310,6 +5451,7 @@ static const Box *button_box(int id)
 	case BT_PLOGOUT: return &B_PLOGOUT;
 	case BT_PFRIENDS: return &B_PFRIENDS;
 	case BT_PACT: return &B_PACT;
+	case BT_PSWITCH: return &B_PSWITCH;
 	case BT_PAYW: return &B_PAYW;
 	case BT_PAYC: return &B_PAYC;
 	case BT_PAYQ: return &B_PAYQ;
@@ -5852,6 +5994,7 @@ int main(int argc, char **argv)
 		case SC_ABOUT: input_about(kd, kh); break;
 		case SC_NOTIF: input_notifs(kd, kh, &tp); break;
 		case SC_FRIENDS: input_friends(kd, kh, &tp); break;
+		case SC_ACCOUNTS: input_accounts(kd, kh, &tp); break;
 		case SC_PAY: input_pay(kd, kh, ku, &tp, dt); break;
 		}
 		auth_update();
@@ -5950,12 +6093,13 @@ int main(int argc, char **argv)
 		case SC_ABOUT: draw_about_top(); break;
 		case SC_NOTIF: draw_notifs_top(); break;
 		case SC_FRIENDS: draw_friends_top(); break;
+		case SC_ACCOUNTS: draw_accounts_top(); break;
 		case SC_PAY: draw_pay_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -5976,6 +6120,7 @@ int main(int argc, char **argv)
 		case SC_ABOUT: draw_about_bottom(); break;
 		case SC_NOTIF: draw_notifs_bottom(); break;
 		case SC_FRIENDS: draw_friends_bottom(); break;
+		case SC_ACCOUNTS: draw_accounts_bottom(); break;
 		case SC_PAY: draw_pay_bottom(); break;
 		}
 		C2D_ViewReset();

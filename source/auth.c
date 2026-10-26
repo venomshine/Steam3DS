@@ -2,6 +2,7 @@
 #include "app.h"
 #include "cJSON.h"
 #include "net.h"
+#include "util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 #define API "https://api.steampowered.com/"
 #define LOGIN "https://login.steampowered.com/"
 #define SESSION_FILE APP_DIR "/session.ini"
+#define ACCOUNTS_FILE APP_DIR "/accounts.ini"
 
 static AuthInfo A;
 static char refresh_tok[1024];
@@ -35,6 +37,12 @@ static WebCookie web[MAX_WEB];
 static char sessionid[28];
 static Req *xfer_req[MAX_WEB];
 static char xfer_host[MAX_WEB][40];
+
+// Las cuentas guardadas: la activa es además la de session.ini
+typedef struct { AuthAccount pub; char refresh[1024]; } SavedAcc;
+static SavedAcc acc[AUTH_MAX_ACCOUNTS];
+static int nacc;
+static bool choosing;
 
 static void set_state(AuthState s)
 {
@@ -114,6 +122,99 @@ static void take_access(const char *tok)
 }
 
 // ----------------------------------------------------------------------------
+// Cuentas guardadas (accounts.ini: una por línea, campos separados por tabuladores)
+
+static void acc_save(void)
+{
+	char buf[AUTH_MAX_ACCOUNTS * 1400];
+	size_t len = 0;
+	for (int i = 0; i < nacc; i++) {
+		const SavedAcc *a = &acc[i];
+		len += snprintf(buf + len, sizeof buf - len, "%llu\t%s\t%s\t%s\t%s\n", (unsigned long long)a->pub.steamid,
+			a->pub.account, a->pub.persona, a->pub.avatar, a->refresh);
+	}
+	disk_save(ACCOUNTS_FILE, buf, len);
+	memset(buf, 0, sizeof buf);
+}
+
+static void clean_field(char *s)
+{
+	for (; *s; s++)
+		if (*s == '\t' || *s == '\n' || *s == '\r') *s = ' ';
+}
+
+static void acc_load(void)
+{
+	nacc = 0;
+	FILE *f = fopen(ACCOUNTS_FILE, "r");
+	if (!f) return;
+	char line[1500];
+	while (nacc < AUTH_MAX_ACCOUNTS && fgets(line, sizeof line, f)) {
+		line[strcspn(line, "\r\n")] = 0;
+		char *fld[5] = {0};
+		char *p = line;
+		for (int k = 0; k < 5 && p; k++) {
+			fld[k] = p;
+			p = strchr(p, '\t');
+			if (p) *p++ = 0;
+		}
+		if (!fld[4] || !*fld[4]) continue;
+		SavedAcc *a = &acc[nacc];
+		memset(a, 0, sizeof *a);
+		a->pub.steamid = strtoull(fld[0], NULL, 10);
+		snprintf(a->pub.account, sizeof a->pub.account, "%s", fld[1]);
+		snprintf(a->pub.persona, sizeof a->pub.persona, "%s", fld[2]);
+		snprintf(a->pub.avatar, sizeof a->pub.avatar, "%s", fld[3]);
+		snprintf(a->refresh, sizeof a->refresh, "%s", fld[4]);
+		if (a->pub.steamid) nacc++;
+	}
+	fclose(f);
+	memset(line, 0, sizeof line);
+}
+
+// La cuenta activa, al día en la lista (la última usada va la primera)
+static void acc_store_current(void)
+{
+	if (!A.steamid || !refresh_tok[0]) return;
+	SavedAcc cur;
+	memset(&cur, 0, sizeof cur);
+	cur.pub.steamid = A.steamid;
+	snprintf(cur.pub.account, sizeof cur.pub.account, "%s", A.account);
+	snprintf(cur.pub.persona, sizeof cur.pub.persona, "%s", A.persona[0] ? A.persona : A.account);
+	snprintf(cur.pub.avatar, sizeof cur.pub.avatar, "%s", A.avatar);
+	snprintf(cur.refresh, sizeof cur.refresh, "%s", refresh_tok);
+	clean_field(cur.pub.account);
+	clean_field(cur.pub.persona);
+	int at = -1;
+	for (int i = 0; i < nacc; i++)
+		if (acc[i].pub.steamid == A.steamid) at = i;
+	if (at < 0) at = nacc < AUTH_MAX_ACCOUNTS ? nacc++ : nacc - 1;   // llena: sale la que lleva más sin usarse
+	memmove(&acc[1], &acc[0], at * sizeof acc[0]);
+	acc[0] = cur;
+	acc_save();
+}
+
+static void acc_remove(u64 steamid)
+{
+	for (int i = 0; i < nacc; i++)
+		if (acc[i].pub.steamid == steamid) {
+			memset(&acc[i], 0, sizeof acc[i]);
+			memmove(&acc[i], &acc[i + 1], (nacc - i - 1) * sizeof acc[0]);
+			nacc--;
+			acc_save();
+			return;
+		}
+}
+
+int auth_accounts(AuthAccount *out)
+{
+	for (int i = 0; out && i < nacc; i++) out[i] = acc[i].pub;
+	return nacc;
+}
+
+bool auth_choosing(void) { return choosing && A.state == AUTH_OUT; }
+
+// ----------------------------------------------------------------------------
 // Sesión guardada en la SD
 
 static void session_save(void)
@@ -124,6 +225,7 @@ static void session_save(void)
 	fclose(f);
 	remove(SESSION_FILE);
 	rename(APP_DIR "/session.tmp", SESSION_FILE);
+	acc_store_current();
 }
 
 static void session_forget(void)
@@ -263,10 +365,19 @@ static void transfers_done(u64 now)
 void auth_init(void)
 {
 	memset(&A, 0, sizeof A);
+	acc_load();
+	// Con varias cuentas guardadas se elige al arrancar; con una, se entra con ella como siempre
+	if (nacc >= 2) {
+		choosing = true;
+		set_state(AUTH_OUT);
+		return;
+	}
 	if (session_load()) {
+		if (!nacc) acc_store_current();   // la sesión de antes pasa a ser la primera cuenta guardada
 		set_state(AUTH_STARTING);
 		start_refresh();
 	} else {
+		choosing = nacc > 0;   // hay una cuenta guardada pero ninguna activa: se elige
 		set_state(AUTH_OUT);
 	}
 }
@@ -316,8 +427,69 @@ void auth_logout(void)
 		cJSON_Delete(p);
 	}
 	netlog("sesion: cerrada");
+	acc_remove(A.steamid);
 	session_forget();
+	choosing = nacc > 0;
 	set_state(AUTH_OUT);
+}
+
+// Para cambiar de cuenta: se deja la sesión en Steam (sigue guardada) y se vuelve a elegir
+static void drop_requests(void)
+{
+	Req **all[] = {&begin_req, &poll_req, &refresh_req, &profile_req, &level_req};
+	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
+		if (*all[i]) {
+			net_release(*all[i]);
+			*all[i] = NULL;
+		}
+	for (int i = 0; i < MAX_WEB; i++)
+		if (xfer_req[i]) {
+			net_release(xfer_req[i]);
+			xfer_req[i] = NULL;
+		}
+	retry_at = 0;
+}
+
+void auth_switch_out(void)
+{
+	drop_requests();
+	memset(refresh_tok, 0, sizeof refresh_tok);
+	memset(access_tok, 0, sizeof access_tok);
+	memset(web, 0, sizeof web);
+	A.steamid = 0;
+	A.account[0] = A.persona[0] = A.avatar[0] = 0;
+	A.level = 0;
+	A.err[0] = 0;
+	choosing = true;
+	set_state(AUTH_OUT);
+	netlog("sesion: cambio de cuenta");
+}
+
+void auth_use(int i)
+{
+	if (i < 0 || i >= nacc) return;
+	SavedAcc a = acc[i];
+	auth_switch_out();
+	choosing = false;
+	A.steamid = a.pub.steamid;
+	snprintf(A.account, sizeof A.account, "%s", a.pub.account);
+	snprintf(A.persona, sizeof A.persona, "%s", a.pub.persona);
+	snprintf(A.avatar, sizeof A.avatar, "%s", a.pub.avatar);
+	snprintf(refresh_tok, sizeof refresh_tok, "%s", a.refresh);
+	memset(&a, 0, sizeof a);
+	session_save();   // pasa a ser la activa (y la primera de la lista)
+	set_state(AUTH_STARTING);
+	start_refresh();
+}
+
+void auth_forget_account(int i)
+{
+	if (i < 0 || i >= nacc) return;
+	acc_remove(acc[i].pub.steamid);
+	if (!nacc) {
+		remove(SESSION_FILE);
+		choosing = false;
+	}
 }
 
 static void finish_login(const char *refresh, const char *access, const char *account)
@@ -429,7 +601,9 @@ void auth_update(void)
 			netlog("sesion: Steam no acepta la sesion guardada (HTTP %ld, error %d)", refresh_req->http,
 				cJSON_IsNumber(error) ? error->valueint : -1);
 			snprintf(A.err, sizeof A.err, "%s", "expired");
+			acc_remove(A.steamid);   // esa cuenta ya no sirve: hay que volver a iniciar sesión con ella
 			session_forget();
+			choosing = nacc > 0;
 			set_state(AUTH_OUT);
 		} else {
 			// Sin red o respuesta rara: se reintenta solo
@@ -477,6 +651,7 @@ void auth_update(void)
 		const char *name = jstr(pd, "persona_name"), *av = jstr(pd, "sha_digest_avatar");
 		if (name) snprintf(A.persona, sizeof A.persona, "%s", name);
 		if (av) auth_avatar_url(av, A.avatar, sizeof A.avatar);
+		if (name || av) acc_store_current();   // el nombre y el avatar, para elegir cuenta al arrancar
 		if (!pd) netlog("sesion: perfil sin datos (%s)", profile_req->err[0] ? profile_req->err : "json");
 		A.changed = now;
 		cJSON_Delete(root);

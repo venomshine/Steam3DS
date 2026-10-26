@@ -3,7 +3,7 @@
 
 # Textos que llegan a _() a través de una variable (pestañas, apartados, pistas, clasificaciones)
 INDIRECT = [
-    "Marcar", "Mantener para pagar", "Precio", "Notificaciones",
+    "Marcar", "Mantener para pagar", "Precio", "Notificaciones", "Entrar", "Quitar cuenta",
     'En línea', 'Ocupado', 'Ausente', 'Durmiendo', 'Quiere intercambiar', 'Quiere jugar', 'Jugando', 'Desconectados', 'Ver la lista', 'Ver el juego',
     'Acuerdo de Suscriptor de Steam', 'Tu cuenta y las licencias de lo que compras', 'El contrato entre tú y Valve para usar Steam: tu cuenta, las licencias del contenido que compras, las suscripciones y las normas de uso del servicio.', 'Política de privacidad', 'Qué datos se recogen y para qué', 'Qué datos recoge Valve cuando usas Steam, para qué los usa, con quién los comparte y cómo ejercer tus derechos sobre ellos.', 'Reembolsos de Steam', 'Cuándo y cómo pedir un reembolso', 'Puedes pedir el reembolso de casi cualquier compra en los 14 días siguientes si has jugado menos de 2 horas. Se solicita desde la ayuda de Steam.', 'Normas de conducta en línea', 'Reseñas, foros, perfiles y chat', 'Lo que no está permitido en las partes de Steam con contenido de los usuarios: reseñas, foros, perfiles, chat y Workshop.', 'Información legal', 'Marcas y derechos de autor', 'Avisos de marcas, derechos de autor y el resto de la información legal de Valve y de Steam.',
     "Explora la tienda de Steam, consulta ofertas y reseñas, gestiona tu lista de deseos y tu carrito, y compra con los métodos de pago de tu cuenta, todo desde la consola.",
@@ -19,6 +19,20 @@ INDIRECT = [
 ]
 
 TR = {
+    # Cuentas
+    'Añadir otra cuenta': ('Add another account', '別のアカウントを追加'),
+    'Cambiar de cuenta': ('Switch account', 'アカウントを切り替え'),
+    'Elige una cuenta de Steam': ('Choose a Steam account', 'Steam アカウントを選択'),
+    'Entrarás como %s': ("You'll sign in as %s", '%s としてサインインします'),
+    'Inicia sesión con otra cuenta escaneando un QR con la app de Steam': ('Sign in with another account by scanning a QR code with the Steam app', 'Steam アプリで QR コードを読み取って別のアカウントでサインイン'),
+    'Puedes guardar hasta %d cuentas en la consola': ('You can save up to %d accounts on the console', '本体には最大 %d 個のアカウントを保存できます'),
+    'Pulsa Y otra vez': ('Press Y again', 'もう一度 Y を押してください'),
+    'Se ha quitado %s de la consola': ('%s has been removed from the console', '%s を本体から削除しました'),
+    'Seguir sin iniciar sesión': ('Continue without signing in', 'サインインせずに続ける'),
+    'Seguirás en la tienda sin iniciar sesión': ("You'll stay in the store without signing in", 'サインインせずにストアを利用します'),
+    'Entrar': ('Sign in', 'サインイン'),
+    'Quitar cuenta': ('Remove account', 'アカウントを削除'),
+
     # Amigos
     '%d solicitud': ('%d request', '%d 件のリクエスト'),
     '%d solicitudes': ('%d requests', '%d 件のリクエスト'),

@@ -23,7 +23,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS, SC_USER } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
@@ -106,6 +106,7 @@ static struct {
 	float lsel_y;                // franja de selección de las listas de la ficha
 	float seg_x;                 // apartado marcado en el selector
 	float sec_anim; int sec_dir; // entrada del apartado
+	Scene game_back;             // a dónde vuelve la ficha con B
 	float scene_anim; int scene_dir;
 	float exit_anim;             // diálogo de salida (0 cerrado, 1 abierto)
 	float quit_fade;             // fundido a negro al salir (-1 = no)
@@ -157,7 +158,7 @@ static struct {
 } S;
 
 enum { BT_NONE, BT_IGNORE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
-	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO };
+	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW };
 
 // Pestañas de la tienda
 #define HOME_PARTS 4
@@ -2166,6 +2167,11 @@ static void open_game(u32 appid, bool push)
 		S.depth++;
 	}
 	if (!push) S.depth = 0;
+	// Desde fuera de la tienda (amigos, un perfil, notificaciones), B vuelve allí
+	if (S.scene != SC_GAME) {
+		S.depth = 0;
+		S.game_back = S.scene == SC_SHOTS || S.scene == SC_SPLASH ? SC_STORE : S.scene;
+	}
 	go_scene(SC_GAME, 1);
 	S.app = appid;
 	seen_open(appid);
@@ -2208,7 +2214,7 @@ static void game_back(void)
 		S.scene_dir = -1;
 		return;
 	}
-	go_scene(SC_STORE, -1);
+	go_scene(S.game_back, -1);
 }
 
 static void reviews_more(void)
@@ -3192,22 +3198,22 @@ static void open_account_list(int ti)
 // ---------------------------------------------------------------------------- Perfil
 
 static const Box B_PLIB = {12, 78, 296, 30};
-static const Box B_PWISH = {12, 112, 296, 30};
+static const Box B_PWISH = {12, 112, 145, 30};
+static const Box B_PVIEW = {163, 112, 145, 30};
 static const Box B_PFRIENDS = {12, 146, 145, 30};
 static const Box B_PACT = {163, 146, 145, 30};
 static const Box B_PSWITCH = {12, 180, 145, 30};
 static const Box B_PLOGOUT = {163, 180, 145, 30};
 
+static bool draw_user_bg(float dim);
+static void draw_user_avatar(float x, float y, float sz);
+
 static void draw_profile_top(void)
 {
 	const AuthInfo *ai = auth_info();
-	ui_vgrad(0, 18, TOP_W, 96, C2D_Color32(0x2a, 0x47, 0x5e, 0xc0), C2D_Color32(0x2a, 0x47, 0x5e, 0x00));
-	// Avatar con marco de neón y esquinas de HUD, y el nivel en un círculo, como en Steam
-	const Pic *p = ai->avatar[0] ? img_get(ai->avatar, 64) : NULL;
-	ui_rect(16, 36, 76, 76, C2D_Color32(0, 0, 0, 0x40));
-	ui_rect(16, 34, 76, 76, C2D_Color32(0xff, 0xff, 0xff, 0x30));
-	if (p) img_draw_cover(p, 18, 36, 72, 72, 0.5f);
-	else ui_rect(18, 36, 72, 72, COL_PANEL);
+	// El fondo y el marco que llevas puestos en Steam
+	if (!draw_user_bg(0.62f)) ui_vgrad(0, 18, TOP_W, 96, C2D_Color32(0x2a, 0x47, 0x5e, 0xc0), C2D_Color32(0x2a, 0x47, 0x5e, 0x00));
+	draw_user_avatar(18, 36, 72);
 	ui_text(108, 38, ai->persona[0] ? ai->persona : ai->account, SZ_TITLE, COL_WHITE, AL_LEFT, TOP_W - 120);
 	if (ai->level) {
 		ui_circle(122, 82, 12, C2D_Color32(0x9b, 0x9b, 0x9b, 0xff));
@@ -3272,12 +3278,13 @@ static void draw_profile_bottom(void)
 	else snprintf(wish, sizeof wish, "%s", _("Lista de deseos"));
 	draw_button_k(&B_PLIB, NULL, S.pfocus == 0, IC_PAD, lib, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PLIB);
 	draw_button_k(&B_PWISH, NULL, S.pfocus == 1, IC_HEART, wish, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PWISH);
+	draw_button_k(&B_PVIEW, NULL, S.pfocus == 2, IC_USER, _("Ver tu perfil"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PVIEW);
 	bool act_busy = shop_busy_with(SH_ACTIVATE, 0) || shop_busy_with(SH_WALLET, 0);
-	draw_button_k(&B_PFRIENDS, NULL, S.pfocus == 2, IC_USERS, _("Amigos"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PFRIENDS);
-	draw_button_k(&B_PACT, NULL, S.pfocus == 3, IC_CODE, act_busy ? _("Activando…") : _("Activar un producto"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PACT);
+	draw_button_k(&B_PFRIENDS, NULL, S.pfocus == 3, IC_USERS, _("Amigos"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PFRIENDS);
+	draw_button_k(&B_PACT, NULL, S.pfocus == 4, IC_CODE, act_busy ? _("Activando…") : _("Activar un producto"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PACT);
 	u32 red = C2D_Color32(0x6a, 0x26, 0x22, 0xff);
-	draw_button_k(&B_PSWITCH, NULL, S.pfocus == 4, IC_USERS, _("Cambiar de cuenta"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PSWITCH);
-	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 5, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
+	draw_button_k(&B_PSWITCH, NULL, S.pfocus == 5, IC_USERS, _("Cambiar de cuenta"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PSWITCH);
+	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 6, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
 	static const char *hh[] = {"↑↓", "Elegir", "A", "Abrir", "B", "Volver", "START", "Menú"};
 	draw_hints(hh, 4);
 }
@@ -3308,6 +3315,7 @@ static void do_switch_cleanup(void)
 
 static void open_friends(void);
 static void open_accounts(void);
+static void open_user(u64 id, const SteamPerson *person);
 
 static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 {
@@ -3315,15 +3323,16 @@ static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		go_scene(SC_STORE, -1);
 		return;
 	}
-	static const int ids[] = {BT_PLIB, BT_PWISH, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PLOGOUT};
-	int b = press_update(kd, kh, ku, tp, ids, 6);
-	// Con la cruceta se elige un botón (las dos últimas filas tienen dos cada una) y A lo pulsa
-	static const int down[] = {1, 2, 4, 5, 0, 0}, up[] = {4, 0, 1, 1, 2, 3};
-	if (S.pfocus > 5) S.pfocus = 0;
+	static const int ids[] = {BT_PLIB, BT_PWISH, BT_PVIEW, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PLOGOUT};
+	int b = press_update(kd, kh, ku, tp, ids, 7);
+	// Con la cruceta se elige un botón (debajo de Biblioteca van de dos en dos) y A lo pulsa
+	static const int down[] = {1, 3, 4, 5, 6, 0, 0}, up[] = {5, 0, 0, 1, 2, 3, 4};
+	if (S.pfocus > 6) S.pfocus = 0;
 	if (key_repeat(kd, kh, KEY_DOWN)) S.pfocus = down[S.pfocus];
 	if (key_repeat(kd, kh, KEY_UP)) S.pfocus = up[S.pfocus];
-	if ((kd & (KEY_LEFT | KEY_RIGHT)) && S.pfocus >= 2) S.pfocus ^= 1;
+	if ((kd & (KEY_LEFT | KEY_RIGHT)) && S.pfocus >= 1) S.pfocus += S.pfocus % 2 ? 1 : -1;
 	if (kd & KEY_A) b = ids[S.pfocus];
+	if (b == BT_PVIEW) open_user(auth_info()->steamid, NULL);
 	if (b == BT_PLIB) open_account_list(TAB_LIBRARY);
 	if (b == BT_PWISH) open_account_list(TAB_WISHLIST);
 	if (b == BT_PFRIENDS) open_friends();
@@ -3666,7 +3675,7 @@ static void notif_when(u32 t, char *out, size_t sz)
 		time_t tt = t;
 		struct tm *tm = gmtime(&tt);
 		static const char *mes[] = {"ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"};
-		snprintf(out, sz, "%d %s %d", tm->tm_mday, mes[tm->tm_mon], tm->tm_year + 1900);
+		snprintf(out, sz, "%d %s %d", tm->tm_mday, _(mes[tm->tm_mon]), tm->tm_year + 1900);
 	}
 }
 
@@ -4033,7 +4042,7 @@ static void draw_friends_top(void)
 			ui_rect(16, iy, iw, ih, COL_PANEL);
 			if (!img_failed(url)) ui_spinner(16 + iw / 2, iy + ih / 2, 6, COL_DIM);
 		}
-		ui_text_wrap(16 + iw + 12, iy + ih - 30, TOP_W - iw - 44, _("Pulsa A para ver su página"), SZ_SMALL, COL_ACC, 2, 14);
+		ui_text_wrap(16 + iw + 12, iy + ih - 30, TOP_W - iw - 44, _("Pulsa X para ver su página"), SZ_SMALL, COL_ACC, 2, 14);
 	}
 }
 
@@ -4086,11 +4095,13 @@ static void draw_friends_bottom(void)
 	else if (!FL.loaded && !FL.failed) ui_spinner(BOT_W / 2, LIST_Y + 40, 6, COL_DIM);
 	bool game = FL.sel >= 0 && FL.sel < FL.nview && FL.view[FL.sel] >= 0 && FL.p[FL.view[FL.sel]].state > 0 && FL.p[FL.view[FL.sel]].game;
 	static const char *hq[] = {"Y", "Ver la lista", "B", "Volver"};
-	static const char *hg[] = {"A", "Ver el juego", "↑↓", "Elegir", "Y", "Añadir amigo", "B", "Volver"};
-	static const char *h[] = {"↑↓", "Elegir", "Y", "Añadir amigo", "B", "Volver"};
+	static const char *hg[] = {"A", "Ver perfil", "X", "Ver el juego", "Y", "Añadir amigo", "B", "Volver"};
+	static const char *h[] = {"A", "Ver perfil", "↑↓", "Elegir", "Y", "Añadir amigo", "B", "Volver"};
+	static const char *h0[] = {"Y", "Añadir amigo", "B", "Volver"};
 	if (FL.qr && FL.np) draw_hints(hq, 2);
+	else if (!FL.np) draw_hints(h0, 2);
 	else if (game && !FL.qr) draw_hints(hg, 4);
-	else draw_hints(h, 3);
+	else draw_hints(h, 4);
 }
 
 static void flist_move(int d)
@@ -4123,9 +4134,482 @@ static void input_friends(u32 kd, u32 kh, touchPosition *tp)
 		}
 	}
 	if ((kd & KEY_A) && FL.sel >= 0 && FL.sel < FL.nview && FL.view[FL.sel] >= 0) {
+		open_user(FL.p[FL.view[FL.sel]].id, &FL.p[FL.view[FL.sel]]);
+		return;
+	}
+	if ((kd & KEY_X) && FL.sel >= 0 && FL.sel < FL.nview && FL.view[FL.sel] >= 0) {
 		const SteamPerson *p = &FL.p[FL.view[FL.sel]];
 		if (p->state > 0 && p->game) open_game(p->game, true);
 	}
+}
+
+// ---------------------------------------------------------------------------- Perfil de Steam (de un amigo o el tuyo)
+
+#define UP_FILES 24
+static struct {
+	u64 id;
+	SteamProfile p;
+	Req *items, *shows, *xml, *lvreq, *files, *page;
+	int level;                   // -1 mientras no se sabe
+	SteamPerson person;          // su estado, si viene de la lista de amigos
+	bool has_person;
+	RowList apps;                // los juegos de sus vitrinas (para los nombres)
+	u64 fid[UP_FILES];           // capturas e ilustraciones de las vitrinas
+	char furl[UP_FILES][200];
+	int nf, page_i;              // page_i: la siguiente que se busca en su página (-1 aún no toca)
+	u64 page_at;                 // no antes de esta hora (la comunidad limita las peticiones seguidas)
+	int page_retry;
+	float scroll, scroll_t, content;
+	bool qr;
+	Scene back;
+} UP;
+
+static void user_reset(void)
+{
+	Req **all[] = {&UP.items, &UP.shows, &UP.xml, &UP.lvreq, &UP.files, &UP.page};
+	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
+		if (*all[i]) net_release(*all[i]);
+	rowlist_free(&UP.apps);
+	steam_profile_free(&UP.p);
+	Scene back = UP.back;
+	memset(&UP, 0, sizeof UP);
+	UP.back = back;
+}
+
+static bool user_is_me(void)
+{
+	return auth_logged() && UP.id == auth_info()->steamid;
+}
+
+// Pide todo lo de un perfil (si ya es el que está cargado, no hace nada)
+static void user_load(u64 id)
+{
+	if (UP.id == id) return;
+	user_reset();
+	UP.id = id;
+	UP.level = -1;
+	UP.page_i = -1;
+	UP.items = steam_req_profile_items(id);
+	UP.shows = steam_req_profile_showcases(id);
+	UP.xml = steam_req_profile_xml(id);
+	if (auth_logged()) UP.lvreq = steam_req_level(id, auth_token());
+}
+
+static bool user_loading(void)
+{
+	return UP.items || UP.shows || UP.xml;
+}
+
+static void user_poll(void)
+{
+	if (!UP.id) return;
+	if (UP.items && UP.items->state >= REQ_DONE) {
+		bool ok = UP.items->state == REQ_DONE && steam_parse_profile_items(UP.items->data, &UP.p);
+		netlog("perfil %llu: fondo %s marco %s%s", (unsigned long long)UP.id, UP.p.bg[0] ? "sí" : "no", UP.p.frame[0] ? "sí" : "no", ok ? "" : " (falló)");
+		net_release(UP.items);
+		UP.items = NULL;
+	}
+	if (UP.xml && UP.xml->state >= REQ_DONE) {
+		bool ok = UP.xml->state == REQ_DONE && steam_parse_profile_xml(UP.xml->data, &UP.p);
+		netlog("perfil %llu: ficha %s", (unsigned long long)UP.id, ok ? (UP.p.is_private ? "privada" : "pública") : "falló");
+		net_release(UP.xml);
+		UP.xml = NULL;
+	}
+	if (UP.lvreq && UP.lvreq->state >= REQ_DONE) {
+		if (UP.lvreq->state == REQ_DONE) UP.level = steam_parse_level(UP.lvreq->data);
+		net_release(UP.lvreq);
+		UP.lvreq = NULL;
+	}
+	if (UP.shows && UP.shows->state >= REQ_DONE) {
+		bool ok = UP.shows->state == REQ_DONE && steam_parse_profile_showcases(UP.shows->data, &UP.p);
+		netlog("perfil %llu: %d vitrinas (+%d que aquí no se ven)%s", (unsigned long long)UP.id, UP.p.nshow, UP.p.nother, ok ? "" : " (falló)");
+		net_release(UP.shows);
+		UP.shows = NULL;
+		// Los nombres de sus juegos y las imágenes de sus capturas e ilustraciones
+		u32 apps[48];
+		int na = 0;
+		for (int i = 0; i < UP.p.nshow; i++) {
+			const Showcase *s = &UP.p.show[i];
+			for (int k = 0; k < s->n; k++) {
+				if (s->appid[k] && na < 48 && s->type != SHOW_SHOTS && s->type != SHOW_ARTWORK && s->type != SHOW_ONE_ARTWORK) {
+					bool dup = false;
+					for (int j = 0; j < na; j++) dup |= apps[j] == s->appid[k];
+					if (!dup) apps[na++] = s->appid[k];
+				}
+				if (s->file[k] && UP.nf < UP_FILES) UP.fid[UP.nf++] = s->file[k];
+			}
+		}
+		if (na) UP.apps.req = steam_req_items(apps, na, false);
+		if (UP.nf) {
+			if (auth_logged()) UP.files = steam_req_files(UP.fid, UP.nf, auth_token());
+			else UP.page_i = 0;
+		}
+	}
+	list_poll(&UP.apps, false);
+	if (UP.files && UP.files->state >= REQ_DONE) {
+		int n = UP.files->state == REQ_DONE ? steam_parse_files(UP.files->data, UP.fid, UP.nf, UP.furl) : -1;
+		netlog("perfil %llu: imágenes de vitrinas %d de %d (HTTP %ld)", (unsigned long long)UP.id, n, UP.nf, UP.files->http);
+		net_release(UP.files);
+		UP.files = NULL;
+		UP.page_i = 0;   // las que falten, de su página
+	}
+	// Las que no dio el servicio se sacan de su página en la comunidad, de una en una
+	if (!UP.page && UP.page_i >= 0 && osGetTime() >= UP.page_at) {
+		while (UP.page_i < UP.nf && UP.furl[UP.page_i][0]) UP.page_i++;
+		if (UP.page_i < UP.nf) UP.page = steam_req_file_page(UP.fid[UP.page_i]);
+		else UP.page_i = -1;
+	}
+	if (UP.page && UP.page->state >= REQ_DONE) {
+		if (UP.page->http == 429 && UP.page_retry < 3) {
+			// Demasiadas seguidas: se espera un poco y se vuelve a intentar la misma
+			UP.page_retry++;
+			UP.page_at = osGetTime() + 4000 * UP.page_retry;
+		} else {
+			if (UP.page->state != REQ_DONE || !steam_parse_file_page(UP.page->data, UP.furl[UP.page_i], sizeof UP.furl[0]))
+				snprintf(UP.furl[UP.page_i], sizeof UP.furl[0], "-");   // no hay forma: se queda en blanco
+			UP.page_i++;
+			UP.page_retry = 0;
+			UP.page_at = osGetTime() + 1200;
+		}
+		net_release(UP.page);
+		UP.page = NULL;
+	}
+}
+
+static const char *user_file_url(u64 id)
+{
+	for (int i = 0; i < UP.nf; i++)
+		if (UP.fid[i] == id) return UP.furl[i][0] ? UP.furl[i] : NULL;   // «-»: no se pudo
+	return NULL;
+}
+
+static const char *user_app_name(u32 appid)
+{
+	for (int i = 0; i < UP.apps.count; i++)
+		if (UP.apps.rows[i].appid == appid) return UP.apps.rows[i].name;
+	return NULL;
+}
+
+static void user_name(char *out, size_t n)
+{
+	if (user_is_me() && auth_info()->persona[0]) snprintf(out, n, "%s", auth_info()->persona);
+	else if (UP.has_person && UP.person.name[0]) snprintf(out, n, "%s", UP.person.name);
+	else snprintf(out, n, "%s", UP.p.name);
+}
+
+static void user_avatar(char *out, size_t n)
+{
+	out[0] = 0;
+	if (user_is_me()) snprintf(out, n, "%s", auth_info()->avatar);
+	else if (UP.p.avatar[0]) snprintf(out, n, "%s", UP.p.avatar);
+	else if (UP.has_person) auth_avatar_url(UP.person.avatar_sha, out, n);
+}
+
+static void community_img(const char *path, char *out, size_t n)
+{
+	snprintf(out, n, "https://cdn.akamai.steamstatic.com/steamcommunity/public/images/%s", path);
+}
+
+// El fondo de su perfil a toda pantalla, oscurecido para que se lea lo de encima
+static bool draw_user_bg(float dim)
+{
+	if (!UP.p.bg[0]) return false;
+	char url[200];
+	community_img(UP.p.bg, url, sizeof url);
+	const Pic *p = img_get(url, 400);
+	if (!p) return false;
+	img_draw_cover(p, 0, 0, TOP_W, SCR_H, 0.3f);
+	ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0x0b, 0x10, 0x18, (u8)(255 * dim)));
+	return true;
+}
+
+// Avatar con su marco (el marco es algo más grande que el avatar y lo rodea)
+static void draw_user_avatar(float x, float y, float sz)
+{
+	char url[200];
+	user_avatar(url, sizeof url);
+	const Pic *p = url[0] ? img_get(url, 64) : NULL;
+	bool framed = false;
+	if (UP.p.frame[0]) {
+		char fu[200];
+		community_img(UP.p.frame, fu, sizeof fu);
+		const Pic *f = img_get(fu, 128);
+		if (p) img_draw_cover(p, x, y, sz, sz, 0.5f);
+		else ui_rect(x, y, sz, sz, COL_PANEL);
+		if (f) {
+			float fs = sz * 1.22f;
+			img_draw_fit(f, x - (fs - sz) / 2, y - (fs - sz) / 2, fs, fs);
+			framed = true;
+		}
+	}
+	if (!framed) {
+		ui_rect(x - 2, y - 2, sz + 4, sz + 4, C2D_Color32(0xff, 0xff, 0xff, 0x30));
+		if (p) img_draw_cover(p, x, y, sz, sz, 0.5f);
+		else ui_rect(x, y, sz, sz, COL_PANEL);
+	}
+}
+
+static void draw_level(float cx, float cy, int lv)
+{
+	ui_circle(cx, cy, 12, C2D_Color32(0x9b, 0x9b, 0x9b, 0xff));
+	ui_circle(cx, cy, 10, COL_BG);
+	char t[12];
+	snprintf(t, sizeof t, "%d", lv);
+	ui_text(cx, cy - 6, t, SZ_SMALL, COL_WHITE, AL_CENTER, 0);
+}
+
+static void user_status(char *out, size_t n, u32 *col)
+{
+	if (UP.has_person) {
+		person_status(&UP.person, out, n, col);
+		return;
+	}
+	*col = COL_DIM;
+	if (!strcmp(UP.p.state, "in-game")) {
+		*col = COL_LIME;
+		const char *g = strchr(UP.p.state_msg, '\n');
+		snprintf(out, n, _("Jugando a %s"), g ? g + 1 : _("un juego"));
+	} else if (!strcmp(UP.p.state, "online")) {
+		*col = COL_ACC;
+		snprintf(out, n, "%s", _("En línea"));
+	} else if (UP.p.state[0]) {
+		snprintf(out, n, "%s", _("Desconectado"));
+	} else {
+		out[0] = 0;
+	}
+}
+
+static void fmt_date(u32 t, char *out, size_t n)
+{
+	time_t tt = t;
+	struct tm *tm = gmtime(&tt);
+	static const char *mes[] = {"ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"};
+	snprintf(out, n, "%d %s %d", tm->tm_mday, _(mes[tm->tm_mon]), tm->tm_year + 1900);
+}
+
+static const char *show_title(int type)
+{
+	switch (type) {
+	case SHOW_FAV_GAME: return _("JUEGO FAVORITO");
+	case SHOW_COLLECTOR: return _("COLECCIONISTA DE JUEGOS");
+	case SHOW_COMPLETIONIST: return _("JUEGOS CON TODOS LOS LOGROS");
+	case SHOW_SHOTS: return _("CAPTURAS");
+	case SHOW_ARTWORK: return _("ILUSTRACIONES");
+	case SHOW_ONE_ARTWORK: return _("ILUSTRACIÓN DESTACADA");
+	default: return "";
+	}
+}
+
+static void draw_img_slot(const char *url, float x, float y, float w, float h, bool cover)
+{
+	bool none = url && url[0] == '-';
+	const Pic *p = url && !none ? img_get(url, w > 200 ? 400 : 200) : NULL;
+	if (none || (url && !p && img_failed(url))) {
+		ui_rect(x, y, w, h, col_alpha(COL_WHITE, 0.06f));
+		ui_icon(IC_IMAGE, x + w / 2 - 8, y + h / 2 - 8, 16, COL_DIM);
+	} else if (p) {
+		ui_rect(x, y, w, h, C2D_Color32(0, 0, 0, 0x60));
+		if (cover) img_draw_cover(p, x, y, w, h, 0.5f);
+		else img_draw_fit(p, x, y, w, h);
+	} else {
+		ui_rect(x, y, w, h, col_alpha(COL_WHITE, 0.06f));
+		ui_spinner(x + w / 2, y + h / 2, 5, COL_DIM);
+	}
+}
+
+static void app_img(u32 appid, const char *file, char *out, size_t n)
+{
+	snprintf(out, n, "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/%lu/%s", (unsigned long)appid, file);
+}
+
+// Una vitrina; devuelve lo que ocupa (si draw es false solo mide)
+static float draw_showcase(const Showcase *s, float y, bool draw)
+{
+	const float x = 12, w = TOP_W - 24;
+	float h = 0;
+	char url[200];
+	if (s->type == SHOW_TEXT) {
+		const char *t = s->title && s->title[0] ? s->title : NULL;
+		int nl = s->text && s->text[0] ? ui_text_lines(s->text, SZ_SMALL, w - 20) : 0;
+		if (nl > 12) nl = 12;
+		h = 10 + (t ? 18 : 0) + nl * 14 + 6;
+		if (draw) {
+			fx_glass(x, y, w, h, 10, 1, 0);
+			if (t) ui_text(x + 10, y + 8, t, SZ_BODY, COL_WHITE, AL_LEFT, w - 20);
+			if (nl) ui_text_wrap(x + 10, y + 8 + (t ? 18 : 0), w - 20, s->text, SZ_SMALL, COL_TXT, 12, 14);
+		}
+		return h;
+	}
+	h = 22;
+	if (s->type == SHOW_FAV_GAME) {
+		const float iw = 184, ih = 86;
+		if (draw) {
+			fx_glass(x, y, w, 22 + ih + 10, 10, 1, 0);
+			ui_text(x + 10, y + 6, show_title(s->type), SZ_TINY, COL_ACC, AL_LEFT, 0);
+			app_img(s->appid[0], "header.jpg", url, sizeof url);
+			draw_img_slot(url, x + 10, y + 22, iw, ih, true);
+			const char *nm = user_app_name(s->appid[0]);
+			if (nm) ui_text_wrap(x + 20 + iw, y + 24, w - iw - 30, nm, SZ_BODY, COL_WHITE, 3, 16);
+		}
+		return 22 + ih + 10;
+	}
+	if (s->type == SHOW_COLLECTOR || s->type == SHOW_COMPLETIONIST) {
+		const int cols = 4;
+		const float gw = (w - 20 - 6 * (cols - 1)) / cols, gh = floorf(gw * 69 / 184);
+		int rows = (s->n + cols - 1) / cols;
+		h = 22 + rows * (gh + 6) + 4;
+		if (draw) {
+			fx_glass(x, y, w, h, 10, 1, 0);
+			ui_text(x + 10, y + 6, show_title(s->type), SZ_TINY, COL_ACC, AL_LEFT, 0);
+			for (int i = 0; i < s->n; i++) {
+				app_img(s->appid[i], "capsule_184x69.jpg", url, sizeof url);
+				draw_img_slot(url, x + 10 + (i % cols) * (gw + 6), y + 22 + (i / cols) * (gh + 6), gw, gh, true);
+			}
+		}
+		return h;
+	}
+	// Capturas e ilustraciones: la primera grande y las demás en miniatura
+	const float big_h = 170, th = 52;
+	int rest = s->n - 1;
+	h = 22 + big_h + (rest > 0 ? 6 + th : 0) + 10;
+	if (draw) {
+		fx_glass(x, y, w, h, 10, 1, 0);
+		ui_text(x + 10, y + 6, show_title(s->type), SZ_TINY, COL_ACC, AL_LEFT, 0);
+		draw_img_slot(user_file_url(s->file[0]), x + 10, y + 22, w - 20, big_h, false);
+		float tw = (w - 20 - 6 * 2) / 3;
+		for (int i = 0; i < rest && i < 3; i++)
+			draw_img_slot(user_file_url(s->file[i + 1]), x + 10 + i * (tw + 6), y + 22 + big_h + 6, tw, th, true);
+	}
+	return h;
+}
+
+static void draw_user_top(void)
+{
+	if (UP.qr) {
+		char url[96];
+		snprintf(url, sizeof url, "https://steamcommunity.com/profiles/%llu", (unsigned long long)UP.id);
+		draw_qr_panel(url, _("Ver en Steam"), _("Escanea el código con la cámara del móvil para abrir este perfil en la comunidad de Steam."), NULL, NULL, 0);
+		return;
+	}
+	bool bg = draw_user_bg(0.55f);
+	if (!bg) ui_vgrad(0, 18, TOP_W, 96, C2D_Color32(0x2a, 0x47, 0x5e, 0xc0), C2D_Color32(0x2a, 0x47, 0x5e, 0x00));
+	ui_scissor(GFX_TOP, 0, 18, TOP_W, SCR_H - 18);
+	float y = 30 - UP.scroll;
+	char name[64], st[112], t[160];
+	u32 col;
+	user_name(name, sizeof name);
+	draw_user_avatar(20, y + 4, 64);
+	ui_text(100, y, name[0] ? name : "…", SZ_TITLE, COL_WHITE, AL_LEFT, TOP_W - 112 - (UP.level >= 0 ? 34 : 0));
+	if (UP.level >= 0) draw_level(TOP_W - 26, y + 12, UP.level);
+	user_status(st, sizeof st, &col);
+	if (st[0]) ui_text(100, y + 28, st, SZ_SMALL, col, AL_LEFT, TOP_W - 112);
+	// Nombre real y país, como bajo el nombre en Steam
+	t[0] = 0;
+	if (UP.p.realname[0] && UP.p.location[0]) snprintf(t, sizeof t, "%s · %s", UP.p.realname, UP.p.location);
+	else snprintf(t, sizeof t, "%s", UP.p.realname[0] ? UP.p.realname : UP.p.location);
+	if (t[0]) ui_text(100, y + 46, t, SZ_TINY, COL_DIM, AL_LEFT, TOP_W - 112);
+	if (UP.p.since) {
+		char d[40];
+		fmt_date(UP.p.since, d, sizeof d);
+		snprintf(t, sizeof t, _("Miembro desde el %s"), d);
+		ui_text(100, y + 60, t, SZ_TINY, COL_DIM, AL_LEFT, TOP_W - 112);
+	}
+	y += 84;
+	if (UP.p.summary) {
+		int nl = ui_text_lines(UP.p.summary, SZ_SMALL, TOP_W - 40);
+		if (nl > 14) nl = 14;
+		ui_text_wrap(20, y, TOP_W - 40, UP.p.summary, SZ_SMALL, COL_TXT, 14, 14);
+		y += nl * 14 + 10;
+	}
+	if (UP.p.is_private) {
+		ui_icon(IC_LOCK, TOP_W / 2 - 9, y + 4, 18, COL_DIM);
+		ui_text(TOP_W / 2, y + 28, _("Este perfil es privado"), SZ_BODY, COL_DIM, AL_CENTER, 0);
+		y += 50;
+	}
+	for (int i = 0; i < UP.p.nshow; i++) {
+		const Showcase *s = &UP.p.show[i];
+		float h = draw_showcase(s, y, false);
+		if (y < SCR_H && y + h > 18) draw_showcase(s, y, true);
+		y += h + 8;
+	}
+	if (UP.p.nother) {
+		snprintf(t, sizeof t, UP.p.nother == 1 ? _("Tiene %d vitrina más que solo se puede ver en Steam (Y)")
+			: _("Tiene %d vitrinas más que solo se pueden ver en Steam (Y)"), UP.p.nother);
+		ui_text(TOP_W / 2, y + 2, t, SZ_TINY, COL_DIM, AL_CENTER, TOP_W - 24);
+		y += 20;
+	}
+	if (user_loading()) {
+		ui_spinner(TOP_W / 2, y + 14, 6, COL_DIM);
+		y += 30;
+	}
+	UP.content = y + UP.scroll - 18;
+	ui_scissor_off();
+}
+
+static const Box B_UGAME = {12, 120, 296, 30};
+static const Box B_UQR = {12, 156, 296, 30};
+
+static bool user_playing(void)
+{
+	return UP.has_person && UP.person.state > 0 && UP.person.game;
+}
+
+static void draw_user_bottom(void)
+{
+	fx_bar(0, 0, BOT_W, LIST_Y, true);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_icon(IC_USER, 28, 6, 12, COL_ACC);
+	ui_text(46, 5, user_is_me() ? _("Tu perfil") : _("Perfil"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 60);
+	char name[64], st[112];
+	u32 col;
+	user_name(name, sizeof name);
+	ui_text(BOT_W / 2, 40, name[0] ? name : "…", SZ_LARGE, COL_WHITE, AL_CENTER, 300);
+	user_status(st, sizeof st, &col);
+	if (st[0]) ui_text(BOT_W / 2, 64, st, SZ_SMALL, col, AL_CENTER, 300);
+	if (!user_is_me() && UP.id) {
+		char code[48];
+		snprintf(code, sizeof code, _("Código de amigo: %lu"), (unsigned long)(UP.id - 76561197960265728ULL));
+		ui_text(BOT_W / 2, 84, code, SZ_TINY, COL_DIM, AL_CENTER, 300);
+	}
+	if (user_playing())
+		draw_button_k(&B_UGAME, "X", false, IC_PAD, _("Ver el juego"), C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), COL_WHITE, 1, S.pressed == BT_UGAME);
+	draw_button_k(&B_UQR, "Y", false, IC_PHONE, UP.qr ? _("Volver al perfil") : _("Ver en Steam"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_UQR);
+	static const char *h[] = {"↑↓", "Desplazar", "Y", "Ver en Steam", "B", "Volver"};
+	draw_hints(h, 3);
+}
+
+static void open_user(u64 id, const SteamPerson *person)
+{
+	UP.back = S.scene == SC_USER ? UP.back : S.scene;
+	user_load(id);
+	UP.has_person = person != NULL;
+	if (person) UP.person = *person;
+	UP.scroll = UP.scroll_t = 0;
+	UP.qr = false;
+	go_scene(SC_USER, 1);
+}
+
+static void input_user(u32 kd, u32 kh, u32 ku, touchPosition *tp)
+{
+	if ((kd & KEY_B) || ((kd & KEY_TOUCH) && tp->py < LIST_Y && tp->px < 120)) {
+		if (UP.qr) UP.qr = false;
+		else go_scene(UP.back, -1);
+		return;
+	}
+	int ids[2] = {BT_UQR, BT_UGAME};
+	int b = press_update(kd, kh, ku, tp, ids, user_playing() ? 2 : 1);
+	if (kd & KEY_Y) b = BT_UQR;
+	if ((kd & KEY_X) && user_playing()) b = BT_UGAME;
+	if (b == BT_UQR) UP.qr = !UP.qr;
+	if (b == BT_UGAME) {
+		open_game(UP.person.game, true);
+		return;
+	}
+	float max = UP.content - (SCR_H - 18);
+	if (max < 0) max = 0;
+	if (kh & KEY_DOWN) UP.scroll_t += 260 * g_dt;
+	if (kh & KEY_UP) UP.scroll_t -= 260 * g_dt;
+	UP.scroll_t = clampf(UP.scroll_t, 0, max);
 }
 
 // ---------------------------------------------------------------------------- Elegir cuenta
@@ -4409,6 +4893,7 @@ static void menu_choose(int item)
 		break;
 	case MI_PROFILE:
 		S.pfocus = 0;
+		user_load(auth_info()->steamid);   // tu fondo y tu marco
 		go_scene(SC_PROFILE, 1);
 		if (!tabs[TAB_LIBRARY].started) tab_more(TAB_LIBRARY);
 		if (!tabs[TAB_WISHLIST].started) tab_more(TAB_WISHLIST);
@@ -5808,6 +6293,9 @@ static const Box *button_box(int id)
 	case BT_CVV: return &B_CVV;
 	case BT_PAYGO: return &B_PAYGO;
 	case BT_DEMO: return &B_DEMO;
+	case BT_UGAME: return &B_UGAME;
+	case BT_UQR: return &B_UQR;
+	case BT_PVIEW: return &B_PVIEW;
 	}
 	return NULL;
 }
@@ -6353,6 +6841,7 @@ int main(int argc, char **argv)
 		case SC_FRIENDS: input_friends(kd, kh, &tp); break;
 		case SC_ACCOUNTS: input_accounts(kd, kh, &tp); break;
 		case SC_SETTINGS: input_settings(kd, kh, &tp); break;
+		case SC_USER: input_user(kd, kh, ku, &tp); break;
 		case SC_PAY: input_pay(kd, kh, ku, &tp, dt); break;
 		}
 		auth_update();
@@ -6392,6 +6881,7 @@ int main(int argc, char **argv)
 
 		InfoEnt *ge = S.scene != SC_STORE ? info_get(S.app, false) : NULL;
 		game_poll(ge && ge->done ? &ge->info : NULL);
+		user_poll();
 
 		// Desplazamientos suaves
 		if (!CUR->finger) CUR->scroll = approach(CUR->scroll, CUR->scroll_target, 18);
@@ -6408,6 +6898,7 @@ int main(int argc, char **argv)
 		price_apply();
 		S.sub_x = approach(S.sub_x, S.home_sub, 16);
 		S.oscroll = approach(S.oscroll, S.oscroll_t, 18);
+		UP.scroll = approach(UP.scroll, UP.scroll_t, 18);
 		// La píldora primero llega a la lupa y solo entonces se estira
 		bool at_lupa = fabsf(S.tab_x - TAB_SEARCH) < 0.03f;
 		S.search_x = approach(S.search_x, S.tab == TAB_SEARCH && S.search_focus && at_lupa ? 1 : 0, 14);
@@ -6460,12 +6951,13 @@ int main(int argc, char **argv)
 		case SC_FRIENDS: draw_friends_top(); break;
 		case SC_ACCOUNTS: draw_accounts_top(); break;
 		case SC_SETTINGS: draw_settings_top(); break;
+		case SC_USER: draw_user_top(); break;
 		case SC_PAY: draw_pay_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS || S.scene == SC_USER)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -6488,6 +6980,7 @@ int main(int argc, char **argv)
 		case SC_FRIENDS: draw_friends_bottom(); break;
 		case SC_ACCOUNTS: draw_accounts_bottom(); break;
 		case SC_SETTINGS: draw_settings_bottom(); break;
+		case SC_USER: draw_user_bottom(); break;
 		case SC_PAY: draw_pay_bottom(); break;
 		}
 		C2D_ViewReset();

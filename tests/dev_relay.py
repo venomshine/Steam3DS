@@ -31,7 +31,8 @@ PORT = 8099
 ALLOWED = ("store.steampowered.com", "api.steampowered.com", "shared.akamai.steamstatic.com",
            "shared.fastly.steamstatic.com", "cdn.akamai.steamstatic.com", "steamcdn-a.akamaihd.net",
            "avatars.steamstatic.com", "avatars.akamai.steamstatic.com",
-           "login.steampowered.com", "checkout.steampowered.com", "steamcommunity.com", "help.steampowered.com")
+           "login.steampowered.com", "checkout.steampowered.com", "steamcommunity.com", "help.steampowered.com",
+           "images.steamusercontent.com", "avatars.fastly.steamstatic.com")
 CACHE = None
 
 
@@ -50,6 +51,12 @@ def fetch(method, url, data=None):
             status, headers, body = r.status, r.headers.items(), r.read()
     except urllib.error.HTTPError as e:
         status, headers, body = e.code, e.headers.items(), e.read()
+    # La comunidad da 429 a urllib desde la nube (a curl no): se repite con curl
+    if status == 429 and method == "GET" and "steamcommunity.com/" in url:
+        import subprocess
+        out = subprocess.run(["curl", "-s", "-w", "\n%{http_code}", url], capture_output=True, timeout=30).stdout
+        body, _, code = out.rpartition(b"\n")
+        status, headers = int(code or 0), [("Content-Type", "text/html; charset=UTF-8")]
     headers = [(k, v) for k, v in headers if k.lower() in ("content-type", "set-cookie")]
     # La nube sale por EE. UU.: RELAY_COUNTRY=ES simula la cookie de otro país
     cc = os.environ.get("RELAY_COUNTRY")
@@ -80,6 +87,9 @@ def fake_jwt(kind, aud=None):
 
 
 FRIENDS = [76561190000000101, 76561190000000102, 76561190000000103]
+# xPaw (fondo y marco), St4ck (muchas vitrinas), Robin Walker (juego favorito) y Tfue (ilustraciones)
+PROFILE_AS = {FAKE_ID: 76561197972494985, 76561190000000101: 76561198023414915, 76561190000000102: 76561197960435530,
+              76561190000000103: 76561198260200125}
 NAMES = {FAKE_ID: "VENOMSHiNE (prueba)", 76561190000000101: "Kenji", 76561190000000102: "Lucía", 76561190000000103: "Marco"}
 OWNED = [(1091500, "Cyberpunk 2077", 6120, 3), (381210, "Dead by Daylight", 2410, 1), (1145360, "Hades", 3900, 20),
          (292030, "The Witcher 3: Wild Hunt", 9300, 60), (413150, "Stardew Valley", 5200, 9), (730, "Counter-Strike 2", 12000, 2),
@@ -497,6 +507,10 @@ class Relay(BaseHTTPRequestHandler):
             self.end_headers()
             sys.stderr.write("405 %s %s (solo %s)\n" % (method, path, only))
             return
+        # Los perfiles de las cuentas simuladas son perfiles públicos de verdad, muy personalizados
+        if FAKE and ("GetProfileItemsEquipped" in path or "GetProfileCustomization" in path or path.startswith("profiles/")):
+            for fid, real in PROFILE_AS.items():
+                url = url.replace(str(fid), str(real))
         fake, extra = None, []
         if FAKE and method == "POST":
             fake = fake_post(host, path, self.body)

@@ -30,6 +30,10 @@ static Lane lanes[LANE_COUNT];
 static volatile bool quitting;
 static u32 *soc_buf;
 static volatile bool soc_ready;
+// ¿Hay Wi-Fi con IP? Lo mira el hilo del registro: preguntárselo al servicio de red desde la
+// interfaz la dejaba esperando detrás de las descargas (el servicio atiende de una en una, y una
+// conexión nueva lo ocupa hasta un segundo), y se notaba como tirones al cargar fotos
+static volatile bool wifi_up;
 static LightLock soc_lock;
 static LightLock log_lock;
 static LightLock ref_lock;
@@ -67,7 +71,8 @@ static void log_flush(void)
 static void log_main(void *arg)
 {
 	while (!quitting) {
-		LightEvent_WaitTimeout(&log_wake, 700000000LL);
+		LightEvent_WaitTimeout(&log_wake, 500000000LL);
+		wifi_up = soc_ready && gethostid() != 0;
 		log_flush();
 	}
 	log_flush();
@@ -127,7 +132,7 @@ static bool soc_try_init(void)
 
 bool net_wifi_ok(void)
 {
-	return soc_ready && gethostid() != 0;
+	return wifi_up;
 }
 
 const char *net_status_text(void)
@@ -143,6 +148,7 @@ static bool wait_network(Req *r)
 		if (quitting || r->cancel) return false;
 		if (soc_ready || soc_try_init()) {
 			if (gethostid() != 0) {
+				wifi_up = true;
 				status_text = "";
 				return true;
 			}

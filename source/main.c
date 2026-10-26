@@ -3284,13 +3284,21 @@ static const Box B_PLOGOUT = {163, 180, 145, 30};
 
 static bool draw_user_bg(float dim);
 static void draw_user_avatar(float x, float y, float sz);
+static bool user_loaded_is(u64 id);
 
 static void draw_profile_top(void)
 {
 	const AuthInfo *ai = auth_info();
-	// El fondo y el marco que llevas puestos en Steam
-	if (!draw_user_bg(0.62f)) ui_vgrad(0, 18, TOP_W, 96, C2D_Color32(0x2a, 0x47, 0x5e, 0xc0), C2D_Color32(0x2a, 0x47, 0x5e, 0x00));
-	draw_user_avatar(18, 36, 72);
+	// El fondo y el marco que llevas puestos en Steam (solo si lo cargado es tu perfil)
+	bool mine = user_loaded_is(ai->steamid);
+	if (!mine || !draw_user_bg(0.62f)) ui_vgrad(0, 18, TOP_W, 96, C2D_Color32(0x2a, 0x47, 0x5e, 0xc0), C2D_Color32(0x2a, 0x47, 0x5e, 0x00));
+	if (mine) draw_user_avatar(18, 36, 72);
+	else {
+		const Pic *p = ai->avatar[0] ? img_get(ai->avatar, 64) : NULL;
+		ui_rect(16, 34, 76, 76, C2D_Color32(0xff, 0xff, 0xff, 0x30));
+		if (p) img_draw_cover(p, 18, 36, 72, 72, 0.5f);
+		else ui_rect(18, 36, 72, 72, COL_PANEL);
+	}
 	ui_text(108, 38, ai->persona[0] ? ai->persona : ai->account, SZ_TITLE, COL_WHITE, AL_LEFT, TOP_W - 120);
 	if (ai->level) {
 		ui_circle(122, 82, 12, C2D_Color32(0x9b, 0x9b, 0x9b, 0xff));
@@ -4255,6 +4263,11 @@ static void user_reset(void)
 	Scene back = UP.back;
 	memset(&UP, 0, sizeof UP);
 	UP.back = back;
+}
+
+static bool user_loaded_is(u64 id)
+{
+	return UP.id == id;
 }
 
 static bool user_is_me(void)
@@ -6975,6 +6988,8 @@ int main(int argc, char **argv)
 
 		InfoEnt *ge = S.scene != SC_STORE ? info_get(S.app, false) : NULL;
 		game_poll(ge && ge->done ? &ge->info : NULL);
+		// Tu cuenta enseña siempre tu fondo y tu marco (aunque vengas del perfil de un amigo)
+		if (S.scene == SC_PROFILE && auth_logged() && UP.id != auth_info()->steamid) user_load(auth_info()->steamid);
 		user_poll();
 
 		// Desplazamientos suaves

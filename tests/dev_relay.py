@@ -247,6 +247,21 @@ def fake_post_api(path, body):
         return {"response": {}}
     if path.endswith("RevokeRefreshToken/v1/"):
         return {"response": {}}
+    if path.endswith("GetTopAchievementsForGames/v1/") or path.endswith("GetAchievementsProgress/v1/"):
+        # Los logros del juego son los de verdad; de cada tres, la cuenta simulada tiene uno
+        inp = json.loads(form.get("input_json", "{}"))
+        appid = int((inp.get("appids") or [0])[0])
+        st, _, b = fetch("GET", "https://api.steampowered.com/IPlayerService/GetGameAchievements/v1/?appid=%d&language=%s"
+                         % (appid, inp.get("language", "english")))
+        ach = json.loads(b).get("response", {}).get("achievements", []) if st == 200 else []
+        mine = ach[::3] if appid in [a for a, *_ in OWNED] else []
+        if path.endswith("GetAchievementsProgress/v1/"):
+            return {"response": {"achievement_progress": [{"appid": appid, "unlocked": len(mine), "total": len(ach),
+                    "percentage": 100.0 * len(mine) / len(ach) if ach else 0, "all_unlocked": bool(ach) and len(mine) == len(ach)}]}}
+        return {"response": {"games": [{"appid": appid, "total_achievements": len(ach), "achievements": [
+            {"statid": i, "bit": 0, "name": a["localized_name"], "desc": a["localized_desc"], "icon": a["icon"],
+             "icon_gray": a["icon_gray"], "hidden": a["hidden"], "player_percent_unlocked": a["player_percent_unlocked"]}
+            for i, a in enumerate(mine)]}]}}
     if path.endswith("MarkNotificationsRead/v1/"):
         for n in NOTIFS:
             n["read"] = True

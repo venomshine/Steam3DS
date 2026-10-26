@@ -28,7 +28,7 @@ enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
 enum { TAB_LIBRARY = TAB_COUNT, TAB_WISHLIST, TAB_CART, TAB_H0, TAB_ALL = TAB_H0 + 4 };
-enum { SEC_SUMMARY, SEC_REQS, SEC_REVIEWS, SEC_EXTRAS, SEC_SIMILAR, SEC_COUNT };
+enum { SEC_SUMMARY, SEC_REQS, SEC_REVIEWS, SEC_ACH, SEC_EXTRAS, SEC_SIMILAR, SEC_COUNT };
 
 #define ROW_H      29
 #define LIST_Y     24
@@ -88,6 +88,12 @@ static struct {
 	float rscroll;
 	RowList dlc, similar;
 	u32 dlc_for, similar_for;
+	// Logros: los del juego y, si es tuyo, cuáles tienes
+	Achievement *ach;
+	int nach, ach_mine;          // ach_mine: los que tienes (-1 si no se sabe)
+	u32 ach_for;
+	Req *ach_req, *ach_mine_req;
+	char ach_err[128];
 	int lsel;
 	float lscroll;
 
@@ -2211,6 +2217,66 @@ static void reviews_more(void)
 	S.rreq = steam_req_reviews(S.app, S.rcursor);
 }
 
+static void notif_when(u32 t, char *out, size_t sz);
+
+static void ach_reset(void)
+{
+	free(S.ach);
+	S.ach = NULL;
+	S.nach = 0;
+	S.ach_mine = -1;
+	S.ach_for = 0;
+	S.ach_err[0] = 0;
+	if (S.ach_req) net_release(S.ach_req);
+	if (S.ach_mine_req) net_release(S.ach_mine_req);
+	S.ach_req = S.ach_mine_req = NULL;
+}
+
+// Como en Steam: primero los que tienes y luego los demás, de más comunes a más raros
+static int ach_cmp(const void *x, const void *y)
+{
+	const Achievement *a = x, *b = y;
+	if (a->done != b->done) return a->done ? -1 : 1;
+	return a->pct < b->pct ? 1 : a->pct > b->pct ? -1 : 0;
+}
+
+static void ach_poll(const AppInfo *a)
+{
+	if (S.ach_req && S.ach_req->state >= REQ_DONE) {
+		if (S.ach_req->state == REQ_DONE) {
+			S.nach = steam_parse_achievements(S.ach_req->data, &S.ach);
+			if (S.nach < 0) {
+				S.nach = 0;
+				snprintf(S.ach_err, sizeof S.ach_err, "%s", _("No se pudieron cargar los logros"));
+			}
+			netlog("logros %lu: %d", (unsigned long)a->appid, S.nach);
+			// Los tuyos solo se piden si el juego está en tu biblioteca
+			if (S.nach > 0 && auth_logged() && owned_app(a->appid))
+				S.ach_mine_req = steam_req_my_achievements(a->appid, auth_info()->steamid, auth_token());
+			qsort(S.ach, S.nach, sizeof *S.ach, ach_cmp);
+		} else {
+			snprintf(S.ach_err, sizeof S.ach_err, "%s", S.ach_req->err);
+		}
+		net_release(S.ach_req);
+		S.ach_req = NULL;
+	}
+	if (S.ach_mine_req && S.ach_mine_req->state >= REQ_DONE) {
+		if (S.ach_mine_req->state == REQ_DONE) {
+			int n = steam_mark_unlocked(S.ach_mine_req->data, S.ach, S.nach);
+			netlog("logros %lu desbloqueados: %d", (unsigned long)a->appid, n);
+			if (n >= 0) {
+				S.ach_mine = n;
+				qsort(S.ach, S.nach, sizeof *S.ach, ach_cmp);
+				S.lsel = 0;
+			}
+		} else {
+			netlog("logros %lu desbloqueados: %s", (unsigned long)a->appid, S.ach_mine_req->err);
+		}
+		net_release(S.ach_mine_req);
+		S.ach_mine_req = NULL;
+	}
+}
+
 static void game_poll(const AppInfo *a)
 {
 	friends_poll();
@@ -2231,6 +2297,12 @@ static void game_poll(const AppInfo *a)
 	}
 	if (!a) return;
 	if (S.sec == SEC_REVIEWS && S.nreviews == 0 && !S.rend) reviews_more();
+	if (S.sec == SEC_ACH && S.ach_for != a->appid) {
+		ach_reset();
+		S.ach_for = a->appid;
+		S.ach_req = steam_req_achievements(a->appid);
+	}
+	ach_poll(a);
 	if (S.sec == SEC_EXTRAS && S.dlc_for != a->appid) {
 		rowlist_free(&S.dlc);
 		S.dlc_for = a->appid;
@@ -2513,6 +2585,115 @@ static void draw_list_top(const char *title, const RowList *l, const char *empty
 	ui_scissor_off();
 }
 
+#define ACH_RH 23
+static float ach_top = 120;   // donde empieza la lista (más arriba si no hay progreso ni actividad que enseñar)
+
+static void ach_icon_url(const AppInfo *a, const Achievement *x, char *out, size_t n)
+{
+	snprintf(out, n, "https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/%lu/%s",
+		(unsigned long)a->appid, x->done || S.ach_mine < 0 ? x->icon : x->icon_gray);
+}
+
+static void draw_ach_icon(const AppInfo *a, const Achievement *x, float px, float py, float sz)
+{
+	char url[200];
+	ach_icon_url(a, x, url, sizeof url);
+	const Pic *p = img_get(url, 64);
+	if (p) img_draw_fit(p, px, py, sz, sz);
+	else {
+		ui_rrect(px, py, sz, sz, 3, col_alpha(COL_WHITE, 0.06f));
+		ui_icon(IC_TROPHY, px + sz * 0.25f, py + sz * 0.25f, sz * 0.5f, COL_DIM);
+	}
+}
+
+static bool ach_secret(const Achievement *x)
+{
+	return x->hidden && !x->done;
+}
+
+// Logros: arriba tu progreso y tu actividad, el logro elegido en grande y debajo la lista
+static void draw_ach_top(const AppInfo *a)
+{
+	char t[96];
+	ui_text(12, 24, _("LOGROS"), SZ_SMALL, COL_ACC, AL_LEFT, 0);
+	if (S.ach_for != a->appid || S.ach_req) {
+		draw_net_wait(TOP_W / 2, 125, NULL);
+		return;
+	}
+	if (S.nach == 0) {
+		ui_text(TOP_W / 2, 120, S.ach_err[0] ? S.ach_err : _("Este juego no tiene logros de Steam"), SZ_BODY, COL_DIM, AL_CENTER, 380);
+		return;
+	}
+	if (S.ach_mine >= 0) {
+		snprintf(t, sizeof t, _("%d de %d desbloqueados (%d %%)"), S.ach_mine, S.nach, S.ach_mine * 100 / S.nach);
+		ui_text(TOP_W - 12, 24, t, SZ_SMALL, COL_TXT, AL_RIGHT, 0);
+		ui_rrect(12, 40, TOP_W - 24, 4, 2, col_alpha(COL_WHITE, 0.10f));
+		ui_rrect(12, 40, (TOP_W - 24) * S.ach_mine / (float)S.nach, 4, 2, COL_ACC);
+	} else {
+		snprintf(t, sizeof t, S.nach == 1 ? _("%d logro") : _("%d logros"), S.nach);
+		ui_text(TOP_W - 12, 24, t, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+		if (S.ach_mine_req) ui_spinner(TOP_W - 24 - ui_text_w(t, SZ_SMALL), 31, 5, COL_DIM);
+	}
+	// Tu actividad: horas y última vez (de la biblioteca)
+	const StoreRow *own = auth_logged() ? owned_row(a->appid) : NULL;
+	bool act = own && own->minutes;
+	if (act) {
+		char hrs[32], when[40];
+		if (own->minutes >= 60) snprintf(hrs, sizeof hrs, _("%d h jugadas"), (own->minutes + 30) / 60);
+		else snprintf(hrs, sizeof hrs, _("%d min jugados"), own->minutes);
+		if (own->last_played) {
+			notif_when(own->last_played, when, sizeof when);
+			snprintf(t, sizeof t, _("%s · Jugado por última vez %s"), hrs, when);
+		} else {
+			snprintf(t, sizeof t, "%s", hrs);
+		}
+		ui_icon(IC_PAD, 12, 49, 11, COL_DIM);
+		ui_text(27, 48, t, SZ_TINY, COL_DIM, AL_LEFT, TOP_W - 40);
+	}
+
+	// El elegido, en grande
+	int sel = S.lsel < S.nach ? S.lsel : 0;
+	const Achievement *x = &S.ach[sel];
+	float cy = act || S.ach_mine >= 0 ? 64 : 42;
+	ach_top = cy + 56;
+	ui_rrect(10, cy, TOP_W - 20, 50, 8, col_alpha(COL_WHITE, 0.06f));
+	draw_ach_icon(a, x, 16, cy + 5, 40);
+	float rx = TOP_W - 18;
+	if (x->done) {
+		ui_icon(IC_CHECK, rx - ui_text_w(_("Desbloqueado"), SZ_TINY) - 15, cy + 6, 11, COL_LIME);
+		ui_text(rx, cy + 5, _("Desbloqueado"), SZ_TINY, COL_LIME, AL_RIGHT, 0);
+	}
+	float nw = x->done ? TOP_W - 66 - 26 - ui_text_w(_("Desbloqueado"), SZ_TINY) - 14 : TOP_W - 84;
+	ui_text(64, cy + 4, ach_secret(x) ? _("Logro oculto") : x->name, SZ_SMALL, COL_WHITE, AL_LEFT, nw);
+	ui_text_wrap(64, cy + 20, TOP_W - 84, ach_secret(x) ? _("Los detalles de este logro se revelarán cuando lo desbloquees.") : x->desc,
+		SZ_TINY, COL_TXT, 1, 12);
+	snprintf(t, sizeof t, _("Lo tiene el %.1f %% de los jugadores"), x->pct);
+	ui_text(64, cy + 33, t, SZ_TINY, x->pct < 10 ? C2D_Color32(0xe8, 0xb8, 0x4a, 0xff) : COL_DIM, AL_LEFT, 0);
+
+	// La lista
+	float top = ach_top, bottom = SCR_H - 4, rh = ACH_RH;
+	ui_scissor(GFX_TOP, 0, top, TOP_W, bottom - top);
+	float hy = top + S.lsel_y * rh - S.lscroll;
+	ui_rrect(10, hy, TOP_W - 20, rh - 1, 6, col_alpha(COL_WHITE, 0.075f + 0.035f * sinf(g_time * 2.4f)));
+	ui_rrect(10, hy + 3, 2, rh - 7, 1, col_alpha(COL_ACC, 0.8f));
+	for (int i = 0; i < S.nach; i++) {
+		float y = top + i * rh - S.lscroll;
+		if (y + rh < top || y > bottom) continue;
+		const Achievement *r = &S.ach[i];
+		bool on = i == S.lsel;
+		draw_ach_icon(a, r, 18, y + 2, rh - 5);
+		u32 nc = r->done || S.ach_mine < 0 ? (on ? COL_WHITE : COL_TXT) : COL_DIM;
+		ui_text(44, y + 4, ach_secret(r) ? _("Logro oculto") : r->name, SZ_SMALL, nc, AL_LEFT, TOP_W - 44 - 80);
+		if (r->done) {
+			ui_icon(IC_CHECK, TOP_W - 30, y + 6, 11, COL_LIME);
+		} else {
+			snprintf(t, sizeof t, "%.1f %%", r->pct);
+			ui_text(TOP_W - 18, y + 5, t, SZ_TINY, COL_DIM, AL_RIGHT, 0);
+		}
+	}
+	ui_scissor_off();
+}
+
 static void draw_game_top(void)
 {
 	InfoEnt *e = info_get(S.app, false);
@@ -2546,6 +2727,7 @@ static void draw_game_top(void)
 	case SEC_SUMMARY: draw_summary_top(a); break;
 	case SEC_REQS: draw_reqs_top(a); break;
 	case SEC_REVIEWS: draw_reviews_top(a); break;
+	case SEC_ACH: draw_ach_top(a); break;
 	case SEC_EXTRAS: {
 		if (a->fullgame) {
 			draw_list_top(a->is_demo ? _("JUEGO COMPLETO") : _("CONTENIDO NECESARIO"), &S.dlc, "");
@@ -2679,7 +2861,7 @@ static void draw_game_bottom(void)
 
 	// Selector de apartados
 	fx_glass(B_SEG.x, B_SEG.y, B_SEG.w, B_SEG.h, B_SEG.h / 2, 1, 0);
-	static const char *secs[] = {"Resumen", "Requisitos", "Opiniones", "Extras", "Similares"};
+	static const char *secs[] = {"Resumen", "Requisitos", "Opiniones", "Logros", "Extras", "Similares"};
 	float sw = (B_SEG.w - 4) / SEC_COUNT;
 	// La píldora del apartado se desliza hasta su sitio
 	{
@@ -2689,7 +2871,9 @@ static void draw_game_bottom(void)
 	for (int i = 0; i < SEC_COUNT; i++) {
 		float x = B_SEG.x + 2 + i * sw;
 		float on = 1 - clampf(fabsf(S.seg_x - i), 0, 1);
-		ui_text(x + sw / 2, B_SEG.y + (B_SEG.h - ui_line_h(SZ_TINY)) / 2 + 1, _(secs[i]), SZ_TINY, col_lerp(COL_DIM, COL_WHITE, on), AL_CENTER, sw - 4);
+		// Con seis apartados algún nombre no cabe: se encoge un poco en vez de cortarse
+		float tw = ui_text_w(_(secs[i]), SZ_TINY), tsz = tw > sw - 6 ? SZ_TINY * (sw - 6) / tw : SZ_TINY;
+		ui_text(x + sw / 2, B_SEG.y + (B_SEG.h - ui_line_h(tsz)) / 2 + 1, _(secs[i]), tsz, col_lerp(COL_DIM, COL_WHITE, on), AL_CENTER, 0);
 	}
 
 	if (a) {
@@ -2779,6 +2963,9 @@ static void draw_game_bottom(void)
 	} else if (S.sec >= SEC_EXTRAS) {
 		static const char *h[] = {"↑↓", "Elegir", "A", "Abrir", "L R", "Apartado", "B", "Volver", "START", "Menú"};
 		draw_hints(h, 5);
+	} else if (S.sec == SEC_ACH) {
+		static const char *h[] = {"↑↓", "Elegir", "L R", "Apartado", "B", "Volver", "START", "Menú"};
+		draw_hints(h, 4);
 	} else if (S.sec == SEC_REVIEWS) {
 		static const char *h[] = {"↑↓", "Leer", "L R", "Apartado", "B", "Volver", "START", "Menú"};
 		draw_hints(h, 4);
@@ -5770,6 +5957,10 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		if (key_repeat(kd, kh, KEY_UP) && S.lsel > 0) S.lsel--;
 		if ((kd & KEY_A) && S.lsel < l->count) { open_game(l->rows[S.lsel].appid, true); return; }
 	}
+	if (S.sec == SEC_ACH) {
+		if (key_repeat(kd, kh, KEY_DOWN) && S.lsel + 1 < S.nach) S.lsel++;
+		if (key_repeat(kd, kh, KEY_UP) && S.lsel > 0) S.lsel--;
+	}
 	if (S.sec == SEC_REVIEWS) {
 		if (key_repeat(kd, kh, KEY_DOWN) && S.rsel + 1 < S.nreviews) S.rsel++;
 		if (key_repeat(kd, kh, KEY_UP) && S.rsel > 0) S.rsel--;
@@ -6226,6 +6417,13 @@ int main(int argc, char **argv)
 		{
 			RowList *l = game_list();
 			float rh = 22, vis = SCR_H - 4 - 42;
+			if (S.sec == SEC_ACH) {
+				l = NULL;
+				float y = S.lsel * ACH_RH, t = S.lscroll, avis = SCR_H - 4 - ach_top;
+				if (y < t) t = y;
+				if (y + ACH_RH > t + avis) t = y + ACH_RH - avis;
+				S.lscroll = approach(S.lscroll, t, 18);
+			}
 			if (l) {
 				float y = S.lsel * rh, t = S.lscroll;
 				if (y < t) t = y;

@@ -28,9 +28,8 @@ SIZE = 112                      # cada fotograma (en pantalla se ve a ~100 px)
 FRAMES = 24                     # 72° / 3°
 SWING = (22.0, 68.0)            # extremos del balanceo: ángulo de la luz sobre la horizontal (arriba a la derecha)
 # Bombillo flojo y cálido, válvula muy sucia (mugre negra)
-# Pintada de esmalte azul brillante (como la roja de la intro de Valve, pero azul) y con el cubo
-# de hierro oscuro
-LOOK = dict(dirt=1.0, amb=0.24, kd=1.05, tint=(1.0, 0.92, 0.80), ks=0.95, paint=True)
+# (paint=True la pinta de esmalte azul con el cubo de hierro: probado y descartado, quedaba falso)
+LOOK = dict(dirt=1.0, amb=0.24, kd=1.05, tint=(1.0, 0.92, 0.80), ks=0.55)
 
 
 def light_dir(th):

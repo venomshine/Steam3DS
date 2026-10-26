@@ -1733,8 +1733,9 @@ bool steam_parse_profile_items(const char *json, SteamProfile *p)
 	if (resp) {
 		copy(p->bg, sizeof p->bg, jstr(cJSON_GetObjectItemCaseSensitive(resp, "profile_background"), "image_large"));
 		const cJSON *f = cJSON_GetObjectItemCaseSensitive(resp, "avatar_frame");
-		const char *fr = jstr(f, "image_small");
-		copy(p->frame, sizeof p->frame, fr ? fr : jstr(f, "image_large"));
+		// image_large es la imagen fija; image_small suele ser la animada (APNG de varios MB)
+		const char *fr = jstr(f, "image_large");
+		copy(p->frame, sizeof p->frame, fr ? fr : jstr(f, "image_small"));
 		p->items_ok = true;
 	}
 	cJSON_Delete(root);
@@ -1909,6 +1910,9 @@ bool steam_parse_profile_xml(const char *xml, SteamProfile *p)
 	xml_tag(xml, end, "realname", p->realname, sizeof p->realname);
 	xml_tag(xml, end, "location", p->location, sizeof p->location);
 	xml_tag(xml, end, "avatarFull", p->avatar, sizeof p->avatar);
+	// Mismo archivo en el CDN de Akamai (el que se usa en el resto de la app)
+	char *fa = strstr(p->avatar, "avatars.fastly.");
+	if (fa) memcpy(fa, "avatars.akamai.", 15);
 	xml_tag(xml, end, "onlineState", p->state, sizeof p->state);
 	if (xml_tag(xml, end, "stateMessage", tmp, sizeof tmp)) html_to_lines(tmp, p->state_msg, sizeof p->state_msg);
 	if (xml_tag(xml, end, "memberSince", tmp, sizeof tmp)) p->since = parse_since(tmp);

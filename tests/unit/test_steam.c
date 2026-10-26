@@ -271,6 +271,9 @@ int main(void) {
 	CHECK(steam_parse_remote_app("{\"response\":{\"apps\":[{\"appid\":570,\"installed\":true}],\"bytes_available\":\"1\"}}", 570) == 1);
 	CHECK(steam_parse_remote_app("{\"response\":{\"apps\":[],\"bytes_available\":\"1\"}}", 570) == 0);
 	CHECK(steam_parse_remote_app("{\"response\":{}}", 570) == -1);
+	// Playtest (related_items, como lo da la tienda)
+	CHECK(steam_parse_playtest("{\"response\":{\"store_items\":[{\"appid\":2518930,\"related_items\":{\"playtests\":[{\"appid\":2528700}]}}]}}", 2518930) == 2528700);
+	CHECK(steam_parse_playtest("{\"response\":{\"store_items\":[{\"appid\":10}]}}", 10) == 0);
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

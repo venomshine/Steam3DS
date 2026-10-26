@@ -288,6 +288,21 @@ void shop_review(u32 appid, const char *name, bool up, const char *text, bool is
 	if (!H.act) push_event(false, -1);
 }
 
+// ---------------------------------------------------------------------------- Playtests
+
+void shop_playtest(u32 appid, const char *name)
+{
+	char ck[1200];
+	if (!auth_web_cookies("store.steampowered.com", ck, sizeof ck)) return;
+	if (!start_action(SH_PLAYTEST, appid, name)) return;
+	char url[96], body[64];
+	snprintf(url, sizeof url, "https://store.steampowered.com/ajaxrequestplaytestaccess/%lu", (unsigned long)appid);
+	snprintf(body, sizeof body, "sessionid=%s", auth_sessionid());
+	H.act = net_request(url, body, ck);
+	memset(ck, 0, sizeof ck);
+	if (!H.act) push_event(false, -1);
+}
+
 // ---------------------------------------------------------------------------- Cada frame
 
 // ¿Salió bien? Steam dice el resultado en la cabecera x-eresult (1 = OK)
@@ -361,6 +376,16 @@ void shop_update(void)
 				push_event(false, code);
 				return;
 			}
+		} else if (H.kind == SH_PLAYTEST) {
+			// {"success":1,"granted":1} (dentro) o granted 0 (apuntado, te avisan por correo)
+			cJSON *root = r->state == REQ_DONE ? cJSON_Parse(r->data) : NULL;
+			const cJSON *sc = cJSON_GetObjectItemCaseSensitive(root, "success");
+			const cJSON *gr = cJSON_GetObjectItemCaseSensitive(root, "granted");
+			ok = r->state == REQ_DONE && r->http == 200 && root && (!sc || cJSON_IsTrue(sc) || (cJSON_IsNumber(sc) && sc->valueint == 1));
+			int granted = cJSON_IsTrue(gr) || (cJSON_IsNumber(gr) && gr->valueint) ? 1 : 0;
+			netlog("cuenta: playtest -> %s, concedido %d (HTTP %ld)", ok ? "ok" : "fallo", granted, r->http);
+			code = ok ? granted : req_code(r);
+			cJSON_Delete(root);
 		} else if (H.kind == SH_REVIEW) {
 			// {"success":true} o {"success":false,"strError":"…"}
 			cJSON *root = r->state == REQ_DONE ? cJSON_Parse(r->data) : NULL;

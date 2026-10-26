@@ -152,7 +152,8 @@ static struct {
 	Req *tags_req;
 	float search_x;              // la píldora se estira sobre las pestañas (0..1)
 	int pfocus;                  // botón elegido con la cruceta en el perfil
-	bool has_demo_btn;           // la ficha tiene el botón de la demo
+	bool has_demo_btn;           // la ficha tiene el botón de la demo (o el del playtest)
+	bool demo_is_pt;             // ese botón es el de pedir acceso al playtest
 	float oscroll, oscroll_t;    // Resumen: desplazamiento del texto (actual y destino)
 	float ocontent;              // alto de todo el Resumen
 } S;
@@ -2300,6 +2301,42 @@ static void myreview_poll(const AppInfo *a)
 	}
 }
 
+// El playtest del juego abierto y los que ya has pedido en esta sesión
+static struct {
+	u32 appid, playtest;
+	Req *req;
+	u32 asked[16];
+	int nasked;
+} PT;
+
+static bool pt_asked(u32 appid)
+{
+	for (int i = 0; i < PT.nasked; i++)
+		if (PT.asked[i] == appid) return true;
+	return false;
+}
+
+static void playtest_poll(const AppInfo *a)
+{
+	if (PT.appid != a->appid) {
+		if (PT.req) net_release(PT.req);
+		PT.req = steam_req_playtest(a->appid);
+		PT.appid = a->appid;
+		PT.playtest = 0;
+	}
+	if (PT.req && PT.req->state >= REQ_DONE) {
+		if (PT.req->state == REQ_DONE) PT.playtest = steam_parse_playtest(PT.req->data, PT.appid);
+		if (PT.playtest) netlog("playtest de %lu: %lu", (unsigned long)PT.appid, (unsigned long)PT.playtest);
+		net_release(PT.req);
+		PT.req = NULL;
+	}
+}
+
+static u32 playtest_for(u32 appid)
+{
+	return PT.appid == appid ? PT.playtest : 0;
+}
+
 static int my_shots_for(u32 appid)
 {
 	return MS.appid == appid ? MS.n : 0;
@@ -2401,6 +2438,7 @@ static void game_poll(const AppInfo *a)
 	ach_poll(a);
 	myshots_poll(a);
 	myreview_poll(a);
+	playtest_poll(a);
 	remote_poll(a);
 	if (S.sec == SEC_EXTRAS && S.dlc_for != a->appid) {
 		rowlist_free(&S.dlc);
@@ -2914,7 +2952,9 @@ static bool has_ignore_btn;
 
 static void game_layout(const AppInfo *a)
 {
-	S.has_demo_btn = auth_logged() && a->demo && !a->is_demo;
+	bool demo = a->demo && !a->is_demo;
+	S.has_demo_btn = auth_logged() && (demo || playtest_for(a->appid));
+	S.demo_is_pt = !demo && playtest_for(a->appid);
 	// Ignorar, como en la tienda: con sesión y si no es tuyo, al lado de instalar en el PC
 	has_ignore_btn = auth_logged() && !owned_app(a->appid);
 	if (S.has_demo_btn) {
@@ -3344,7 +3384,16 @@ static void draw_game_bottom(void)
 		else if (carted) draw_button_k(&B_CART, "Y", false, IC_CART, cl, C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_CART);
 		else draw_button_k(&B_CART, in && !own && !soon ? "Y" : NULL, false, IC_CART, cl, C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), C2D_Color32(0xd2, 0xef, 0xa9, 0xff),
 			in && !own && !soon ? 1 : 0.45f, S.pressed == BT_CART);
-		if (S.has_demo_btn) {
+		if (S.has_demo_btn && S.demo_is_pt) {
+			// El playtest: se pide acceso (a veces entras al momento; si no, te avisan por correo)
+			u32 pt = playtest_for(a->appid);
+			bool in_pt = owned_app(pt), asked = pt_asked(a->appid), busy = shop_busy_with(SH_PLAYTEST, a->appid);
+			const char *pl = in_pt ? _("Ya tienes acceso al playtest") : busy ? _("Solicitando acceso…") : asked ? _("Has solicitado acceso al playtest")
+				: _("Solicitar acceso al playtest");
+			bool on = !in_pt && !asked;
+			draw_button_k(&B_DEMO, on ? "SELECT" : NULL, false, IC_PAD, pl, C2D_Color32(0x8f, 0x6b, 0xd8, 0xff), C2D_Color32(0x5e, 0x45, 0x9c, 0xff),
+				COL_WHITE, on ? 1 : 0.45f, S.pressed == BT_DEMO);
+		} else if (S.has_demo_btn) {
 			// La demo gratis del juego, en el azul claro que usa Steam para «Añadir a la biblioteca»
 			bool demo_own = owned_app(a->demo);
 			bool busy = shop_busy_with(SH_FREE, a->demo);
@@ -6969,6 +7018,11 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	} else if (b == BT_INST) {
 		if (!owned_app(a->appid)) toast(_("La instalación remota requiere tener el juego en tu biblioteca"));
 		else remote_open(a);
+	} else if (b == BT_DEMO && S.demo_is_pt) {
+		if (owned_app(playtest_for(a->appid))) toast(_("Ya tienes acceso al playtest"));
+		else if (pt_asked(a->appid)) toast(_("Ya has solicitado acceso. Steam te avisará por correo cuando te lo den"));
+		else if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
+		else shop_playtest(a->appid, a->name);
 	} else if (b == BT_DEMO) {
 		if (owned_app(a->demo)) toast(_("Ya está en tu biblioteca"));
 		else if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
@@ -7113,6 +7167,19 @@ static void shop_events(void)
 				snprintf(t, sizeof t, "%s", activate_err(ev.code));
 			}
 			break;
+		case SH_PLAYTEST:
+			if (ev.ok) {
+				if (PT.nasked < 16) PT.asked[PT.nasked++] = ev.appid;
+				if (ev.code == 1) {
+					library_changed();
+					snprintf(t, sizeof t, _("Ya tienes acceso al playtest de %s"), ev.what);
+				} else {
+					snprintf(t, sizeof t, _("Te has apuntado al playtest de %s. Steam te avisará por correo"), ev.what);
+				}
+			} else {
+				snprintf(t, sizeof t, _("No se pudo solicitar el acceso: %s"), shop_err(ev.code));
+			}
+			break;
 		case SH_REVIEW:
 			if (ev.ok) {
 				MR.appid = 0;   // se vuelve a pedir para enseñarla tal cual quedó
@@ -7132,7 +7199,7 @@ static void shop_events(void)
 		}
 		static const Icon ic[] = {[SH_CART_ADD] = IC_CART, [SH_CART_REMOVE] = IC_CART, [SH_WISH_ADD] = IC_HEART,
 			[SH_WISH_REMOVE] = IC_HEART, [SH_FREE] = IC_PAD, [SH_IGNORE] = IC_HIDE, [SH_UNIGNORE] = IC_HIDE,
-			[SH_ACTIVATE] = IC_CODE, [SH_WALLET] = IC_COIN, [SH_REVIEW] = IC_CHAT};
+			[SH_ACTIVATE] = IC_CODE, [SH_WALLET] = IC_COIN, [SH_REVIEW] = IC_CHAT, [SH_PLAYTEST] = IC_PAD};
 		toast_icon(t, ic[ev.kind]);
 	}
 }

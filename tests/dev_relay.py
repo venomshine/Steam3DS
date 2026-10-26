@@ -129,6 +129,8 @@ def fake_post(host, path, body):
             WALLET_CENTS[0] += 2000
             return {"success": 1, "detail": 0, "formattednewwalletbalance": "%d,%02d€" % divmod(WALLET_CENTS[0], 100)}, []
         return {"success": 2, "detail": 14}, []
+    if host == "store.steampowered.com" and path.startswith("ajaxrequestplaytestaccess/"):
+        return {"success": 1, "granted": 0}, []
     if host == "store.steampowered.com" and path == "friends/recommendgame":
         raw = body.decode() if isinstance(body, bytes) else (body or "")
         f = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}

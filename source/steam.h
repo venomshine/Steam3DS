@@ -356,3 +356,7 @@ int steam_parse_remote_pcs(const char *json, RemotePC *out, int max);   // -1 si
 Req *steam_req_remote_apps(u64 client, u32 appid, const char *token);
 int steam_parse_remote_app(const char *json, u32 appid);   // 1 instalado, 0 no, -1 no se sabe
 Req *steam_req_remote_install(u64 client, u32 appid, const char *token);
+
+// Playtest del juego (el appid del playtest, 0 si no tiene): lo da la tienda en related_items
+Req *steam_req_playtest(u32 appid);
+u32 steam_parse_playtest(const char *json, u32 appid);

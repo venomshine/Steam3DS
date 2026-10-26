@@ -2203,3 +2203,45 @@ Req *steam_req_remote_install(u64 client, u32 appid, const char *token)
 {
 	return steam_post_service("IClientCommService/InstallClientApp", client_input(client, appid), token);
 }
+
+// ----------------------------------------------------------------------------
+// Playtests
+
+Req *steam_req_playtest(u32 appid)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON *arr = cJSON_AddArrayToObject(in, "ids");
+	cJSON *o = cJSON_CreateObject();
+	cJSON_AddNumberToObject(o, "appid", appid);
+	cJSON_AddItemToArray(arr, o);
+	cJSON_AddItemToObject(in, "context", context());
+	cJSON_AddObjectToObject(in, "data_request");
+	char *js = cJSON_PrintUnformatted(in);
+	char *esc = url_escape(js);
+	size_t n = strlen(esc) + 128;
+	char *url = malloc(n);
+	snprintf(url, n, "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=%s", esc);
+	Req *r = net_get(url, LANE_API);
+	free(url);
+	free(esc);
+	free(js);
+	cJSON_Delete(in);
+	return r;
+}
+
+u32 steam_parse_playtest(const char *json, u32 appid)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	u32 pt = 0;
+	const cJSON *it, *items = resp ? cJSON_GetObjectItemCaseSensitive(resp, "store_items") : NULL;
+	cJSON_ArrayForEach(it, items) {
+		if ((u32)jnum(it, "appid", 0) != appid) continue;
+		const cJSON *rel = cJSON_GetObjectItemCaseSensitive(it, "related_items");
+		const cJSON *p = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(rel, "playtests"), 0);
+		pt = p ? (u32)jnum(p, "appid", 0) : 0;
+		break;
+	}
+	cJSON_Delete(root);
+	return pt;
+}

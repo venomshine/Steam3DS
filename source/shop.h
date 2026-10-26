@@ -6,7 +6,7 @@
 // Acciones con tu cuenta: carrito, deseados y juegos gratis. Una a la vez; la interfaz
 // pregunta cada frame y enseña el resultado con shop_event().
 
-typedef enum { SH_CART_ADD, SH_CART_REMOVE, SH_WISH_ADD, SH_WISH_REMOVE, SH_FREE, SH_IGNORE, SH_UNIGNORE, SH_ACTIVATE, SH_WALLET, SH_REVIEW } ShopKind;
+typedef enum { SH_CART_ADD, SH_CART_REMOVE, SH_WISH_ADD, SH_WISH_REMOVE, SH_FREE, SH_IGNORE, SH_UNIGNORE, SH_ACTIVATE, SH_WALLET, SH_REVIEW, SH_PLAYTEST } ShopKind;
 
 typedef struct {
 	ShopKind kind;
@@ -55,3 +55,7 @@ bool shop_busy_with(ShopKind k, u32 appid);
 // Publicar o cambiar tu reseña (el formulario de la tienda web: friends/recommendgame). Si falla,
 // what lleva el motivo que da Steam
 void shop_review(u32 appid, const char *name, bool up, const char *text, bool is_public);
+
+// Pedir acceso al playtest de un juego (el botón «Solicitar acceso» de la tienda:
+// ajaxrequestplaytestaccess). Si sale bien, code es 1 si ya te lo han dado y 0 si queda pendiente
+void shop_playtest(u32 appid, const char *name);

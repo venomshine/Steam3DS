@@ -22,6 +22,7 @@ typedef struct {
 	LightEvent wake;
 	Thread thread;
 	CURL *curl;
+	CURLM *multi;   // las conexiones abiertas viven aquí (se reutilizan)
 	NetLane lane;
 } Lane;
 
@@ -504,6 +505,30 @@ static void raw_put(const Req *r)
 	LightLock_Unlock(&raw_lock);
 }
 
+// curl_easy_perform espera hasta 1 s a que el sistema avise de que el socket está listo, y la pila
+// de red de la 3DS no avisa al terminar de conectar: cada conexión nueva perdía justo ese segundo
+// (tcp=1.0x en net.log). Llevando el bucle aquí se vuelve a mirar cada 20 ms
+static CURLcode perform(Lane *l, CURL *c)
+{
+	if (!l->multi) l->multi = curl_multi_init();
+	if (!l->multi || curl_multi_add_handle(l->multi, c) != CURLM_OK) return curl_easy_perform(c);
+	CURLcode rc = CURLE_OK;
+	int running = 1;
+	while (running) {
+		if (curl_multi_perform(l->multi, &running) != CURLM_OK) {
+			rc = CURLE_RECV_ERROR;
+			break;
+		}
+		if (running) curl_multi_poll(l->multi, NULL, 0, 20, NULL);
+	}
+	int left;
+	CURLMsg *m;
+	while ((m = curl_multi_info_read(l->multi, &left)))
+		if (m->msg == CURLMSG_DONE && m->easy_handle == c) rc = m->data.result;
+	curl_multi_remove_handle(l->multi, c);
+	return rc;
+}
+
 static void run_req(Lane *l, Req *r)
 {
 	if (r->jpeg && raw_get(r)) {
@@ -534,7 +559,7 @@ static void run_req(Lane *l, Req *r)
 	curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
 	curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 1L);
 	curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 20L);
-	// Abrir conexión cuesta ~1 s de TCP y ~0,6 s de TLS en la consola (net.log): se reutilizan más
+	// Abrir conexión cuesta ~0,6 s de TLS en la consola (net.log): se reutilizan más
 	curl_easy_setopt(c, CURLOPT_MAXAGE_CONN, 120L);
 	curl_easy_setopt(c, CURLOPT_IPRESOLVE, (long)CURL_IPRESOLVE_V4);
 	curl_easy_setopt(c, CURLOPT_TCP_KEEPALIVE, 1L);
@@ -563,7 +588,7 @@ static void run_req(Lane *l, Req *r)
 	}
 
 	u64 t0 = osGetTime();
-	CURLcode rc = curl_easy_perform(c);
+	CURLcode rc = perform(l, c);
 	curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &r->http);
 	double tdns = 0, ttcp = 0, ttls = 0, tfirst = 0;
 	curl_easy_getinfo(c, CURLINFO_NAMELOOKUP_TIME, &tdns);
@@ -626,6 +651,7 @@ static void lane_main(void *arg)
 		net_release(r);
 	}
 	curl_easy_cleanup(l->curl);
+	if (l->multi) curl_multi_cleanup(l->multi);
 }
 
 // Los hilos de red van en otro núcleo para no quitarle tiempo a la interfaz (que va en el 0): el 2

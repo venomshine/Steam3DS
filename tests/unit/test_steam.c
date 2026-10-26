@@ -126,6 +126,14 @@ int main(void) {
 	free(ig);
 	CHECK(steam_parse_userdata_ignored("{\"rgIgnoredApps\":[]}", &ig) == 0);
 	free(ig);
+	// Notificaciones: body_data es un JSON dentro de una cadena
+	SteamNotif nt[4];
+	int unread;
+	CHECK(steam_parse_notifications("{\"response\":{\"notifications\":["
+		"{\"notification_id\":\"123\",\"notification_type\":7,\"body_data\":\"{\\\"appid\\\":367520}\",\"read\":false,\"timestamp\":1790000000},"
+		"{\"notification_id\":\"124\",\"notification_type\":2,\"body_data\":\"{}\",\"read\":true,\"timestamp\":1790000100},"
+		"{\"notification_id\":\"125\",\"notification_type\":9,\"hidden\":true}]}}", nt, 4, &unread) == 2);
+	CHECK(unread == 1 && nt[0].id == 123 && nt[0].type == 7 && nt[0].appid == 367520 && !nt[0].read && nt[1].read);
 	// Las etiquetas populares
 	StoreTag tg[4];
 	CHECK(steam_parse_tags("{\"response\":{\"tags\":[{\"tagid\":492,\"name\":\"Indie\"},{\"tagid\":19,\"name\":\"Acción\"}]}}", tg, 4) == 2);

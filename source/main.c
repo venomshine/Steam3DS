@@ -23,7 +23,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
@@ -805,9 +805,12 @@ static void wish_poll(Tab *t)
 	t->list.end = t->wish_next >= t->nwish;
 }
 
+static void notif_reset(void);
+
 static void account_lists_clear(void)
 {
 	family_reset();
+	notif_reset();
 	for (int ti = TAB_LIBRARY; ti < TAB_H0; ti++) {
 		Tab *t = &tabs[ti];
 		rowlist_free(&t->list);
@@ -1113,6 +1116,8 @@ static void price_apply(void)
 // ============================================================================
 // Dibujo común
 
+static int notif_unread(void);
+
 static void draw_status(const char *user)
 {
 	fx_bar(0, 0, TOP_W, 18, true);
@@ -1138,6 +1143,15 @@ static void draw_status(const char *user)
 	r -= 22 + 8;
 	ui_wifi(r - 7, 14, net_wifi_ok() ? osGetWifiStrength() : -1);
 	r -= 14 + 8;
+	// La campana, con las notificaciones que no has leído
+	int nu = notif_unread();
+	if (nu) {
+		char c[8];
+		snprintf(c, sizeof c, "%d", nu);
+		r -= ui_text(r, ty, c, SZ_SMALL, COL_ACC, AL_RIGHT, 0) + 2;
+		ui_icon(IC_BELL, r - 11, 4, 11, COL_ACC);
+		r -= 11 + 8;
+	}
 	if (user) snprintf(right, sizeof right, "%s · %s", user, clock);
 	else snprintf(right, sizeof right, "%s", clock);
 	ui_text(r, ty, right, SZ_SMALL, COL_DIM, AL_RIGHT, r - (8 + nw + 24));
@@ -2384,6 +2398,13 @@ static void draw_reqs_top(const AppInfo *a)
 	ui_text(x + 6, 27, mac ? _("requisitos del sistema (macOS)") : _("requisitos del sistema (Windows)"), SZ_SMALL, COL_DIM, AL_LEFT, TOP_W - 18 - x);
 	const ReqLine *mn = mac ? a->mmin : a->rmin, *rc = mac ? a->mrec : a->rrec;
 	int nmn = mac ? a->nmmin : a->nmin, nrc = mac ? a->nmrec : a->nrec;
+	if (a->mac) {
+		// La tecla dibujada (no todas las fuentes traen las flechas) y lo que hace
+		const char *l = g_cfg.reqs_mac ? _("Ver los de Windows") : _("Ver los de macOS");
+		float kw = hint_key(0, 0, "↑↓", false), tw = ui_text_w(l, SZ_TINY), x0 = TOP_W - 10 - tw - kw - 4;
+		hint_key(x0, 218, "↑↓", true);
+		ui_text(x0 + kw + 4, 222, l, SZ_TINY, COL_ACC, AL_LEFT, 0);
+	}
 	if (!nmn && !nrc) {
 		ui_text(TOP_W / 2, 110, _("No hay requisitos del sistema disponibles para este juego"), SZ_BODY, COL_DIM, AL_CENTER, 0);
 	} else {
@@ -2912,7 +2933,7 @@ static void draw_overlays_bottom(void)
 
 static bool key_repeat(u32 down, u32 held, u32 mask);
 
-enum { MI_LOGIN, MI_PROFILE, MI_LIBRARY, MI_WISHLIST, MI_CART, MI_LOGOUT, MI_REQS, MI_ABOUT, MI_EXIT };
+enum { MI_LOGIN, MI_PROFILE, MI_NOTIF, MI_LIBRARY, MI_WISHLIST, MI_CART, MI_LOGOUT, MI_REQS, MI_ABOUT, MI_EXIT };
 #define MENU_ROW 24
 #define MENU_HEAD 38
 
@@ -2926,12 +2947,12 @@ static int menu_items(int *out)
 		out[n++] = MI_LOGIN;
 	} else {
 		out[n++] = MI_PROFILE;
+		out[n++] = MI_NOTIF;
 		out[n++] = MI_LIBRARY;
 		out[n++] = MI_WISHLIST;
 		out[n++] = MI_CART;
 		out[n++] = MI_LOGOUT;
 	}
-	out[n++] = MI_REQS;
 	out[n++] = MI_ABOUT;
 	out[n++] = MI_EXIT;
 	return n;
@@ -3302,6 +3323,296 @@ static void input_about(u32 kd, u32 kh)
 	if (key_repeat(kd, kh, KEY_UP)) about_sel = (about_sel + AB_COUNT - 1) % AB_COUNT;
 }
 
+// ---------------------------------------------------------------------------- Notificaciones
+
+#define MAX_NOTIF 40
+static struct {
+	Req *req, *names_req, *mark;
+	SteamNotif n[MAX_NOTIF];
+	int count, unread;
+	bool loaded, failed;
+	u64 at;                      // cuándo se pidieron (se vuelven a pedir cada 5 minutos)
+	RowList names;               // nombres de los juegos de los que hablan
+	int sel;
+	bool unread_at_open[MAX_NOTIF];
+	Scene back;
+} NT;
+
+static int notif_unread(void)
+{
+	return auth_logged() ? NT.unread : 0;
+}
+
+static void notif_reset(void)
+{
+	Req *all[] = {NT.req, NT.names_req, NT.mark};
+	for (int i = 0; i < 3; i++)
+		if (all[i]) net_release(all[i]);
+	rowlist_free(&NT.names);
+	memset(&NT, 0, sizeof NT);
+}
+
+static const char *notif_game(u32 appid)
+{
+	for (int i = 0; appid && i < NT.names.count; i++)
+		if (NT.names.rows[i].appid == appid) return NT.names.rows[i].name;
+	return NULL;
+}
+
+// El texto de cada aviso, como en la campana de Steam
+static void notif_text(const SteamNotif *n, char *out, size_t sz)
+{
+	const char *g = notif_game(n->appid);
+	switch (n->type) {
+	case 1: snprintf(out, sz, "%s", _("Has recibido un regalo")); break;
+	case 2: snprintf(out, sz, "%s", _("Nuevo comentario en tu perfil")); break;
+	case 3: snprintf(out, sz, "%s", _("Tienes objetos nuevos en tu inventario")); break;
+	case 4: snprintf(out, sz, "%s", _("Nueva solicitud de amistad")); break;
+	case 5: snprintf(out, sz, "%s", _("Han empezado unas rebajas en Steam")); break;
+	case 6:
+		if (g) snprintf(out, sz, _("Ya puedes precargar %s"), g);
+		else snprintf(out, sz, "%s", _("Ya puedes precargar un juego"));
+		break;
+	case 7:
+		if (g) snprintf(out, sz, _("%s, de tu lista de deseos, está en oferta"), g);
+		else snprintf(out, sz, "%s", _("Un juego de tu lista de deseos está en oferta"));
+		break;
+	case 8: snprintf(out, sz, "%s", _("Nueva oferta de intercambio")); break;
+	case 11: snprintf(out, sz, "%s", _("Es tu turno en una partida")); break;
+	case 12: snprintf(out, sz, "%s", _("Nuevo mensaje en el chat")); break;
+	case 15: snprintf(out, sz, "%s", _("Te han invitado a una Familia de Steam")); break;
+	case 16: snprintf(out, sz, "%s", _("Petición de compra en tu familia")); break;
+	case 21:
+		if (g) snprintf(out, sz, _("Ya tienes %s en tu biblioteca"), g);
+		else snprintf(out, sz, "%s", _("Tienes un juego nuevo en tu biblioteca"));
+		break;
+	case 26:
+		if (n->title[0]) snprintf(out, sz, "%s", n->title);
+		else if (g) snprintf(out, sz, _("Novedades de %s"), g);
+		else snprintf(out, sz, "%s", _("Novedades de un juego que sigues"));
+		break;
+	case 27:
+		if (g) snprintf(out, sz, _("Invitación a la prueba de %s"), g);
+		else snprintf(out, sz, "%s", _("Invitación a una prueba de juego"));
+		break;
+	default:
+		snprintf(out, sz, "%s", n->title[0] ? n->title : _("Aviso de Steam"));
+		break;
+	}
+}
+
+static Icon notif_icon(int type)
+{
+	switch (type) {
+	case 1: return IC_CARD;
+	case 2: case 12: return IC_CHAT;
+	case 4: case 15: case 16: return IC_USERS;
+	case 5: case 8: return IC_COIN;
+	case 6: return IC_PC;
+	case 7: return IC_HEART;
+	case 21: case 27: return IC_PAD;
+	default: return IC_BELL;
+	}
+}
+
+// «hace 5 min», «hace 3 h», «hace 2 días» o la fecha
+static void notif_when(u32 t, char *out, size_t sz)
+{
+	long long d = (long long)time(NULL) + g_server_delta - t;
+	if (d < 0) d = 0;
+	if (d < 3600) snprintf(out, sz, _("hace %d min"), (int)(d / 60 < 1 ? 1 : d / 60));
+	else if (d < 86400) snprintf(out, sz, _("hace %d h"), (int)(d / 3600));
+	else if (d < 30 * 86400) snprintf(out, sz, d < 2 * 86400 ? _("hace %d día") : _("hace %d días"), (int)(d / 86400));
+	else {
+		time_t tt = t;
+		struct tm *tm = gmtime(&tt);
+		static const char *mes[] = {"ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"};
+		snprintf(out, sz, "%d %s %d", tm->tm_mday, mes[tm->tm_mon], tm->tm_year + 1900);
+	}
+}
+
+// Se piden al iniciar sesión y luego cada 5 minutos; los nombres de los juegos, aparte
+static void notif_poll(void)
+{
+	if (!auth_logged()) return;
+	u64 now = osGetTime();
+	if (!NT.req && S.ctx_ready && (!NT.at || now - NT.at > 5 * 60 * 1000)) {
+		NT.at = now;
+		NT.req = steam_req_notifications(auth_token());
+	}
+	if (NT.req && NT.req->state >= REQ_DONE) {
+		int unread = 0;
+		int n = NT.req->state == REQ_DONE ? steam_parse_notifications(NT.req->data, NT.n, MAX_NOTIF, &unread) : -1;
+		if (n >= 0) {
+			NT.count = n;
+			NT.unread = S.scene == SC_NOTIF ? 0 : unread;
+			NT.loaded = true;
+			NT.failed = false;
+			if (NT.sel >= n) NT.sel = n ? n - 1 : 0;
+		} else if (!NT.loaded) {
+			NT.failed = true;
+		}
+		netlog("notificaciones: %d (%d sin leer, HTTP %ld)", n, unread, NT.req->http);
+		net_release(NT.req);
+		NT.req = NULL;
+		// Los juegos que se nombran y aún no tienen nombre
+		u32 ids[MAX_NOTIF];
+		int k = 0;
+		for (int i = 0; i < NT.count; i++) {
+			u32 a = NT.n[i].appid;
+			bool have = !a || notif_game(a);
+			for (int j = 0; j < k && !have; j++) have = ids[j] == a;
+			if (!have) ids[k++] = a;
+		}
+		if (k && !NT.names_req) NT.names_req = steam_req_items(ids, k, false);
+	}
+	if (NT.names_req && NT.names_req->state >= REQ_DONE) {
+		if (NT.names_req->state == REQ_DONE) {
+			RowList got = {0};
+			if (!steam_take_rows(NT.names_req, &got, false)) steam_parse_rows(NT.names_req->data, &got, false);
+			for (int i = 0; i < got.count; i++) add_row(&NT.names, &got.rows[i]);
+			rowlist_free(&got);
+		}
+		net_release(NT.names_req);
+		NT.names_req = NULL;
+	}
+	if (NT.mark && NT.mark->state >= REQ_DONE) {
+		net_release(NT.mark);
+		NT.mark = NULL;
+	}
+}
+
+static void open_notifs(void)
+{
+	NT.back = S.scene == SC_NOTIF ? SC_STORE : S.scene;
+	NT.sel = 0;
+	// Al abrirlas cuentan como vistas, como en Steam (el punto se queda hasta que sales)
+	for (int i = 0; i < NT.count; i++) {
+		NT.unread_at_open[i] = !NT.n[i].read;
+		NT.n[i].read = true;
+	}
+	if (NT.unread && !NT.mark) NT.mark = steam_req_notifications_read(auth_token());
+	NT.unread = 0;
+	if (!NT.req) NT.at = 0;   // y se piden de nuevo
+	go_scene(SC_NOTIF, 1);
+}
+
+static void draw_notifs_top(void)
+{
+	if (!NT.loaded) {
+		if (NT.failed) {
+			ui_icon(IC_BELL, TOP_W / 2 - 14, 80, 28, COL_DIM);
+			ui_text(TOP_W / 2, 120, _("No se pudieron cargar tus notificaciones"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
+			ui_text(TOP_W / 2, 144, _("Se volverá a intentar en unos minutos"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		} else {
+			draw_net_wait(TOP_W / 2, 120, _("Cargando…"));
+		}
+		return;
+	}
+	if (!NT.count) {
+		ui_icon(IC_BELL, TOP_W / 2 - 14, 80, 28, COL_ACC);
+		ui_text(TOP_W / 2, 120, _("No tienes notificaciones"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
+		ui_text(TOP_W / 2, 144, _("Aquí verás los regalos, las ofertas de tu lista de deseos y más"), SZ_SMALL, COL_DIM, AL_CENTER, 380);
+		return;
+	}
+	const SteamNotif *n = &NT.n[NT.sel];
+	char t[160], when[40];
+	notif_text(n, t, sizeof t);
+	notif_when(n->time, when, sizeof when);
+	const float X = 16, W = TOP_W - 32;
+	ui_icon(notif_icon(n->type), X, 30, 18, COL_ACC);
+	int nl = ui_text_lines(t, SZ_LARGE, W - 28);
+	ui_text_wrap(X + 28, 28, W - 28, t, SZ_LARGE, COL_WHITE, 2, 20);
+	float y = 28 + (nl > 2 ? 2 : nl) * 20 + 4;
+	ui_text(X + 28, y, when, SZ_SMALL, COL_DIM, AL_LEFT, W);
+	if (n->appid) {
+		// El juego del que habla, con su cabecera
+		char url[160];
+		snprintf(url, sizeof url, "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/%lu/header.jpg", (unsigned long)n->appid);
+		const float iw = 230, ih = floorf(iw * 215 / 460);
+		float iy = y + 24;
+		const Pic *p = img_get(url, 460);
+		ui_rect(X - 1, iy - 1, iw + 2, ih + 2, C2D_Color32(0xff, 0xff, 0xff, 0x30));
+		if (p) img_draw_cover(p, X, iy, iw, ih, 0.5f);
+		else {
+			ui_rect(X, iy, iw, ih, COL_PANEL);
+			if (!img_failed(url)) ui_spinner(X + iw / 2, iy + ih / 2, 6, COL_DIM);
+		}
+		const char *g = notif_game(n->appid);
+		if (g) ui_text_wrap(X + iw + 12, iy, W - iw - 12, g, SZ_BODY, COL_WHITE, 3, 16);
+		ui_text_wrap(X + iw + 12, iy + ih - 30, W - iw - 12, _("Pulsa A para ver su página"), SZ_SMALL, COL_ACC, 2, 14);
+	} else if (n->type == 1 || n->type == 4 || n->type == 8 || n->type == 15) {
+		ui_text_wrap(X + 28, y + 24, W - 28, _("Ábrelo desde la app de Steam en el móvil o en el PC para responder."), SZ_SMALL, COL_TXT, 3, 15);
+	}
+}
+
+static void draw_notifs_bottom(void)
+{
+	fx_bar(0, 0, BOT_W, LIST_Y, true);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_icon(IC_BELL, 28, 6, 12, COL_ACC);
+	ui_text(46, 5, _("Notificaciones"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
+	const float RH = 32;
+	const int vis = (int)((SCR_H - 18 - LIST_Y) / RH);
+	int first = NT.sel - (vis - 1);
+	if (first < 0) first = 0;
+	for (int i = first; i < NT.count && i < first + vis; i++) {
+		const SteamNotif *n = &NT.n[i];
+		float y = LIST_Y + 2 + (i - first) * RH;
+		bool on = i == NT.sel;
+		if (on) {
+			float br = 0.075f + 0.035f * sinf(g_time * 2.4f);
+			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
+			ui_rrect(3, y + 5, 2, RH - 10, 1, col_alpha(COL_ACC, 0.8f));
+		}
+		char t[160], when[40];
+		notif_text(n, t, sizeof t);
+		notif_when(n->time, when, sizeof when);
+		bool fresh = NT.unread_at_open[i];
+		ui_icon(notif_icon(n->type), 14, y + 10, 12, fresh ? COL_ACC : COL_DIM);
+		ui_text(36, y + 3, t, SZ_BODY - 0.02f, on || fresh ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 64);
+		ui_text(36, y + 17, when, SZ_TINY, COL_DIM, AL_LEFT, BOT_W - 64);
+		if (fresh) {
+			float cx = BOT_W - 14, cy = y + RH / 2;
+			ui_circle(cx, cy, 3.2f, COL_ACC);
+		}
+		if (i < NT.count - 1) ui_hline(36, y + RH - 1, BOT_W - 44, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
+	}
+	if (!NT.count && NT.loaded)
+		ui_text(BOT_W / 2, LIST_Y + 30, _("No tienes notificaciones"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+	static const char *h[] = {"↑↓", "Elegir", "B", "Volver"};
+	static const char *ha[] = {"A", "Abrir", "↑↓", "Elegir", "B", "Volver"};
+	if (NT.count && NT.n[NT.sel].appid) draw_hints(ha, 3);
+	else draw_hints(h, 2);
+}
+
+static void input_notifs(u32 kd, u32 kh, touchPosition *tp)
+{
+	if (kd & KEY_B) {
+		go_scene(NT.back == SC_NOTIF ? SC_STORE : NT.back, -1);
+		return;
+	}
+	if (key_repeat(kd, kh, KEY_DOWN) && NT.sel + 1 < NT.count) NT.sel++;
+	if (key_repeat(kd, kh, KEY_UP) && NT.sel > 0) NT.sel--;
+	if ((kd & KEY_TOUCH) && tp->py < LIST_Y && tp->px < 120) {
+		go_scene(NT.back == SC_NOTIF ? SC_STORE : NT.back, -1);
+		return;
+	}
+	if ((kd & KEY_TOUCH) && tp->py >= LIST_Y) {
+		const float RH = 32;
+		const int vis = (int)((SCR_H - 18 - LIST_Y) / RH);
+		int first = NT.sel - (vis - 1);
+		if (first < 0) first = 0;
+		int i = first + (int)((tp->py - LIST_Y - 2) / RH);
+		if (i >= 0 && i < NT.count) {
+			if (i == NT.sel && NT.n[i].appid) open_game(NT.n[i].appid, true);
+			else NT.sel = i;
+			return;
+		}
+	}
+	if ((kd & KEY_A) && NT.count && NT.n[NT.sel].appid) open_game(NT.n[NT.sel].appid, true);
+}
+
 static void menu_choose(int item)
 {
 	S.menu_open = false;
@@ -3331,6 +3642,7 @@ static void menu_choose(int item)
 		S.menu_open = true;   // el menú se queda abierto para ver el cambio
 		toast(g_cfg.reqs_mac ? _("Se mostrarán los requisitos de macOS") : _("Se mostrarán los requisitos de Windows"));
 		break;
+	case MI_NOTIF: open_notifs(); break;
 	case MI_ABOUT: open_about(); break;
 	case MI_EXIT:
 		S.ask_exit = true;
@@ -3378,6 +3690,7 @@ static void draw_menu(void)
 	static const struct { Icon ic; const char *label; } info[] = {
 		[MI_LOGIN] = {IC_PHONE, "Iniciar sesión con el móvil"},
 		[MI_PROFILE] = {IC_USER, "Mi perfil"},
+		[MI_NOTIF] = {IC_BELL, "Notificaciones"},
 		[MI_LIBRARY] = {IC_PAD, "Biblioteca"},
 		[MI_WISHLIST] = {IC_HEART, "Lista de deseos"},
 		[MI_CART] = {IC_CART, "Carrito"},
@@ -3395,6 +3708,14 @@ static void draw_menu(void)
 		ui_text(42, y + 3, _(info[items[i]].label), SZ_BODY - 0.02f, col_alpha(on ? COL_WHITE : COL_TXT, a), AL_LEFT, BOT_W - 60);
 		if (items[i] == MI_REQS)
 			ui_text(BOT_W - 24, y + 4, g_cfg.reqs_mac ? "macOS" : "Windows", SZ_SMALL, col_alpha(COL_ACC, a), AL_RIGHT, 0);
+		if (items[i] == MI_NOTIF && notif_unread()) {
+			// Las que no has leído, en una píldora azul
+			char nc[8];
+			snprintf(nc, sizeof nc, "%d", notif_unread());
+			float w = ui_text_w(nc, SZ_SMALL) + 12;
+			ui_rrect(BOT_W - 24 - w, y + 3, w, 16, 8, col_alpha(C2D_Color32(0x1a, 0x6d, 0xb0, 0xff), a));
+			ui_text(BOT_W - 24 - w / 2, y + 4, nc, SZ_SMALL, col_alpha(COL_WHITE, a), AL_CENTER, 0);
+		}
 		if (items[i] == MI_CART && shop_cart()->n) {
 			// Cuántos hay, en una píldora verde
 			char nc[8];
@@ -4808,6 +5129,12 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	}
 	if (kd & (KEY_L | KEY_LEFT)) game_set_sec(S.sec - 1);
 	if (kd & (KEY_R | KEY_RIGHT)) game_set_sec(S.sec + 1);
+	if (a && S.sec == SEC_REQS && a->mac && (kd & (KEY_UP | KEY_DOWN))) {
+		// Requisitos de Windows o de macOS (se queda para las demás fichas)
+		g_cfg.reqs_mac = !g_cfg.reqs_mac;
+		config_save();
+		toast(g_cfg.reqs_mac ? _("Se mostrarán los requisitos de macOS") : _("Se mostrarán los requisitos de Windows"));
+	}
 	if (S.sec == SEC_SUMMARY) {
 		// El Resumen se desplaza con la cruceta (manteniendo, sigue bajando)
 		float vis = SCR_H - 18;
@@ -5110,6 +5437,7 @@ int main(int argc, char **argv)
 		seen_poll();
 		tags_poll();
 		family_poll();
+		notif_poll();
 		info_poll();
 		for (int i = 0; i < CACHE; i++) {
 			InfoEnt *e = &cache[i];
@@ -5177,6 +5505,7 @@ int main(int argc, char **argv)
 		case SC_LOGIN: input_login(kd, dt); break;
 		case SC_PROFILE: input_profile(kd, kh, ku, &tp); break;
 		case SC_ABOUT: input_about(kd, kh); break;
+		case SC_NOTIF: input_notifs(kd, kh, &tp); break;
 		case SC_PAY: input_pay(kd, kh, ku, &tp, dt); break;
 		}
 		auth_update();
@@ -5273,12 +5602,13 @@ int main(int argc, char **argv)
 		case SC_LOGIN: draw_login_top(); break;
 		case SC_PROFILE: draw_profile_top(); break;
 		case SC_ABOUT: draw_about_top(); break;
+		case SC_NOTIF: draw_notifs_top(); break;
 		case SC_PAY: draw_pay_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -5297,6 +5627,7 @@ int main(int argc, char **argv)
 		case SC_LOGIN: draw_login_bottom(); break;
 		case SC_PROFILE: draw_profile_bottom(); break;
 		case SC_ABOUT: draw_about_bottom(); break;
+		case SC_NOTIF: draw_notifs_bottom(); break;
 		case SC_PAY: draw_pay_bottom(); break;
 		}
 		C2D_ViewReset();

@@ -3,7 +3,7 @@
 
 # Textos que llegan a _() a través de una variable (pestañas, apartados, pistas, clasificaciones)
 INDIRECT = [
-    "Marcar", "Mantener para pagar", "Precio",
+    "Marcar", "Mantener para pagar", "Precio", "Notificaciones",
     'Acuerdo de Suscriptor de Steam', 'Tu cuenta y las licencias de lo que compras', 'El contrato entre tú y Valve para usar Steam: tu cuenta, las licencias del contenido que compras, las suscripciones y las normas de uso del servicio.', 'Política de privacidad', 'Qué datos se recogen y para qué', 'Qué datos recoge Valve cuando usas Steam, para qué los usa, con quién los comparte y cómo ejercer tus derechos sobre ellos.', 'Reembolsos de Steam', 'Cuándo y cómo pedir un reembolso', 'Puedes pedir el reembolso de casi cualquier compra en los 14 días siguientes si has jugado menos de 2 horas. Se solicita desde la ayuda de Steam.', 'Normas de conducta en línea', 'Reseñas, foros, perfiles y chat', 'Lo que no está permitido en las partes de Steam con contenido de los usuarios: reseñas, foros, perfiles, chat y Workshop.', 'Información legal', 'Marcas y derechos de autor', 'Avisos de marcas, derechos de autor y el resto de la información legal de Valve y de Steam.',
     "Explora la tienda de Steam, consulta ofertas y reseñas, gestiona tu lista de deseos y tu carrito, y compra con los métodos de pago de tu cuenta, todo desde la consola.",
     "Steam3DS es un proyecto independiente y no está afiliado, patrocinado ni respaldado por Valve Corporation ni por Nintendo. Steam y el logotipo de Steam son marcas comerciales o marcas registradas de Valve Corporation. Nintendo 3DS es una marca registrada de Nintendo.",
@@ -18,6 +18,42 @@ INDIRECT = [
 ]
 
 TR = {
+    # Notificaciones
+    '%s, de tu lista de deseos, está en oferta': ('%s, from your wishlist, is on sale', 'ウィッシュリストの %s がセール中です'),
+    'Aquí verás los regalos, las ofertas de tu lista de deseos y más': ('Gifts, wishlist sales and more will show up here', 'ギフトやウィッシュリストのセールなどがここに表示されます'),
+    'Aviso de Steam': ('Steam notice', 'Steam からのお知らせ'),
+    'Es tu turno en una partida': ("It's your turn in a game", 'ゲームであなたの番です'),
+    'Han empezado unas rebajas en Steam': ('A Steam sale has started', 'Steam のセールが始まりました'),
+    'Has recibido un regalo': ('You received a gift', 'ギフトが届きました'),
+    'Invitación a la prueba de %s': ('Invitation to the %s playtest', '%s のプレイテストへの招待'),
+    'Invitación a una prueba de juego': ('Invitation to a playtest', 'プレイテストへの招待'),
+    'No se pudieron cargar tus notificaciones': ("Your notifications couldn't be loaded", '通知を読み込めませんでした'),
+    'No tienes notificaciones': ('You have no notifications', '通知はありません'),
+    'Notificaciones': ('Notifications', '通知'),
+    'Novedades de %s': ('News from %s', '%s の最新情報'),
+    'Novedades de un juego que sigues': ('News from a game you follow', 'フォロー中のゲームの最新情報'),
+    'Nueva oferta de intercambio': ('New trade offer', '新しいトレードオファー'),
+    'Nueva solicitud de amistad': ('New friend request', '新しいフレンドリクエスト'),
+    'Nuevo comentario en tu perfil': ('New comment on your profile', 'プロフィールに新しいコメント'),
+    'Nuevo mensaje en el chat': ('New chat message', '新しいチャットメッセージ'),
+    'Petición de compra en tu familia': ('Purchase request in your family', 'ファミリーの購入リクエスト'),
+    'Pulsa A para ver su página': ('Press A to view its page', 'A でストアページを表示'),
+    'Se volverá a intentar en unos minutos': ('It will try again in a few minutes', '数分後に再試行します'),
+    'Te han invitado a una Familia de Steam': ("You've been invited to a Steam Family", 'Steam ファミリーに招待されました'),
+    'Tienes objetos nuevos en tu inventario': ('You have new items in your inventory', 'インベントリに新しいアイテムがあります'),
+    'Tienes un juego nuevo en tu biblioteca': ('You have a new game in your library', 'ライブラリに新しいゲームがあります'),
+    'Un juego de tu lista de deseos está en oferta': ('A game on your wishlist is on sale', 'ウィッシュリストのゲームがセール中です'),
+    'Ya puedes precargar %s': ('You can now preload %s', '%s のプリロードが可能になりました'),
+    'Ya puedes precargar un juego': ('You can now preload a game', 'ゲームのプリロードが可能になりました'),
+    'Ya tienes %s en tu biblioteca': ('%s is now in your library', '%s がライブラリに追加されました'),
+    'hace %d día': ('%d day ago', '%d 日前'),
+    'hace %d días': ('%d days ago', '%d 日前'),
+    'hace %d h': ('%d h ago', '%d 時間前'),
+    'hace %d min': ('%d min ago', '%d 分前'),
+    'Ábrelo desde la app de Steam en el móvil o en el PC para responder.': ('Open it in the Steam app on your phone or PC to respond.', 'スマホか PC の Steam アプリで開いて応答してください。'),
+    'Ver los de Windows': ('Show Windows', 'Windows を表示'),
+    'Ver los de macOS': ('Show macOS', 'macOS を表示'),
+
     # Acerca de: políticas y normas de Steam
     'Acuerdo de Suscriptor de Steam': ('Steam Subscriber Agreement', 'Steam 利用規約'),
     'Tu cuenta y las licencias de lo que compras': ('Your account and the licenses for what you buy', 'アカウントと購入したもののライセンス'),

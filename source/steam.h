@@ -206,6 +206,19 @@ typedef struct {
 
 // POST a un servicio de la Web API con sesión (input_json en el cuerpo)
 Req *steam_post_service(const char *iface_method, cJSON *input, const char *token);
+
+// Notificaciones de Steam (la campana): regalos, ofertas de tu lista de deseos, amigos, comentarios…
+typedef struct {
+	u64 id;
+	int type;               // ESteamNotificationType (1 regalo, 2 comentario, 4 amistad, 7 deseados en oferta…)
+	u32 time;               // hora Unix
+	bool read;
+	u32 appid;              // el juego del que habla, si habla de uno
+	char title[96];         // el título que trae (avisos generales y de los desarrolladores)
+} SteamNotif;
+Req *steam_req_notifications(const char *token);
+int steam_parse_notifications(const char *json, SteamNotif *out, int max, int *unread);   // -1 si falla
+Req *steam_req_notifications_read(const char *token);   // las marca todas como leídas
 Req *steam_get_service(const char *iface_method, cJSON *input, const char *token);   // los que solo van por GET
 bool steam_parse_cart(const char *json, CartInfo *c);           // respuesta con «cart»
 Req *steam_req_cart_names(const CartInfo *c);

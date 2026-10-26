@@ -1203,6 +1203,58 @@ Req *steam_get_service(const char *iface_method, cJSON *input, const char *token
 	return r;
 }
 
+Req *steam_req_notifications(const char *token)
+{
+	char url[1400];
+	snprintf(url, sizeof url, "https://api.steampowered.com/ISteamNotificationService/GetSteamNotifications/v1/?access_token=%s"
+		"&include_hidden=false&include_read=true&count_only=false&language=%s", token, g_lang);
+	return net_get(url, LANE_API);
+}
+
+// body_data es un JSON dentro del JSON (una cadena): de ahí sale el juego y, a veces, un título
+int steam_parse_notifications(const char *json, SteamNotif *out, int max, int *unread)
+{
+	*unread = 0;
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *it;
+	cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(resp, "notifications")) {
+		if (n >= max) break;
+		if (jbool(it, "hidden")) continue;
+		SteamNotif *o = &out[n];
+		memset(o, 0, sizeof *o);
+		const char *id = jstr(it, "notification_id");
+		o->id = id ? strtoull(id, NULL, 10) : (u64)jnum(it, "notification_id", 0);
+		o->type = (int)jnum(it, "notification_type", 0);
+		o->time = (u32)jnum(it, "timestamp", 0);
+		o->read = jbool(it, "read");
+		const char *bd = jstr(it, "body_data");
+		cJSON *b = bd ? cJSON_Parse(bd) : NULL;
+		if (b) {
+			const char *as = jstr(b, "appid");
+			o->appid = as ? (u32)strtoul(as, NULL, 10) : (u32)jnum(b, "appid", 0);
+			copy_utf8(o->title, sizeof o->title, jstr(b, "title"));
+			cJSON_Delete(b);
+		}
+		if (!o->read) (*unread)++;
+		n++;
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
+Req *steam_req_notifications_read(const char *token)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON_AddBoolToObject(in, "mark_all_read", true);
+	return steam_post_service("ISteamNotificationService/MarkNotificationsRead", in, token);
+}
+
 Req *steam_post_service(const char *iface_method, cJSON *input, const char *token)
 {
 	char *js = cJSON_PrintUnformatted(input);

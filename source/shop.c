@@ -29,6 +29,10 @@ static struct {
 
 	ShopEvent ev[4];
 	int nev;
+
+	// Juegos ignorados
+	u32 *ign;
+	int nign, ign_cap;
 } H;
 
 static void push_event(bool ok, int code)
@@ -59,6 +63,7 @@ void shop_reset(void)
 	Req **all[] = {&H.opt_req, &H.cart_req, &H.names_req, &H.act};
 	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
 		if (*all[i]) net_release(*all[i]);
+	free(H.ign);
 	memset(&H, 0, sizeof H);
 }
 
@@ -182,6 +187,53 @@ void shop_free(u32 appid, const char *name)
 	H.act = steam_post_service("ICheckoutService/AddFreeLicense", in, auth_token());
 }
 
+// ---------------------------------------------------------------------------- Ignorados
+
+bool shop_ignored(u32 appid)
+{
+	for (int i = 0; i < H.nign; i++)
+		if (H.ign[i] == appid) return true;
+	return false;
+}
+
+static void ignored_mark(u32 appid, bool on)
+{
+	for (int i = 0; i < H.nign; i++)
+		if (H.ign[i] == appid) {
+			if (!on) H.ign[i] = H.ign[--H.nign];
+			return;
+		}
+	if (!on) return;
+	if (H.nign == H.ign_cap) {
+		int cap = H.ign_cap ? H.ign_cap * 2 : 32;
+		u32 *n = realloc(H.ign, cap * sizeof *n);
+		if (!n) return;
+		H.ign = n;
+		H.ign_cap = cap;
+	}
+	H.ign[H.nign++] = appid;
+}
+
+void shop_set_ignored(const u32 *ids, int n)
+{
+	H.nign = 0;
+	for (int i = 0; i < n; i++) ignored_mark(ids[i], true);
+}
+
+// Es el mismo formulario que usa la tienda web (recommended/ignorerecommendation): no hay servicio
+// de la API para esto. Motivo 0: «no me interesa», el de por defecto
+void shop_ignore(u32 appid, const char *name, bool ignore)
+{
+	char ck[1200];
+	if (!auth_web_cookies("store.steampowered.com", ck, sizeof ck)) return;
+	if (!start_action(ignore ? SH_IGNORE : SH_UNIGNORE, appid, name)) return;
+	char body[160];
+	snprintf(body, sizeof body, "sessionid=%s&appid=%lu&remove=%d&snr=1_5_9__403&ignore_reason=0",
+		auth_sessionid(), (unsigned long)appid, ignore ? 0 : 1);
+	H.act = net_request("https://store.steampowered.com/recommended/ignorerecommendation", body, ck);
+	memset(ck, 0, sizeof ck);
+}
+
 // ---------------------------------------------------------------------------- Cada frame
 
 // ¿Salió bien? Steam dice el resultado en la cabecera x-eresult (1 = OK)
@@ -227,7 +279,11 @@ void shop_update(void)
 		Req *r = H.act;
 		bool ok = req_ok(r);
 		int code = req_code(r);
-		if (H.kind == SH_CART_ADD || H.kind == SH_CART_REMOVE) {
+		if (H.kind == SH_IGNORE || H.kind == SH_UNIGNORE) {
+			// La tienda web contesta con un 200 (sin x-eresult)
+			ok = r->state == REQ_DONE && r->http == 200;
+			if (ok) ignored_mark(H.appid, H.kind == SH_IGNORE);
+		} else if (H.kind == SH_CART_ADD || H.kind == SH_CART_REMOVE) {
 			if (ok && steam_parse_cart(r->data, &H.cart)) cart_changed();
 		} else if (H.kind == SH_FREE && ok) {
 			// Si Steam no añadió nada, el detalle de la compra dice por qué

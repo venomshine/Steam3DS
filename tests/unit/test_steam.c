@@ -120,6 +120,12 @@ int main(void) {
 	rowlist_free(&fam);
 	steam_req_family_apps(9000001, 76561190000000042ULL, "tok");
 	CHECK(strstr(last_url, "GetSharedLibraryApps") && strstr(last_url, "family_groupid=9000001"));
+	// Los juegos ignorados de la tienda (objeto appid -> motivo, o lista vacía)
+	u32 *ig;
+	CHECK(steam_parse_userdata_ignored("{\"rgIgnoredApps\":{\"730\":0,\"570\":2}}", &ig) == 2 && ig[0] == 730 && ig[1] == 570);
+	free(ig);
+	CHECK(steam_parse_userdata_ignored("{\"rgIgnoredApps\":[]}", &ig) == 0);
+	free(ig);
 	// Las etiquetas populares
 	StoreTag tg[4];
 	CHECK(steam_parse_tags("{\"response\":{\"tags\":[{\"tagid\":492,\"name\":\"Indie\"},{\"tagid\":19,\"name\":\"Acción\"}]}}", tg, 4) == 2);

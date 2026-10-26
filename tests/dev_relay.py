@@ -95,8 +95,22 @@ WEB_HOSTS = ("store.steampowered.com", "checkout.steampowered.com", "steamcommun
 settoken_calls = []
 
 
+IGNORED = {}   # juegos ignorados (appid -> motivo), como rgIgnoredApps
+
+
 def fake_post(host, path, body):
     """Devuelve (json, cabeceras extra) o None."""
+    if host == "store.steampowered.com" and path.startswith("recommended/ignorerecommendation"):
+        raw = body.decode() if isinstance(body, bytes) else (body or "")
+        f = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+        a = int(f.get("appid", "0") or 0)
+        if not f.get("sessionid") or not a:
+            return False, []
+        if f.get("remove") == "1":
+            IGNORED.pop(a, None)
+        else:
+            IGNORED[a] = int(f.get("ignore_reason", "0") or 0)
+        return True, []
     if host == "login.steampowered.com" and path == "jwt/finalizelogin":
         f = multipart(body)
         if not f.get("nonce", "").startswith("eyJhbGciOiJFZERTQSJ9.") or not f.get("sessionid"):
@@ -395,7 +409,8 @@ class Relay(BaseHTTPRequestHandler):
         if FAKE and host == "store.steampowered.com" and path == "dynamicstore/userdata/":
             ck = cookies_of(self.headers)
             ok = ck.get("steamLoginSecure", "").startswith(str(FAKE_ID))
-            body = json.dumps({"rgWishlist": WISH, "rgOwnedPackages": [], "rgOwnedApps": [a for a, *_ in OWNED] + [228980, 1, 4406010]} if ok else {}).encode()
+            body = json.dumps({"rgWishlist": WISH, "rgOwnedPackages": [], "rgOwnedApps": [a for a, *_ in OWNED] + [228980, 1, 4406010],
+                               "rgIgnoredApps": {str(a): r for a, r in IGNORED.items()}} if ok else {}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

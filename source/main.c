@@ -149,7 +149,7 @@ static struct {
 	float ocontent;              // alto de todo el Resumen
 } S;
 
-enum { BT_NONE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
+enum { BT_NONE, BT_IGNORE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
 	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO };
 
 // Pestañas de la tienda
@@ -740,6 +740,11 @@ static void owned_poll(Tab *t)
 		u32 *ids = NULL;
 		int n = r->state == REQ_DONE ? steam_parse_userdata_owned(r->data, &ids) : -1;
 		netlog("biblioteca: userdata de la tienda: %d juegos (HTTP %ld)", n, r->http);
+		// En la misma respuesta vienen los juegos que has ignorado
+		u32 *ign = NULL;
+		int ni = r->state == REQ_DONE ? steam_parse_userdata_ignored(r->data, &ign) : -1;
+		if (ni >= 0) shop_set_ignored(ign, ni);
+		free(ign);
 		net_release(r);
 		t->list.req = NULL;
 		if (n < 0) {
@@ -1824,7 +1829,16 @@ static void draw_store_bottom(void)
 			ui_text(nx + 4, y + 8.5f, tag, SZ_TINY, COL_ACC, AL_LEFT, 0);
 			nx += tw + 5;
 		}
-		ui_text(nx, y + 7, r->name, SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 10 - nx - pw);
+		bool ign = S.tab != TAB_LIBRARY && r->appid && shop_ignored(r->appid);
+		if (ign) {
+			// Lo ignoraste: se ve, pero apagado y con su etiqueta (como en la tienda)
+			const char *tag = _("IGNORADO");
+			float tw = ui_text_w(tag, SZ_TINY) + 8;
+			ui_rect(nx, y + 8, tw, 13, col_alpha(COL_WHITE, 0.08f));
+			ui_text(nx + 4, y + 8.5f, tag, SZ_TINY, COL_DIM, AL_LEFT, 0);
+			nx += tw + 5;
+		}
+		ui_text(nx, y + 7, r->name, SZ_BODY - 0.02f, ign ? COL_DIM : on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 10 - nx - pw);
 		if (S.tab == TAB_LIBRARY) {
 			char hrs[24];
 			if (r->minutes >= 60) snprintf(hrs, sizeof hrs, "%d h", (r->minutes + 30) / 60);
@@ -2527,10 +2541,14 @@ static Box B_DEMO = {12, 112, 296, 22};
 static Box B_WISH = {12, 116, 145, 26};
 static Box B_SHOTS = {163, 116, 145, 26};
 static Box B_INST = {12, 148, 296, 26};
+static Box B_IGNORE = {178, 148, 130, 26};
+static bool has_ignore_btn;
 
 static void game_layout(const AppInfo *a)
 {
 	S.has_demo_btn = auth_logged() && a->demo && !a->is_demo;
+	// Ignorar, como en la tienda: con sesión y si no es tuyo, al lado de instalar en el PC
+	has_ignore_btn = auth_logged() && !owned_app(a->appid);
 	if (S.has_demo_btn) {
 		B_CART = (Box){12, 82, 296, 24};
 		B_DEMO = (Box){12, 110, 296, 22};
@@ -2543,6 +2561,8 @@ static void game_layout(const AppInfo *a)
 		B_SHOTS = (Box){163, 116, 145, 26};
 		B_INST = (Box){12, 148, 296, 26};
 	}
+	B_IGNORE = (Box){178, B_INST.y, 130, B_INST.h};
+	if (has_ignore_btn) B_INST.w = 160;
 }
 
 static bool hit(const Box *b, int x, int y)
@@ -2701,7 +2721,14 @@ static void draw_game_bottom(void)
 		char shots[40];
 		snprintf(shots, sizeof shots, _("Capturas (%d)"), a->nshots);
 		draw_button_k(&B_SHOTS, a->nshots ? "X+→" : NULL, false, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, a->nshots ? 1 : 0.45f, S.pressed == BT_SHOTS);
-		draw_button_k(&B_INST, own ? "X+↓" : NULL, false, IC_PC, _("Instalar en tu PC de forma remota"), C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, own ? 1 : 0.4f, S.pressed == BT_INST);
+		draw_button_k(&B_INST, own ? "X+↓" : NULL, false, IC_PC, has_ignore_btn ? _("Instalar en el PC") : _("Instalar en tu PC de forma remota"),
+			C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, own ? 1 : 0.4f, S.pressed == BT_INST);
+		if (has_ignore_btn) {
+			bool ign = shop_ignored(a->appid);
+			bool busy_ign = shop_busy_with(ign ? SH_UNIGNORE : SH_IGNORE, a->appid);
+			if (ign) draw_button_k(&B_IGNORE, "X+↑", false, IC_HIDE, busy_ign ? _("Quitando…") : _("Ignorado"), C2D_Color32(0x5a, 0x5f, 0x66, 0xff), C2D_Color32(0x40, 0x44, 0x4a, 0xff), COL_WHITE, 1, S.pressed == BT_IGNORE);
+			else draw_button_k(&B_IGNORE, "X+↑", false, IC_HIDE, busy_ign ? _("Ignorando…") : _("Ignorar"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_IGNORE);
+		}
 		float ny = B_INST.y + B_INST.h + 5;
 		if (!in) ui_text(BOT_W / 2, ny, _("Inicia sesión (START) para comprar y usar tu lista de deseos"), SZ_TINY, COL_DIM, AL_CENTER, 300);
 		else if (!own) ui_text(BOT_W / 2, ny, _("La instalación remota requiere tener el juego en tu biblioteca"), SZ_TINY, COL_DIM, AL_CENTER, 300);
@@ -4642,6 +4669,7 @@ static const Box *button_box(int id)
 	case BT_WISH: return &B_WISH;
 	case BT_SHOTS: return &B_SHOTS;
 	case BT_INST: return &B_INST;
+	case BT_IGNORE: return &B_IGNORE;
 	case BT_PREV: return &B_PREV;
 	case BT_NEXT: return &B_NEXT;
 	case BT_EXIT_NO: return &B_EXIT_NO;
@@ -4771,6 +4799,7 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		if (combo && (kd & KEY_RIGHT)) key_b = BT_SHOTS;
 		if (combo && (kd & KEY_LEFT)) key_b = BT_WISH;
 		if (combo && (kd & KEY_DOWN)) key_b = BT_INST;
+		if (combo && (kd & KEY_UP) && has_ignore_btn) key_b = BT_IGNORE;
 		if ((kd & KEY_SELECT) && S.has_demo_btn) key_b = BT_DEMO;
 	}
 	if (combo) {
@@ -4807,8 +4836,10 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 
 	if ((kd & KEY_TOUCH) && hit(&B_SEG, tp->px, tp->py))
 		game_set_sec((int)((tp->px - B_SEG.x) / (B_SEG.w / SEC_COUNT)));
-	static const int ids[] = {BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_DEMO};
-	int b = a ? press_update(kd, kh, ku, tp, ids, S.has_demo_btn ? 5 : 4) : BT_NONE;
+	int ids[6] = {BT_CART, BT_WISH, BT_SHOTS, BT_INST}, nids = 4;
+	if (S.has_demo_btn) ids[nids++] = BT_DEMO;
+	if (has_ignore_btn) ids[nids++] = BT_IGNORE;
+	int b = a ? press_update(kd, kh, ku, tp, ids, nids) : BT_NONE;
 	if (key_b) b = key_b;
 	if (b == BT_SHOTS && a->nshots) {
 		go_scene(SC_SHOTS, 1);
@@ -4825,6 +4856,9 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		if (owned_app(a->appid)) toast(_("Ya está en tu biblioteca"));
 		else if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
 		else shop_wish(a->appid, a->name, !in_wishlist(a->appid));
+	} else if (b == BT_IGNORE) {
+		if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
+		else shop_ignore(a->appid, a->name, !shop_ignored(a->appid));
 	} else if (b == BT_INST) {
 		toast(_("La instalación remota estará disponible en una próxima actualización"));
 	} else if (b == BT_DEMO) {
@@ -4931,9 +4965,15 @@ static void shop_events(void)
 				snprintf(t, sizeof t, _("No se pudo añadir a tu biblioteca: %s"), shop_err(ev.code));
 			}
 			break;
+		case SH_IGNORE:
+		case SH_UNIGNORE:
+			if (ev.ok && ev.kind == SH_IGNORE) snprintf(t, sizeof t, _("Has ignorado %s: no saldrá en tus recomendaciones"), ev.what);
+			else if (ev.ok) snprintf(t, sizeof t, _("Ya no ignoras %s"), ev.what);
+			else snprintf(t, sizeof t, _("No se pudo cambiar: %s"), shop_err(ev.code));
+			break;
 		}
 		static const Icon ic[] = {[SH_CART_ADD] = IC_CART, [SH_CART_REMOVE] = IC_CART, [SH_WISH_ADD] = IC_HEART,
-			[SH_WISH_REMOVE] = IC_HEART, [SH_FREE] = IC_PAD};
+			[SH_WISH_REMOVE] = IC_HEART, [SH_FREE] = IC_PAD, [SH_IGNORE] = IC_HIDE, [SH_UNIGNORE] = IC_HIDE};
 		toast_icon(t, ic[ev.kind]);
 	}
 }

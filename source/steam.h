@@ -165,6 +165,7 @@ Req *steam_req_wishlist(u64 steamid, const char *token);
 int steam_parse_wishlist(const char *json, u32 **ids);       // appids por prioridad (malloc); -1 si falla
 // store.steampowered.com/dynamicstore/userdata/ (con las cookies de la tienda): juegos que tienes
 int steam_parse_userdata_owned(const char *json, u32 **ids); // appids (malloc); -1 si falla
+int steam_parse_userdata_ignored(const char *json, u32 **ids); // los juegos ignorados (malloc); -1 si falla
 
 void appinfo_free(AppInfo *a);
 void rowlist_free(RowList *l);

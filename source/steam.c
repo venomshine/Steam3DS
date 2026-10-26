@@ -1423,6 +1423,27 @@ bool steam_parse_wallet(const char *json, WalletInfo *w)
 	return true;
 }
 
+// rgIgnoredApps es un objeto {"appid": motivo} (o una lista vacía si no hay ninguno)
+int steam_parse_userdata_ignored(const char *json, u32 **ids)
+{
+	*ids = NULL;
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *ig = cJSON_GetObjectItemCaseSensitive(root, "rgIgnoredApps");
+	if (!ig || !(cJSON_IsObject(ig) || cJSON_IsArray(ig))) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = cJSON_GetArraySize(ig), k = 0;
+	*ids = malloc(sizeof(u32) * (n ? n : 1));
+	const cJSON *it;
+	cJSON_ArrayForEach(it, ig) {
+		u32 a = it->string ? (u32)strtoul(it->string, NULL, 10) : cJSON_IsNumber(it) ? (u32)it->valuedouble : 0;
+		if (a && *ids) (*ids)[k++] = a;
+	}
+	cJSON_Delete(root);
+	return k;
+}
+
 int steam_parse_userdata_owned(const char *json, u32 **ids)
 {
 	*ids = NULL;

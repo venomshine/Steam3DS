@@ -4668,6 +4668,9 @@ static struct {
 	char furl[UP_FILES][200];
 	int nf, page_i;              // page_i: la siguiente que se busca en su página (-1 aún no toca)
 	u64 page_at;                 // no antes de esta hora (la comunidad limita las peticiones seguidas)
+	TopAch ach[96];              // sus logros de los juegos de su vitrina de logros
+	int nach;
+	Req *ach_req[3];
 	int page_retry;
 	float scroll, scroll_t, content;
 	bool qr;
@@ -4676,7 +4679,7 @@ static struct {
 
 static void user_reset(void)
 {
-	Req **all[] = {&UP.items, &UP.shows, &UP.xml, &UP.lvreq, &UP.files, &UP.page};
+	Req **all[] = {&UP.items, &UP.shows, &UP.xml, &UP.lvreq, &UP.files, &UP.page, &UP.ach_req[0], &UP.ach_req[1], &UP.ach_req[2]};
 	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
 		if (*all[i]) net_release(*all[i]);
 	rowlist_free(&UP.apps);
@@ -4755,12 +4758,32 @@ static void user_poll(void)
 			}
 		}
 		if (na) UP.apps.req = steam_req_items(apps, na, false);
+		// La vitrina de logros: sus logros de esos juegos (hasta tres juegos)
+		int nreq = 0;
+		for (int i = 0; i < UP.p.nshow && auth_logged(); i++) {
+			const Showcase *sc = &UP.p.show[i];
+			if (sc->type != SHOW_ACHIEVEMENTS) continue;
+			for (int k = 0; k < sc->n && nreq < 3; k++) {
+				bool dup = false;
+				for (int j = 0; j < k; j++) dup |= sc->appid[j] == sc->appid[k];
+				if (!dup) UP.ach_req[nreq++] = steam_req_my_achievements(sc->appid[k], UP.id, auth_token());
+			}
+		}
 		if (UP.nf) {
 			if (auth_logged()) UP.files = steam_req_files(UP.fid, UP.nf, auth_token());
 			else UP.page_i = 0;
 		}
 	}
 	list_poll(&UP.apps, false);
+	for (int i = 0; i < 3; i++) {
+		Req *r = UP.ach_req[i];
+		if (!r || r->state < REQ_DONE) continue;
+		int n = r->state == REQ_DONE ? steam_parse_top_achievements(r->data, UP.ach + UP.nach, 96 - UP.nach) : -1;
+		netlog("perfil %llu: logros de su vitrina %d", (unsigned long long)UP.id, n);
+		if (n > 0) UP.nach += n;
+		net_release(r);
+		UP.ach_req[i] = NULL;
+	}
 	if (UP.files && UP.files->state >= REQ_DONE) {
 		int n = UP.files->state == REQ_DONE ? steam_parse_files(UP.files->data, UP.fid, UP.nf, UP.furl) : -1;
 		netlog("perfil %llu: imágenes de vitrinas %d de %d (HTTP %ld)", (unsigned long long)UP.id, n, UP.nf, UP.files->http);
@@ -4911,6 +4934,7 @@ static const char *show_title(int type)
 	case SHOW_SHOTS: return _("CAPTURAS");
 	case SHOW_ARTWORK: return _("ILUSTRACIONES");
 	case SHOW_ONE_ARTWORK: return _("ILUSTRACIÓN DESTACADA");
+	case SHOW_ACHIEVEMENTS: return _("VITRINA DE LOGROS");
 	default: return "";
 	}
 }
@@ -4967,6 +4991,38 @@ static float draw_showcase(const Showcase *s, float y, bool draw)
 			if (nm) ui_text_wrap(x + 20 + iw, y + 24, w - iw - 30, nm, SZ_BODY, COL_WHITE, 3, 16);
 		}
 		return 22 + ih + 10;
+	}
+	if (s->type == SHOW_ACHIEVEMENTS) {
+		// Los iconos en fila; debajo, el nombre del logro más raro de los que enseña y su juego
+		const int cols = 9;
+		const float gs = 36, gap = (w - 20 - cols * gs) / (cols - 1);
+		int rows = (s->n + cols - 1) / cols;
+		h = 22 + rows * (gs + gap) + 20;
+		if (draw) {
+			fx_glass(x, y, w, h, 10, 1, 0);
+			ui_text(x + 10, y + 6, show_title(s->type), SZ_TINY, COL_ACC, AL_LEFT, 0);
+			const TopAch *rare = NULL;
+			for (int i = 0; i < s->n; i++) {
+				const TopAch *t = NULL;
+				for (int j = 0; j < UP.nach; j++)
+					if (UP.ach[j].appid == s->appid[i] && !strcmp(UP.ach[j].key, s->ach[i])) t = &UP.ach[j];
+				float ix = x + 10 + (i % cols) * (gs + gap), iy = y + 22 + (i / cols) * (gs + gap);
+				if (t && t->icon[0]) {
+					snprintf(url, sizeof url, "https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/%lu/%s", (unsigned long)t->appid, t->icon);
+					draw_img_slot(url, ix, iy, gs, gs, true);
+					if (!rare || t->pct < rare->pct) rare = t;
+				} else {
+					ui_rect(ix, iy, gs, gs, col_alpha(COL_WHITE, 0.06f));
+					ui_icon(IC_TROPHY, ix + 10, iy + 10, 16, COL_DIM);
+				}
+			}
+			char t[160];
+			const char *game = user_app_name(s->appid[0]);
+			if (rare) snprintf(t, sizeof t, _("%s · lo tiene el %.1f %% de los jugadores"), rare->name, rare->pct);
+			else snprintf(t, sizeof t, "%s", auth_logged() ? (game ? game : "") : _("Inicia sesión para ver sus logros"));
+			ui_text(x + 10, y + h - 17, t, SZ_TINY, COL_DIM, AL_LEFT, w - 20);
+		}
+		return h;
 	}
 	if (s->type == SHOW_COLLECTOR || s->type == SHOW_COMPLETIONIST) {
 		const int cols = 4;

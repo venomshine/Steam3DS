@@ -284,6 +284,10 @@ int main(void) {
 	CHECK(!steam_parse_privacy("<html>Iniciar sesión</html>", &pv));
 	char th[4][24];
 	CHECK(steam_parse_themes("{\"response\":{\"profile_themes\":[{\"theme_id\":\"Summer\"},{\"theme_id\":\"Midnight\"}]}}", th, 4) == 2 && !strcmp(th[1], "Midnight"));
+	// Vitrina de logros: los de alguien con su clave statid_bit
+	TopAch ta[4];
+	CHECK(steam_parse_top_achievements("{\"response\":{\"games\":[{\"appid\":601220,\"achievements\":[{\"statid\":1,\"bit\":30,\"name\":\"Leyenda\",\"icon\":\"a.jpg\",\"player_percent_unlocked\":\"0.4\"}]}]}}", ta, 4) == 1);
+	CHECK(ta[0].appid == 601220 && !strcmp(ta[0].key, "1_30") && !strcmp(ta[0].name, "Leyenda") && ta[0].pct < 0.5f);
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

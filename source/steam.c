@@ -1816,7 +1816,7 @@ bool steam_parse_profile_showcases(const char *json, SteamProfile *p)
 		if (cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(c, "active"))) continue;
 		int type = (int)jnum(c, "customization_type", 0);
 		bool known = type == SHOW_COLLECTOR || type == SHOW_SHOTS || type == SHOW_TEXT || type == SHOW_FAV_GAME ||
-			type == SHOW_ARTWORK || type == SHOW_ONE_ARTWORK || type == SHOW_COMPLETIONIST;
+			type == SHOW_ARTWORK || type == SHOW_ONE_ARTWORK || type == SHOW_COMPLETIONIST || type == SHOW_ACHIEVEMENTS;
 		if (!known || p->nshow >= PROFILE_MAX_SHOW) {
 			p->nother++;
 			continue;
@@ -1829,15 +1829,22 @@ bool steam_parse_profile_showcases(const char *json, SteamProfile *p)
 				const char *t = jstr(sl, "title"), *n = jstr(sl, "notes");
 				if (t) tidy_text(sh->title = strdup(t));
 				if (n) tidy_text(sh->text = strdup(n));
-				sh->n = 1;
+				sh->n = (sh->title && sh->title[0]) || (sh->text && sh->text[0]);   // vacía: no se enseña
+				if (!sh->n) {
+					free(sh->title);
+					free(sh->text);
+					sh->title = sh->text = NULL;
+				}
 				break;
 			}
 			if (sh->n >= SHOW_MAX_SLOTS) break;
 			u32 app = (u32)jnum(sl, "appid", 0);
 			u64 file = jid(sl, "publishedfileid");
 			if (!app && !file) continue;   // hueco vacío
+			if (type == SHOW_ACHIEVEMENTS && !jstr(sl, "title")) continue;
 			sh->appid[sh->n] = app;
 			sh->file[sh->n] = file;
+			copy(sh->ach[sh->n], sizeof sh->ach[0], jstr(sl, "title"));
 			sh->n++;
 		}
 		if (sh->n) p->nshow++;
@@ -2382,4 +2389,32 @@ Req *steam_req_set_theme(const char *theme, const char *token)
 	cJSON *in = cJSON_CreateObject();
 	cJSON_AddStringToObject(in, "theme_id", theme);
 	return steam_post_service("IPlayerService/SetProfileTheme", in, token);
+}
+
+int steam_parse_top_achievements(const char *json, TopAch *out, int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *g, *it;
+	cJSON_ArrayForEach(g, cJSON_GetObjectItemCaseSensitive(resp, "games")) {
+		u32 app = (u32)jnum(g, "appid", 0);
+		cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(g, "achievements")) {
+			if (n >= max) break;
+			TopAch *a = &out[n++];
+			memset(a, 0, sizeof *a);
+			a->appid = app;
+			snprintf(a->key, sizeof a->key, "%d_%d", (int)jnum(it, "statid", 0), (int)jnum(it, "bit", 0));
+			copy_utf8(a->name, sizeof a->name, jstr(it, "name"));
+			copy(a->icon, sizeof a->icon, jstr(it, "icon"));
+			const char *p = jstr(it, "player_percent_unlocked");
+			a->pct = p ? strtof(p, NULL) : 0;
+		}
+	}
+	cJSON_Delete(root);
+	return n;
 }

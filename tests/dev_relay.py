@@ -89,7 +89,7 @@ def fake_jwt(kind, aud=None):
 
 FRIENDS = [76561190000000101, 76561190000000102, 76561190000000103]
 # xPaw (fondo y marco), St4ck (muchas vitrinas), Robin Walker (juego favorito) y Tfue (ilustraciones)
-PROFILE_AS = {FAKE_ID: 76561197972494985, 76561190000000101: 76561198023414915, 76561190000000102: 76561197960435530,
+PROFILE_AS = {FAKE_ID: 76561197972494985, 76561190000000101: 76561198023414915, 76561190000000102: 76561198059667390,
               76561190000000103: 76561198260200125}
 NAMES = {FAKE_ID: "VENOMSHiNE (prueba)", 76561190000000101: "Kenji", 76561190000000102: "Lucía", 76561190000000103: "Marco"}
 OWNED = [(1091500, "Cyberpunk 2077", 6120, 3), (381210, "Dead by Daylight", 2410, 1), (1145360, "Hades", 3900, 20),
@@ -296,6 +296,19 @@ def fake_post_api(path, body):
                          % (appid, inp.get("language", "english")))
         ach = json.loads(b).get("response", {}).get("achievements", []) if st == 200 else []
         mine = ach[::3] if appid in [a for a, *_ in OWNED] else []
+        sid = int(inp.get("steamid", "0") or 0)
+        if sid != FAKE_ID and sid in PROFILE_AS and path.endswith("GetTopAchievementsForGames/v1/"):
+            # Un amigo simulado: los logros de la vitrina real de su perfil, con sus claves statid_bit
+            st2, _, b2 = fetch("GET", "https://api.steampowered.com/IPlayerService/GetProfileCustomization/v1/?steamid=%d" % PROFILE_AS[sid])
+            keys = []
+            for c in json.loads(b2).get("response", {}).get("customizations", []) if st2 == 200 else []:
+                if c.get("customization_type") == 17:
+                    keys += [sl["title"] for sl in c.get("slots", []) if sl.get("appid") == appid and sl.get("title") and sl["title"] not in keys]
+            ach.sort(key=lambda a: float(a["player_percent_unlocked"]))
+            return {"response": {"games": [{"appid": appid, "total_achievements": len(ach), "achievements": [
+                {"statid": int(k.split("_")[0]), "bit": int(k.split("_")[1]), "name": a["localized_name"], "desc": a["localized_desc"],
+                 "icon": a["icon"], "icon_gray": a["icon_gray"], "player_percent_unlocked": a["player_percent_unlocked"]}
+                for k, a in zip(keys, ach)]}]}}
         if path.endswith("GetAchievementsProgress/v1/"):
             return {"response": {"achievement_progress": [{"appid": appid, "unlocked": len(mine), "total": len(ach),
                     "percentage": 100.0 * len(mine) / len(ach) if ach else 0, "all_unlocked": bool(ach) and len(mine) == len(ach)}]}}

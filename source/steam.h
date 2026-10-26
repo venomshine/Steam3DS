@@ -286,14 +286,15 @@ bool steam_parse_wallet(const char *json, WalletInfo *w);
 // Perfil de Steam de cualquiera (también el tuyo): lo que lleva puesto (fondo y marco), sus vitrinas
 // y su ficha pública (nombre, nombre real, país, «sobre mí», desde cuándo es miembro)
 #define PROFILE_MAX_SHOW 10
-#define SHOW_MAX_SLOTS 8
+#define SHOW_MAX_SLOTS 16
 enum { SHOW_RARE_ACH = 1, SHOW_COLLECTOR = 2, SHOW_SHOTS = 7, SHOW_TEXT = 8, SHOW_FAV_GAME = 6, SHOW_ARTWORK = 13,
-	SHOW_ONE_ARTWORK = 22, SHOW_COMPLETIONIST = 23 };
+	SHOW_ONE_ARTWORK = 22, SHOW_COMPLETIONIST = 23, SHOW_ACHIEVEMENTS = 17 };
 typedef struct {
 	int type;                       // tipo de vitrina de Steam (SHOW_*)
 	int n;                          // huecos con algo
 	u32 appid[SHOW_MAX_SLOTS];
 	u64 file[SHOW_MAX_SLOTS];       // capturas e ilustraciones (publishedfileid)
+	char ach[SHOW_MAX_SLOTS][12];   // vitrina de logros: «statid_bit» de cada logro
 	char *title, *text;             // vitrina de texto (malloc)
 } Showcase;
 typedef struct {
@@ -379,3 +380,13 @@ void steam_privacy_free(SteamPrivacy *p);
 Req *steam_req_themes(const char *token);
 int steam_parse_themes(const char *json, char (*out)[24], int max);
 Req *steam_req_set_theme(const char *theme, const char *token);
+
+// Logros desbloqueados de alguien en un juego, con su clave (statid_bit) para casarlos con su vitrina
+typedef struct {
+	u32 appid;
+	char key[12];           // «statid_bit»
+	char name[64];
+	char icon[48];          // archivo en .../steamcommunity/public/images/apps/<appid>/
+	float pct;
+} TopAch;
+int steam_parse_top_achievements(const char *json, TopAch *out, int max);   // -1 si falla

@@ -19,6 +19,7 @@ typedef struct {
 	int type;               // 0 juego, 1 demo, 4 DLC… (como lo da Steam)
 	bool header;            // fila de título de apartado (Inicio), no es un juego
 	u32 tagid;              // Buscar: fila de búsqueda popular (una etiqueta), no es un juego
+	bool family;            // biblioteca: te lo presta alguien de tu Familia de Steam
 	bool coming_soon;
 	bool early;             // sigue en acceso anticipado (dato de Steam, no la etiqueta de los usuarios)
 	int minutes;            // biblioteca: minutos jugados
@@ -152,6 +153,12 @@ Req *steam_req_country(void);
 
 // Con sesión (token de acceso)
 Req *steam_req_owned(u64 steamid, const char *token);
+// Familia de Steam: a qué familia perteneces (1 sí y deja su id en gid, 0 no estás en ninguna,
+// -1 respuesta no válida) y los juegos que comparten los demás (sin los tuyos ni los excluidos)
+Req *steam_req_family_group(u64 steamid, const char *token);
+int steam_parse_family_group(const char *json, u64 *gid);
+Req *steam_req_family_apps(u64 gid, u64 steamid, const char *token);
+int steam_parse_family_apps(const char *json, u64 me, RowList *out);
 bool steam_parse_owned(const char *json, RowList *list);     // ordenada por nombre, como en Steam
 void steam_sort_by_name(RowList *list);
 Req *steam_req_wishlist(u64 steamid, const char *token);

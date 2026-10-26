@@ -44,6 +44,8 @@ TR = {
     "Búsquedas recientes": ("Recent searches", "最近の検索"),
     "Explorar la tienda": ("Browse the store", "ストアを見る"),
     "Búsquedas populares": ("Popular searches", "人気の検索"),
+    "Familia": ("Family", "ファミリー"),
+    "En tu biblioteca familiar": ("In your family library", "ファミリーライブラリにあります"),
     "Juegos con la etiqueta «%s»": ("Games tagged “%s”", "「%s」タグのゲーム"),
     "Cualquier precio": ("Any price", "すべての価格"),
     "Menos de %s": ("Under %s", "%s 未満"),

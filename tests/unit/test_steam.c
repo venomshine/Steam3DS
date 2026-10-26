@@ -106,6 +106,20 @@ int main(void) {
 	CHECK(strstr(last_url, "only_free_items") != NULL && strstr(last_url, "tagids_must_match") == NULL);
 	steam_req_browse(30, 30, false, 1716);
 	CHECK(strstr(last_url, "only_free_items") == NULL && strstr(last_url, "1716") != NULL);
+	// Familia de Steam: el grupo y los juegos que prestan los demás
+	u64 gid;
+	CHECK(steam_parse_family_group("{\"response\":{\"family_groupid\":\"9000001\",\"is_not_member_of_any_group\":false}}", &gid) == 1 && gid == 9000001);
+	CHECK(steam_parse_family_group("{\"response\":{\"is_not_member_of_any_group\":true}}", &gid) == 0);
+	RowList fam = {0};
+	CHECK(steam_parse_family_apps("{\"response\":{\"apps\":["
+		"{\"appid\":367520,\"name\":\"Hollow Knight\",\"owner_steamids\":[\"76561190000000101\"],\"exclude_reason\":0,\"img_icon_hash\":\"abc\"},"
+		"{\"appid\":1145360,\"name\":\"Hades\",\"owner_steamids\":[\"76561190000000042\",\"76561190000000101\"],\"exclude_reason\":0},"
+		"{\"appid\":271590,\"name\":\"GTA V\",\"owner_steamids\":[\"76561190000000101\"],\"exclude_reason\":3}]}}",
+		76561190000000042ULL, &fam) == 1);
+	CHECK(fam.count == 1 && fam.rows[0].appid == 367520 && fam.rows[0].family && !strcmp(fam.rows[0].icon, "abc"));
+	rowlist_free(&fam);
+	steam_req_family_apps(9000001, 76561190000000042ULL, "tok");
+	CHECK(strstr(last_url, "GetSharedLibraryApps") && strstr(last_url, "family_groupid=9000001"));
 	// Las etiquetas populares
 	StoreTag tg[4];
 	CHECK(steam_parse_tags("{\"response\":{\"tags\":[{\"tagid\":492,\"name\":\"Indie\"},{\"tagid\":19,\"name\":\"Acción\"}]}}", tg, 4) == 2);

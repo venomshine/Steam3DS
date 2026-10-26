@@ -937,6 +937,83 @@ Req *steam_req_owned(u64 steamid, const char *token)
 	return net_get(url, LANE_API);
 }
 
+Req *steam_req_family_group(u64 steamid, const char *token)
+{
+	char url[1400];
+	snprintf(url, sizeof url, "https://api.steampowered.com/IFamilyGroupsService/GetFamilyGroupForUser/v1/?access_token=%s&steamid=%llu",
+		token, (unsigned long long)steamid);
+	return net_get(url, LANE_API);
+}
+
+int steam_parse_family_group(const char *json, u64 *gid)
+{
+	*gid = 0;
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	const char *g = jstr(resp, "family_groupid");
+	if (g) *gid = strtoull(g, NULL, 10);
+	else *gid = (u64)jnum(resp, "family_groupid", 0);
+	int r = (*gid && !jbool(resp, "is_not_member_of_any_group")) ? 1 : 0;
+	cJSON_Delete(root);
+	return r;
+}
+
+Req *steam_req_family_apps(u64 gid, u64 steamid, const char *token)
+{
+	char url[1500];
+	snprintf(url, sizeof url, "https://api.steampowered.com/IFamilyGroupsService/GetSharedLibraryApps/v1/?access_token=%s"
+		"&family_groupid=%llu&steamid=%llu&include_own=false&include_excluded=false&include_free=false&include_non_games=false&language=%s",
+		token, (unsigned long long)gid, (unsigned long long)steamid, g_lang);
+	return net_get(url, LANE_API);
+}
+
+int steam_parse_family_apps(const char *json, u64 me, RowList *out)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	char mine[24];
+	snprintf(mine, sizeof mine, "%llu", (unsigned long long)me);
+	int n = 0;
+	const cJSON *a;
+	cJSON_ArrayForEach(a, cJSON_GetObjectItemCaseSensitive(resp, "apps")) {
+		u32 appid = (u32)jnum(a, "appid", 0);
+		const char *name = jstr(a, "name");
+		if (!appid || !name || !*name || jnum(a, "exclude_reason", 0) != 0) continue;
+		// Lo que ya es tuyo va por la biblioteca normal
+		bool own = false;
+		const cJSON *o;
+		cJSON_ArrayForEach(o, cJSON_GetObjectItemCaseSensitive(a, "owner_steamids")) {
+			if ((cJSON_IsString(o) && !strcmp(o->valuestring, mine)) || (cJSON_IsNumber(o) && (u64)o->valuedouble == me)) own = true;
+		}
+		if (own) continue;
+		if (out->count == out->cap) {
+			int cap = out->cap ? out->cap * 2 : 16;
+			StoreRow *r = realloc(out->rows, cap * sizeof(StoreRow));
+			if (!r) break;
+			out->rows = r;
+			out->cap = cap;
+		}
+		StoreRow *row = &out->rows[out->count++];
+		memset(row, 0, sizeof *row);
+		row->cents = -1;
+		row->appid = appid;
+		row->family = true;
+		copy_utf8(row->name, sizeof row->name, name);
+		copy(row->icon, sizeof row->icon, jstr(a, "img_icon_hash"));
+		n++;
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
 static int cmp_name(const void *a, const void *b)
 {
 	const StoreRow *x = a, *y = b;

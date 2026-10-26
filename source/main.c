@@ -624,6 +624,65 @@ static void lib_sort(Tab *t)
 		}
 }
 
+// Familia de Steam: cuando la biblioteca ya está, se pregunta si estás en una familia y qué juegos
+// comparten los demás; se suman a la biblioteca con la etiqueta «Familia»
+static struct { int stage; Req *req; u64 gid; } FAM;   // stage: 0 nada, 1 grupo, 2 juegos, 3 hecho
+
+static void lib_sort(Tab *t);
+
+static void family_reset(void)
+{
+	if (FAM.req) net_release(FAM.req);
+	memset(&FAM, 0, sizeof FAM);
+}
+
+static void family_poll(void)
+{
+	Tab *t = &tabs[TAB_LIBRARY];
+	if (!auth_logged()) return;
+	if (FAM.stage == 0) {
+		// Cuando la biblioteca ha terminado de cargar
+		if (!t->started || t->list.req || !t->list.end || t->list.err[0]) return;
+		FAM.req = steam_req_family_group(auth_info()->steamid, auth_token());
+		FAM.stage = 1;
+		return;
+	}
+	Req *r = FAM.req;
+	if (!r || r->state < REQ_DONE) return;
+	if (FAM.stage == 1) {
+		int st = r->state == REQ_DONE ? steam_parse_family_group(r->data, &FAM.gid) : -1;
+		netlog("familia: %s (HTTP %ld)", st == 1 ? "estás en una familia" : st == 0 ? "no estás en ninguna" : "respuesta no válida", r->http);
+		net_release(r);
+		FAM.req = NULL;
+		FAM.stage = 3;
+		if (st == 1) {
+			FAM.req = steam_req_family_apps(FAM.gid, auth_info()->steamid, auth_token());
+			FAM.stage = 2;
+		}
+		return;
+	}
+	RowList fam = {0};
+	int n = r->state == REQ_DONE ? steam_parse_family_apps(r->data, auth_info()->steamid, &fam) : -1;
+	net_release(r);
+	FAM.req = NULL;
+	FAM.stage = 3;
+	int added = 0;
+	for (int i = 0; i < fam.count; i++) {
+		bool dup = false;
+		for (int j = 0; j < t->list.count && !dup; j++) dup = t->list.rows[j].appid == fam.rows[i].appid;
+		if (!dup) {
+			add_row(&t->list, &fam.rows[i]);
+			added++;
+		}
+	}
+	rowlist_free(&fam);
+	netlog("familia: %d juegos compartidos, %d nuevos en la biblioteca", n, added);
+	if (added) {
+		t->list.total = t->list.count;
+		lib_sort(t);
+	}
+}
+
 // Lo que la tienda sabe que tienes también trae DLC, bandas sonoras, vídeos o hardware: en la
 // biblioteca, como en la de Steam, solo van los juegos, demos, mods, programas y betas
 // (tipos de la tienda: 0 juego, 1 demo, 2 mod, 4 DLC, 6 programa, 11 música, 12 beta…)
@@ -743,6 +802,7 @@ static void wish_poll(Tab *t)
 
 static void account_lists_clear(void)
 {
+	family_reset();
 	for (int ti = TAB_LIBRARY; ti < TAB_H0; ti++) {
 		Tab *t = &tabs[ti];
 		rowlist_free(&t->list);
@@ -807,6 +867,7 @@ static void wish_changed(u32 appid, bool add)
 static void library_changed(void)
 {
 	Tab *t = &tabs[TAB_LIBRARY];
+	family_reset();   // lo de la familia se vuelve a sumar cuando esté la biblioteca nueva
 	if (t->list.req) net_release(t->list.req);
 	rowlist_free(&t->list);
 	free(t->wish);
@@ -1769,8 +1830,16 @@ static void draw_store_bottom(void)
 			if (r->minutes >= 60) snprintf(hrs, sizeof hrs, "%d h", (r->minutes + 30) / 60);
 			else if (r->minutes) snprintf(hrs, sizeof hrs, "%d min", r->minutes);
 			else snprintf(hrs, sizeof hrs, "–");
-			ui_text(BOT_W - 22, y + 8, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
-			if (lib_is_new(r->appid)) {
+			if (r->family) {
+				// Te lo presta tu familia: en vez de tus horas, la etiqueta
+				const char *ft = _("Familia");
+				float fw = ui_text_w(ft, SZ_TINY) + 10;
+				ui_rrect(BOT_W - 22 - fw, y + 7, fw, 14, 7, col_alpha(COL_ACC, 0.18f));
+				ui_text(BOT_W - 22 - fw / 2, y + 7.5f, ft, SZ_TINY, COL_ACC, AL_CENTER, 0);
+			} else {
+				ui_text(BOT_W - 22, y + 8, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+			}
+			if (!r->family && lib_is_new(r->appid)) {
 				// Nuevo: un punto que brilla al otro lado de la barrita, hasta que abres su ficha
 				float cx = BOT_W - 12, cy = y + (ROW_H - 1) / 2.0f, pu = 0.5f + 0.5f * sinf(g_time * 3.2f + i);
 				ui_circle(cx, cy, 5.5f, col_alpha(COL_ACC, 0.10f + 0.16f * pu));
@@ -1893,12 +1962,22 @@ static void store_select(int sel, int dir)
 
 // ---------------------------------------------------------------------------- Tu cuenta y la ficha
 
+// Lo de la biblioteca que es tuyo (no lo que te presta tu familia)
 static const StoreRow *owned_row(u32 appid)
 {
 	Tab *t = &tabs[TAB_LIBRARY];
 	for (int i = 0; i < t->list.count; i++)
-		if (t->list.rows[i].appid == appid) return &t->list.rows[i];
+		if (t->list.rows[i].appid == appid && !t->list.rows[i].family) return &t->list.rows[i];
 	return NULL;
+}
+
+// Te lo presta alguien de tu Familia de Steam (y no es tuyo)
+static bool family_app(u32 appid)
+{
+	Tab *t = &tabs[TAB_LIBRARY];
+	for (int i = 0; i < t->list.count; i++)
+		if (t->list.rows[i].appid == appid && t->list.rows[i].family) return true;
+	return false;
 }
 
 // ¿Es tuyo? Por la biblioteca, o por la lista de la tienda cuando se usa el plan B
@@ -2565,8 +2644,10 @@ static void draw_game_bottom(void)
 		char top[64];
 		if (own && own_row && own_row->minutes >= 60)
 			snprintf(top, sizeof top, _("En tu biblioteca · %d h jugadas"), (own_row->minutes + 30) / 60);
+		else if (!own && in && family_app(a->appid)) snprintf(top, sizeof top, "%s", _("En tu biblioteca familiar"));
 		else snprintf(top, sizeof top, "%s", own ? _("En tu biblioteca") : a->is_free ? _("Jugar") : _("Comprar"));
-		ui_text(12, 36, top, SZ_SMALL, own ? COL_LIME : COL_DIM, AL_LEFT, 0);
+		bool fam = !own && in && family_app(a->appid);
+		ui_text(12, 36, top, SZ_SMALL, own ? COL_LIME : fam ? COL_ACC : COL_DIM, AL_LEFT, 0);
 		ui_text(12, 50, a->name, SZ_BODY, COL_WHITE, AL_LEFT, a->disc ? 160 : 190);
 		int nopt = 0;
 		const BuyOpt *opts = shop_buyopts(a->appid, &nopt, NULL);
@@ -4990,6 +5071,7 @@ int main(int argc, char **argv)
 		}
 		seen_poll();
 		tags_poll();
+		family_poll();
 		info_poll();
 		for (int i = 0; i < CACHE; i++) {
 			InfoEnt *e = &cache[i];

@@ -238,6 +238,22 @@ def fake_get(path, q):
         return {"response": {"game_count": len([a for a, *_ in OWNED if a not in FREE_ADDED]), "games": [
             {"appid": a, "name": n, "playtime_forever": m, "rtime_last_played": now - d * 86400, "img_icon_url": ""}
             for a, n, m, d in OWNED if a not in FREE_ADDED]}}
+    # Familia de Steam simulada: Kenji y Lucía comparten dos juegos que la cuenta no tiene
+    if path.endswith("GetFamilyGroupForUser/v1/"):
+        return {"response": {"family_groupid": "9000001", "is_not_member_of_any_group": False,
+                             "family_group": {"name": "Casa", "members": [
+                                 {"steamid": str(FAKE_ID), "role": 1}, {"steamid": "76561190000000101", "role": 1},
+                                 {"steamid": "76561190000000102", "role": 2}]}}}
+    if path.endswith("GetSharedLibraryApps/v1/"):
+        return {"response": {"owner_steamid": str(FAKE_ID), "apps": [
+            {"appid": 367520, "name": "Hollow Knight", "owner_steamids": ["76561190000000101"], "exclude_reason": 0,
+             "app_type": 1, "img_icon_hash": "f6ab055c2366237200b1a31cccbd6cf81e436d72", "rt_playtime": 0},
+            {"appid": 504230, "name": "Celeste", "owner_steamids": ["76561190000000102"], "exclude_reason": 0,
+             "app_type": 1, "img_icon_hash": "", "rt_playtime": 0},
+            {"appid": 1145360, "name": "Hades", "owner_steamids": [str(FAKE_ID), "76561190000000101"], "exclude_reason": 0,
+             "app_type": 1, "img_icon_hash": "", "rt_playtime": 0},
+            {"appid": 271590, "name": "Grand Theft Auto V", "owner_steamids": ["76561190000000101"], "exclude_reason": 3,
+             "app_type": 1, "img_icon_hash": "", "rt_playtime": 0}]}}
     if path.endswith("GetWishlist/v1/"):
         return {"response": {"items": [{"appid": a, "priority": i + 1, "date_added": int(time.time()) - i * 86400 * 7}
                                        for i, a in enumerate(WISH)]}}

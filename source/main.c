@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include <strings.h>
 
 #include "app.h"
@@ -23,7 +24,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS, SC_USER } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS, SC_USER, SC_ACCSET } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
@@ -5244,7 +5245,7 @@ static void input_accounts(u32 kd, u32 kh, touchPosition *tp)
 
 // ---------------------------------------------------------------------------- Configuración
 
-enum { ST_LANG, ST_REQS, ST_SOUND, ST_CACHE, ST_ABOUT, ST_COUNT };
+enum { ST_LANG, ST_REQS, ST_SOUND, ST_CACHE, ST_ACCOUNT, ST_ABOUT, ST_COUNT };
 static int set_sel;
 static Scene set_back;
 
@@ -5296,12 +5297,13 @@ static void settings_value(int i, char *out, size_t n)
 
 static void draw_settings_top(void)
 {
-	static const char *title[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Acerca de Steam3DS"};
+	static const char *title[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Privacidad y perfil", "Acerca de Steam3DS"};
 	static const char *desc[ST_COUNT] = {
 		"El idioma de la app y de la tienda. Con «Idioma de la consola» se usa el que tenga configurado tu Nintendo 3DS.",
 		"Qué requisitos se muestran en la ficha de cada juego. También puedes cambiarlo en el apartado Requisitos de la ficha.",
 		"El golpe de la válvula, el bombillo, el óxido y el vapor al abrir la app. Se aplica la próxima vez que la abras.",
 		"Las imágenes de la tienda se guardan en la tarjeta SD para que aparezcan al momento la próxima vez. Ocupa como mucho 64 MB y lo más antiguo se borra solo. Vaciarla no borra nada de tu cuenta.",
+		"Quién puede ver tu perfil, tus juegos, tu lista de amigos y tu inventario, quién puede comentar, y el tema de tu perfil. Los cambios se guardan en tu cuenta de Steam.",
 		"La versión de Steam3DS, los enlaces del proyecto, las políticas de Steam, los créditos y el aviso legal.",
 	};
 	const float X = 16, W = TOP_W - 32;
@@ -5322,9 +5324,9 @@ static void draw_settings_bottom(void)
 	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
 	ui_icon(IC_WRENCH, 28, 6, 12, COL_ACC);
 	ui_text(46, 5, _("Configuración"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
-	static const Icon ic[ST_COUNT] = {IC_CHAT, IC_PC, IC_BELL, IC_IMAGE, IC_INFO};
-	static const char *label[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Acerca de Steam3DS"};
-	const float RH = 36;
+	static const Icon ic[ST_COUNT] = {IC_CHAT, IC_PC, IC_BELL, IC_IMAGE, IC_LOCK, IC_INFO};
+	static const char *label[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Privacidad y perfil", "Acerca de Steam3DS"};
+	const float RH = 32;
 	for (int i = 0; i < ST_COUNT; i++) {
 		float y = LIST_Y + 4 + i * RH;
 		bool on = i == set_sel;
@@ -5333,19 +5335,21 @@ static void draw_settings_bottom(void)
 			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
 			ui_rrect(3, y + 6, 2, RH - 12, 1, col_alpha(COL_ACC, 0.8f));
 		}
-		ui_icon(ic[i], 14, y + 12, 12, on ? COL_ACC : COL_DIM);
-		ui_text(36, y + 10, _(label[i]), SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, 170);
+		ui_icon(ic[i], 14, y + 10, 12, on ? COL_ACC : COL_DIM);
+		ui_text(36, y + 8, _(label[i]), SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, 170);
 		char v[64];
 		settings_value(i, v, sizeof v);
-		if (i == ST_ABOUT) ui_text(BOT_W - 20, y + 8, "›", SZ_LARGE, COL_ACC, AL_LEFT, 0);
-		else ui_text(BOT_W - 14, y + 11, v, SZ_SMALL, COL_ACC, AL_RIGHT, 110);
+		if (i == ST_ABOUT || i == ST_ACCOUNT) ui_text(BOT_W - 20, y + 6, "›", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+		else ui_text(BOT_W - 14, y + 9, v, SZ_SMALL, COL_ACC, AL_RIGHT, 110);
 		if (i < ST_COUNT - 1) ui_hline(36, y + RH - 1, BOT_W - 44, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
 	}
 	static const char *hv[] = {"← →", "Cambiar", "↑↓", "Elegir", "B", "Volver"};
 	static const char *hc[] = {"A", "Vaciar", "↑↓", "Elegir", "B", "Volver"};
 	static const char *ha[] = {"A", "Abrir", "↑↓", "Elegir", "B", "Volver"};
-	draw_hints(set_sel == ST_CACHE ? hc : set_sel == ST_ABOUT ? ha : hv, 3);
+	draw_hints(set_sel == ST_CACHE ? hc : set_sel == ST_ABOUT || set_sel == ST_ACCOUNT ? ha : hv, 3);
 }
+
+static void open_accset(void);
 
 static void input_settings(u32 kd, u32 kh, touchPosition *tp)
 {
@@ -5356,7 +5360,7 @@ static void input_settings(u32 kd, u32 kh, touchPosition *tp)
 	if (key_repeat(kd, kh, KEY_DOWN)) set_sel = (set_sel + 1) % ST_COUNT;
 	if (key_repeat(kd, kh, KEY_UP)) set_sel = (set_sel + ST_COUNT - 1) % ST_COUNT;
 	if ((kd & KEY_TOUCH) && tp->py >= LIST_Y + 4) {
-		int i = (int)((tp->py - LIST_Y - 4) / 36);
+		int i = (int)((tp->py - LIST_Y - 4) / 32);
 		if (i >= 0 && i < ST_COUNT) {
 			if (i == set_sel) kd |= KEY_A;
 			set_sel = i;
@@ -5385,7 +5389,280 @@ static void input_settings(u32 kd, u32 kh, touchPosition *tp)
 	case ST_ABOUT:
 		if (kd & KEY_A) open_about();
 		break;
+	case ST_ACCOUNT:
+		if (!(kd & KEY_A)) break;
+		if (auth_logged()) open_accset();
+		else toast(_("Disponible al iniciar sesión"));
+		break;
 	}
+}
+
+
+// ---------------------------------------------------------------------------- Privacidad y perfil
+
+enum { AS_PROFILE, AS_GAMES, AS_PLAYTIME, AS_FRIENDS, AS_INVENTORY, AS_COMMENTS, AS_THEME, AS_COUNT };
+#define AS_THEMES 12
+static struct {
+	SteamPrivacy pv;
+	Req *req, *save, *themes_req, *theme_save;
+	bool loaded, failed, dirty, saved;
+	char themes[AS_THEMES][24];
+	int nthemes, sel;
+	bool themes_loaded;
+	char theme_want[24];
+} AS;
+
+static void open_accset(void)
+{
+	Req **all[] = {&AS.req, &AS.save, &AS.themes_req, &AS.theme_save};
+	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
+		if (*all[i]) net_release(*all[i]), *all[i] = NULL;
+	steam_privacy_free(&AS.pv);
+	AS.loaded = AS.failed = AS.dirty = AS.saved = AS.themes_loaded = false;
+	AS.nthemes = AS.sel = 0;
+	char ck[1200];
+	if (auth_web_cookies("steamcommunity.com", ck, sizeof ck)) AS.req = steam_req_privacy(auth_info()->steamid, ck);
+	else AS.failed = true;
+	memset(ck, 0, sizeof ck);
+	AS.themes_req = steam_req_themes(auth_token());
+	user_load(auth_info()->steamid);   // el tema que llevas puesto
+	go_scene(SC_ACCSET, 1);
+}
+
+// Comentarios a la escala de la privacidad (3 todos, 2 amigos, 1 solo tú) y al revés
+static int comments_level(int c) { return c == 1 ? 3 : c == 0 ? 2 : 1; }
+static int comments_from(int lv) { return lv == 3 ? 1 : lv == 2 ? 0 : 2; }
+
+// Como en Steam: nada puede ser más público que el perfil
+static void privacy_clamp(SteamPrivacy *p)
+{
+	if (p->games > p->profile) p->games = p->profile;
+	if (p->friends > p->profile) p->friends = p->profile;
+	if (p->inventory > p->profile) p->inventory = p->profile;
+	if (comments_level(p->comments) > p->profile) p->comments = comments_from(p->profile);
+}
+
+static void accset_poll(void)
+{
+	if (AS.req && AS.req->state >= REQ_DONE) {
+		bool ok = AS.req->state == REQ_DONE && steam_parse_privacy(AS.req->data, &AS.pv);
+		netlog("privacidad: %s (HTTP %ld)", ok ? "leída" : "no se pudo leer", AS.req->http);
+		AS.loaded = ok;
+		AS.failed = !ok;
+		net_release(AS.req);
+		AS.req = NULL;
+	}
+	if (AS.themes_req && AS.themes_req->state >= REQ_DONE) {
+		int n = AS.themes_req->state == REQ_DONE ? steam_parse_themes(AS.themes_req->data, AS.themes, AS_THEMES) : -1;
+		netlog("temas del perfil: %d", n);
+		AS.nthemes = n < 0 ? 0 : n;
+		AS.themes_loaded = true;
+		net_release(AS.themes_req);
+		AS.themes_req = NULL;
+	}
+	// Se guarda al momento, como en la web; si cambias algo mientras se guarda, se manda después
+	if (AS.save && AS.save->state >= REQ_DONE) {
+		cJSON *root = AS.save->state == REQ_DONE ? cJSON_Parse(AS.save->data) : NULL;
+		const cJSON *sc = cJSON_GetObjectItemCaseSensitive(root, "success");
+		bool ok = cJSON_IsNumber(sc) ? sc->valueint == 1 : cJSON_IsTrue(sc);
+		netlog("privacidad: guardar -> %s (HTTP %ld)", ok ? "ok" : "fallo", AS.save->http);
+		cJSON_Delete(root);
+		net_release(AS.save);
+		AS.save = NULL;
+		AS.saved = ok;
+		if (!ok) {
+			toast_icon(_("No se pudo guardar tu privacidad. Se vuelve a cargar la de tu cuenta"), IC_LOCK);
+			AS.dirty = false;
+			char ck[1200];
+			if (auth_web_cookies("steamcommunity.com", ck, sizeof ck)) AS.req = steam_req_privacy(auth_info()->steamid, ck);
+			memset(ck, 0, sizeof ck);
+			AS.loaded = false;
+		}
+	}
+	if (AS.dirty && !AS.save && AS.loaded) {
+		char ck[1200];
+		if (auth_web_cookies("steamcommunity.com", ck, sizeof ck))
+			AS.save = steam_req_set_privacy(auth_info()->steamid, &AS.pv, auth_sessionid(), ck);
+		memset(ck, 0, sizeof ck);
+		AS.dirty = false;
+		AS.saved = false;
+	}
+	if (AS.theme_save && AS.theme_save->state >= REQ_DONE) {
+		bool ok = AS.theme_save->state == REQ_DONE && (AS.theme_save->eresult == 1 || AS.theme_save->eresult == 0) && AS.theme_save->http == 200;
+		netlog("tema del perfil: %s -> %s", AS.theme_want, ok ? "ok" : "fallo");
+		if (ok && user_loaded_is(auth_info()->steamid)) snprintf(UP.p.theme, sizeof UP.p.theme, "%s", AS.theme_want);
+		toast_icon(ok ? _("Tema del perfil cambiado") : _("No se pudo cambiar el tema del perfil"), IC_USER);
+		net_release(AS.theme_save);
+		AS.theme_save = NULL;
+	}
+}
+
+static const char *privacy_name(int v)
+{
+	return v == 3 ? _("Público") : v == 2 ? _("Solo amigos") : _("Privado");
+}
+
+static const char *theme_name(const char *id)
+{
+	static const struct { const char *id, *name; } names[] = {{"Summer", "Verano"}, {"Midnight", "Medianoche"}, {"Steel", "Acero"},
+		{"Cosmic", "Cósmico"}, {"DarkMode", "Modo oscuro"}};
+	if (!id || !*id) return _("Predeterminado");
+	for (size_t i = 0; i < sizeof names / sizeof *names; i++)
+		if (!strcmp(id, names[i].id)) return _(names[i].name);
+	return id;
+}
+
+static const char *current_theme(void)
+{
+	return AS.theme_save ? AS.theme_want : user_loaded_is(auth_info()->steamid) ? UP.p.theme : "";
+}
+
+static void accset_value(int i, char *out, size_t n)
+{
+	const SteamPrivacy *p = &AS.pv;
+	switch (i) {
+	case AS_PROFILE: snprintf(out, n, "%s", privacy_name(p->profile)); break;
+	case AS_GAMES: snprintf(out, n, "%s", privacy_name(p->games)); break;
+	case AS_PLAYTIME: snprintf(out, n, "%s", p->playtime_private ? _("Sí") : _("No")); break;
+	case AS_FRIENDS: snprintf(out, n, "%s", privacy_name(p->friends)); break;
+	case AS_INVENTORY: snprintf(out, n, "%s", privacy_name(p->inventory)); break;
+	case AS_COMMENTS: snprintf(out, n, "%s", p->comments == 1 ? _("Todos") : p->comments == 0 ? _("Solo amigos") : _("Privado")); break;
+	case AS_THEME: snprintf(out, n, "%s", theme_name(current_theme())); break;
+	}
+}
+
+static const char *const as_label[AS_COUNT] = {"Mi perfil", "Detalles de juego", "Tiempo de juego siempre privado", "Lista de amigos", "Inventario",
+	"Comentarios en el perfil", "Tema del perfil"};
+static const char *const as_desc[AS_COUNT] = {
+	"Quién puede ver tu perfil: el nivel, las vitrinas, el «sobre mí» y lo demás. Lo que elijas aquí es el máximo para todo lo de abajo.",
+	"Quién puede ver los juegos que tienes, los que tienes en tu lista de deseos, tus logros y tu tiempo de juego. Afecta también a lo que ven tus amigos en su actividad.",
+	"Aunque tus juegos sean visibles, tu tiempo de juego total no se mostrará a nadie más que a ti.",
+	"Quién puede ver tu lista de amigos en tu perfil.",
+	"Quién puede ver los objetos de tu inventario de Steam (cromos, fondos, objetos de juegos…).",
+	"Quién puede escribir comentarios en tu perfil.",
+	"El tema de colores de tu perfil. Solo aparecen los que tienes; se consiguen en la tienda de puntos de Steam.",
+};
+
+static void draw_accset_top(void)
+{
+	const float X = 16, W = TOP_W - 32;
+	if (!AS.loaded) {
+		if (AS.failed) {
+			ui_icon(IC_LOCK, TOP_W / 2 - 12, 80, 24, COL_DIM);
+			ui_text(TOP_W / 2, 116, _("No se pudo cargar tu privacidad"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
+			ui_text_wrap(X, 142, W, _("No se cambiará nada hasta poder leer la que tienes ahora. Vuelve a entrar en un momento."), SZ_SMALL, COL_DIM, 3, 15);
+		} else {
+			draw_net_wait(TOP_W / 2, 120, _("Cargando tu privacidad…"));
+		}
+		return;
+	}
+	ui_text(X, 28, _(as_label[AS.sel]), SZ_LARGE, COL_WHITE, AL_LEFT, W);
+	ui_rrect(X, 47, ui_text_w(_(as_label[AS.sel]), SZ_LARGE), 2, 1, col_alpha(COL_ACC, 0.8f));
+	ui_text_wrap(X, 62, W, _(as_desc[AS.sel]), SZ_SMALL, COL_TXT, 6, 15);
+	if (AS.sel == AS_THEME && AS.themes_loaded && !AS.nthemes)
+		ui_text_wrap(X, 140, W, _("Todavía no tienes ningún tema."), SZ_SMALL, COL_DIM, 2, 15);
+	const char *st = AS.save || AS.dirty || AS.theme_save ? _("Guardando en tu cuenta de Steam…") : AS.saved ? _("Guardado en tu cuenta de Steam") : NULL;
+	if (st) {
+		ui_icon(AS.saved && !AS.save ? IC_CHECK : IC_CLOUD, X, 207, 12, AS.saved && !AS.save ? COL_LIME : COL_DIM);
+		ui_text(X + 18, 206, st, SZ_SMALL, AS.saved && !AS.save ? COL_LIME : COL_DIM, AL_LEFT, W - 18);
+	}
+}
+
+static void draw_accset_bottom(void)
+{
+	fx_bar(0, 0, BOT_W, LIST_Y, true);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_icon(IC_LOCK, 28, 6, 12, COL_ACC);
+	ui_text(46, 5, _("Privacidad y perfil"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
+	if (!AS.loaded) {
+		if (!AS.failed) ui_spinner(BOT_W / 2, 110, 7, COL_DIM);
+		static const char *h[] = {"B", "Volver"};
+		draw_hints(h, 1);
+		return;
+	}
+	const float RH = 27;
+	for (int i = 0; i < AS_COUNT; i++) {
+		float y = LIST_Y + 3 + i * RH;
+		bool on = i == AS.sel;
+		bool off = i == AS_PLAYTIME && AS.pv.games == 1;   // con los juegos privados no cambia nada
+		if (on) {
+			float br = 0.075f + 0.035f * sinf(g_time * 2.4f);
+			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
+			ui_rrect(3, y + 5, 2, RH - 10, 1, col_alpha(COL_ACC, 0.8f));
+		}
+		ui_text(14, y + 6, _(as_label[i]), SZ_SMALL, off ? COL_DIM : on ? COL_WHITE : COL_TXT, AL_LEFT, 190);
+		char v[48];
+		accset_value(i, v, sizeof v);
+		float vw = ui_text_w(v, SZ_SMALL);
+		ui_text(BOT_W - 26, y + 6, v, SZ_SMALL, off ? COL_DIM : COL_ACC, AL_RIGHT, 100);
+		if (on && !off) {
+			// Flechas a los lados del valor: se cambia con ← →
+			ui_text(BOT_W - 30 - vw - 10, y + 4, "‹", SZ_BODY, COL_DIM, AL_LEFT, 0);
+			ui_text(BOT_W - 20, y + 4, "›", SZ_BODY, COL_DIM, AL_LEFT, 0);
+		}
+		if (i < AS_COUNT - 1) ui_hline(14, y + RH - 1, BOT_W - 28, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
+	}
+	static const char *h[] = {"← →", "Cambiar", "↑↓", "Elegir", "B", "Volver"};
+	draw_hints(h, 3);
+}
+
+// Siguiente valor de privacidad hacia más público (d > 0) o más privado, sin pasar del máximo
+static int privacy_step(int v, int d, int max)
+{
+	v += d;
+	if (v < 1) v = 1;
+	if (v > max) v = max;
+	return v;
+}
+
+static void input_accset(u32 kd, u32 kh, touchPosition *tp)
+{
+	if ((kd & KEY_B) || ((kd & KEY_TOUCH) && tp->py < LIST_Y && tp->px < 120)) {
+		go_scene(SC_SETTINGS, -1);
+		return;
+	}
+	if (!AS.loaded) return;
+	if (key_repeat(kd, kh, KEY_DOWN)) AS.sel = (AS.sel + 1) % AS_COUNT;
+	if (key_repeat(kd, kh, KEY_UP)) AS.sel = (AS.sel + AS_COUNT - 1) % AS_COUNT;
+	int d = (kd & KEY_LEFT) ? -1 : (kd & (KEY_RIGHT | KEY_A)) ? 1 : 0;
+	if ((kd & KEY_TOUCH) && tp->py >= LIST_Y + 3) {
+		int i = (int)((tp->py - LIST_Y - 3) / 27);
+		if (i >= 0 && i < AS_COUNT) {
+			if (i == AS.sel) d = tp->px < BOT_W / 2 ? -1 : 1;
+			AS.sel = i;
+		}
+	}
+	if (!d) return;
+	SteamPrivacy *p = &AS.pv;
+	SteamPrivacy before = *p;
+	// En la lista, de izquierda a derecha: Privado, Solo amigos, Público (→ abre más)
+	switch (AS.sel) {
+	case AS_PROFILE: p->profile = privacy_step(p->profile, d, 3); break;
+	case AS_GAMES: p->games = privacy_step(p->games, d, p->profile); break;
+	case AS_PLAYTIME:
+		if (p->games == 1) return;
+		p->playtime_private = !p->playtime_private;
+		break;
+	case AS_FRIENDS: p->friends = privacy_step(p->friends, d, p->profile); break;
+	case AS_INVENTORY: p->inventory = privacy_step(p->inventory, d, p->profile); break;
+	case AS_COMMENTS: p->comments = comments_from(privacy_step(comments_level(p->comments), d, p->profile)); break;
+	case AS_THEME: {
+		if (!AS.themes_loaded || AS.theme_save) return;
+		// «Predeterminado» y luego los tuyos
+		const char *cur = current_theme();
+		int idx = 0;
+		for (int i = 0; i < AS.nthemes; i++)
+			if (!strcmp(AS.themes[i], cur)) idx = i + 1;
+		int total = AS.nthemes + 1;
+		if (total < 2) return;
+		idx = (idx + d + total) % total;
+		snprintf(AS.theme_want, sizeof AS.theme_want, "%s", idx ? AS.themes[idx - 1] : "");
+		AS.theme_save = steam_req_set_theme(AS.theme_want, auth_token());
+		return;
+	}
+	}
+	privacy_clamp(p);
+	if (memcmp(&before, p, offsetof(SteamPrivacy, raw))) AS.dirty = true;
 }
 
 static void menu_choose(int item)
@@ -7423,6 +7700,7 @@ int main(int argc, char **argv)
 		case SC_ACCOUNTS: input_accounts(kd, kh, &tp); break;
 		case SC_SETTINGS: input_settings(kd, kh, &tp); break;
 		case SC_USER: input_user(kd, kh, ku, &tp); break;
+		case SC_ACCSET: input_accset(kd, kh, &tp); break;
 		case SC_PAY: input_pay(kd, kh, ku, &tp, dt); break;
 		}
 		auth_update();
@@ -7465,6 +7743,7 @@ int main(int argc, char **argv)
 		// Tu cuenta enseña siempre tu fondo y tu marco (aunque vengas del perfil de un amigo)
 		if (S.scene == SC_PROFILE && auth_logged() && UP.id != auth_info()->steamid) user_load(auth_info()->steamid);
 		user_poll();
+		accset_poll();
 
 		// Desplazamientos suaves
 		if (!CUR->finger) CUR->scroll = approach(CUR->scroll, CUR->scroll_target, 18);
@@ -7538,12 +7817,13 @@ int main(int argc, char **argv)
 		case SC_ACCOUNTS: draw_accounts_top(); break;
 		case SC_SETTINGS: draw_settings_top(); break;
 		case SC_USER: draw_user_top(); break;
+		case SC_ACCSET: draw_accset_top(); break;
 		case SC_PAY: draw_pay_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS || S.scene == SC_USER)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS || S.scene == SC_USER || S.scene == SC_ACCSET)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -7567,6 +7847,7 @@ int main(int argc, char **argv)
 		case SC_ACCOUNTS: draw_accounts_bottom(); break;
 		case SC_SETTINGS: draw_settings_bottom(); break;
 		case SC_USER: draw_user_bottom(); break;
+		case SC_ACCSET: draw_accset_bottom(); break;
 		case SC_PAY: draw_pay_bottom(); break;
 		}
 		C2D_ViewReset();

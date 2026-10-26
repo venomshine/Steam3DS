@@ -17,6 +17,7 @@ de la API y datos de prueba. Nada de esto va en la app que se publica.
 """
 import base64
 import hashlib
+import html
 import json
 import time
 import urllib.parse
@@ -106,6 +107,10 @@ settoken_calls = []
 
 
 IGNORED = {}   # juegos ignorados (appid -> motivo), como rgIgnoredApps
+# Privacidad de la cuenta simulada (como la guarda la página de edición del perfil)
+PRIVACY = {"PrivacySettings": {"PrivacyProfile": 3, "PrivacyInventory": 3, "PrivacyInventoryGifts": 3, "PrivacyOwnedGames": 3,
+                               "PrivacyPlaytime": 3, "PrivacyFriendsList": 2}, "eCommentPermission": 1}
+THEME = [""]
 # Tus reseñas (appid -> datos), como las da IUserReviewsService; Cyberpunk ya tiene una
 REVIEWS = {1091500: {"review": "Después de las actualizaciones es otro juego. Night City es increíble y la historia de V engancha muchísimo.",
                      "voted_up": True, "created": int(time.time()) - 40 * 86400, "votes_up": 12}}
@@ -129,6 +134,15 @@ def fake_post(host, path, body):
             WALLET_CENTS[0] += 2000
             return {"success": 1, "detail": 0, "formattednewwalletbalance": "%d,%02d€" % divmod(WALLET_CENTS[0], 100)}, []
         return {"success": 2, "detail": 14}, []
+    if host == "steamcommunity.com" and path == "profiles/%d/ajaxsetprivacy/" % FAKE_ID:
+        raw = body.decode() if isinstance(body, bytes) else (body or "")
+        f = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+        if not f.get("sessionid"):
+            return {"success": 2}, []
+        PRIVACY["PrivacySettings"] = json.loads(f.get("Privacy", "{}"))
+        PRIVACY["eCommentPermission"] = int(f.get("eCommentPermission", "1"))
+        sys.stderr.write("PRIVACIDAD %s\n" % json.dumps(PRIVACY))
+        return {"success": 1, "Privacy": PRIVACY}, []
     if host == "store.steampowered.com" and path.startswith("ajaxrequestplaytestaccess/"):
         return {"success": 1, "granted": 0}, []
     if host == "store.steampowered.com" and path == "friends/recommendgame":
@@ -289,6 +303,10 @@ def fake_post_api(path, body):
             {"statid": i, "bit": 0, "name": a["localized_name"], "desc": a["localized_desc"], "icon": a["icon"],
              "icon_gray": a["icon_gray"], "hidden": a["hidden"], "player_percent_unlocked": a["player_percent_unlocked"]}
             for i, a in enumerate(mine)]}]}}
+    if path.endswith("SetProfileTheme/v1/"):
+        form = dict(urllib.parse.parse_qsl(body.decode() if isinstance(body, bytes) else (body or "")))
+        THEME[0] = json.loads(form.get("input_json", "{}")).get("theme_id", "")
+        return {"response": {}}, 1
     if path.endswith("InstallClientApp/v1/"):
         return {"response": {}}, 1
     if path.endswith("MarkNotificationsRead/v1/"):
@@ -331,6 +349,8 @@ def fake_get(path, q):
                 [{"ulfriendid": str(f), "efriendrelationship": 3} for f in FRIENDS] +
                 [{"ulfriendid": "76561190000000109", "efriendrelationship": 2}]}}}
     # Dos PCs con Steam abierto; en el del salón ya está instalado Cyberpunk
+    if path.endswith("GetProfileThemesAvailable/v1/"):
+        return {"response": {"profile_themes": [{"theme_id": t, "title": "#ProfileTheme_" + t} for t in ("Summer", "Midnight", "Cosmic")]}}
     if path.endswith("GetAllClientLogonInfo/v1/"):
         return {"response": {"sessions": [
             {"client_instanceid": "7001", "protocol_version": 2, "os_name": "Windows 11", "machine_name": "PC-ESCRITORIO", "os_type": 20},
@@ -557,6 +577,19 @@ class Relay(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             sys.stderr.write("405 %s %s (solo %s)\n" % (method, path, only))
+            return
+        if FAKE and host == "steamcommunity.com" and path == "profiles/%d/edit/settings" % FAKE_ID:
+            ck = cookies_of(self.headers)
+            ok = ck.get("steamLoginSecure", "").startswith(str(FAKE_ID))
+            cfg = html.escape(json.dumps({"strPersonaName": "VENOMSHiNE (prueba)", "Privacy": PRIVACY}), quote=True)
+            body = ('<html><div id="profile_edit_config" data-profile-edit="%s"></div></html>' % cfg if ok
+                    else "<html>Iniciar sesión</html>").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=UTF-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            sys.stderr.write("FAKE GET edit/settings\n")
             return
         # Los perfiles de las cuentas simuladas son perfiles públicos de verdad, muy personalizados
         if FAKE and ("GetProfileItemsEquipped" in path or "GetProfileCustomization" in path or path.startswith("profiles/")):

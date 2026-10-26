@@ -18,3 +18,4 @@ char *url_escape(const char *s) {
 		if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || strchr("-_.~", c)) *p++ = c;
 		else { *p++ = '%'; *p++ = hex[c >> 4]; *p++ = hex[c & 15]; } }
 	*p = 0; return o; }
+Req *net_request(const char *url, const char *body, const char *headers) { if (body) strncpy(last_body, body, sizeof last_body - 1); return net_get(url, LANE_API); }

@@ -302,6 +302,7 @@ typedef struct {
 	Showcase show[PROFILE_MAX_SHOW];
 	int nshow, nother;              // nother: vitrinas que aquí no se pueden enseñar
 	bool items_ok, shows_ok, xml_ok;
+	char theme[24];                 // tema del perfil («» el predeterminado)
 	char name[64], realname[64], location[64], avatar[160];
 	char state[24];                 // online, offline, in-game
 	char state_msg[96];
@@ -360,3 +361,21 @@ Req *steam_req_remote_install(u64 client, u32 appid, const char *token);
 // Playtest del juego (el appid del playtest, 0 si no tiene): lo da la tienda en related_items
 Req *steam_req_playtest(u32 appid);
 u32 steam_parse_playtest(const char *json, u32 appid);
+
+// Privacidad de tu perfil: la de la página de edición del perfil en la comunidad (se lee de su
+// configuración y se guarda con su mismo formulario, ajaxsetprivacy). Valores: 1 privado, 2 solo
+// amigos, 3 público; comments: 1 cualquiera, 0 solo amigos, 2 solo tú
+typedef struct {
+	int profile, games, friends, inventory;
+	bool playtime_private, gifts_private;
+	int comments;
+	char *raw;              // el objeto PrivacySettings tal cual (malloc), para no perder campos
+} SteamPrivacy;
+Req *steam_req_privacy(u64 steamid, const char *cookies);
+bool steam_parse_privacy(const char *html, SteamPrivacy *out);
+Req *steam_req_set_privacy(u64 steamid, const SteamPrivacy *p, const char *sessionid, const char *cookies);
+void steam_privacy_free(SteamPrivacy *p);
+// Temas del perfil que tienes (theme_id) y cambiar el tuyo
+Req *steam_req_themes(const char *token);
+int steam_parse_themes(const char *json, char (*out)[24], int max);
+Req *steam_req_set_theme(const char *theme, const char *token);

@@ -1842,6 +1842,7 @@ bool steam_parse_profile_showcases(const char *json, SteamProfile *p)
 		}
 		if (sh->n) p->nshow++;
 	}
+	copy(p->theme, sizeof p->theme, jstr(cJSON_GetObjectItemCaseSensitive(resp, "profile_theme"), "theme_id"));
 	p->shows_ok = true;
 	cJSON_Delete(root);
 	return true;
@@ -2244,4 +2245,141 @@ u32 steam_parse_playtest(const char *json, u32 appid)
 	}
 	cJSON_Delete(root);
 	return pt;
+}
+
+// ----------------------------------------------------------------------------
+// Privacidad y tema del perfil
+
+Req *steam_req_privacy(u64 steamid, const char *cookies)
+{
+	char url[120];
+	snprintf(url, sizeof url, "https://steamcommunity.com/profiles/%llu/edit/settings", (unsigned long long)steamid);
+	return net_request(url, NULL, cookies);
+}
+
+// &quot; y compañía, en el mismo sitio
+static void html_unescape(char *s)
+{
+	static const struct { const char *e; char c; } ents[] = {{"&quot;", '"'}, {"&amp;", '&'}, {"&lt;", '<'}, {"&gt;", '>'}, {"&#39;", '\''}};
+	char *o = s;
+	while (*s) {
+		bool done = false;
+		if (*s == '&')
+			for (size_t i = 0; i < sizeof ents / sizeof *ents; i++) {
+				size_t l = strlen(ents[i].e);
+				if (!strncmp(s, ents[i].e, l)) {
+					*o++ = ents[i].c;
+					s += l;
+					done = true;
+					break;
+				}
+			}
+		if (!done) *o++ = *s++;
+	}
+	*o = 0;
+}
+
+static int privacy_val(const cJSON *o, const char *k)
+{
+	int v = (int)jnum(o, k, 0);
+	return v >= 1 && v <= 3 ? v : 0;
+}
+
+bool steam_parse_privacy(const char *html, SteamPrivacy *out)
+{
+	steam_privacy_free(out);
+	const char *a = html ? strstr(html, "data-profile-edit=\"") : NULL;
+	if (!a) return false;
+	a += strlen("data-profile-edit=\"");
+	const char *b = strchr(a, '"');
+	if (!b) return false;
+	char *js = strndup(a, b - a);
+	if (!js) return false;
+	html_unescape(js);
+	cJSON *root = cJSON_Parse(js);
+	free(js);
+	const cJSON *pv = cJSON_GetObjectItemCaseSensitive(root, "Privacy");
+	const cJSON *ps = cJSON_GetObjectItemCaseSensitive(pv, "PrivacySettings");
+	bool ok = cJSON_IsObject(ps);
+	if (ok) {
+		out->profile = privacy_val(ps, "PrivacyProfile");
+		out->games = privacy_val(ps, "PrivacyOwnedGames");
+		out->friends = privacy_val(ps, "PrivacyFriendsList");
+		out->inventory = privacy_val(ps, "PrivacyInventory");
+		out->playtime_private = privacy_val(ps, "PrivacyPlaytime") == 1;
+		out->gifts_private = privacy_val(ps, "PrivacyInventoryGifts") == 1;
+		out->comments = (int)jnum(pv, "eCommentPermission", 1);
+		out->raw = cJSON_PrintUnformatted(ps);
+		ok = out->profile && out->games && out->friends && out->inventory && out->raw;
+	}
+	cJSON_Delete(root);
+	if (!ok) steam_privacy_free(out);
+	return ok;
+}
+
+static void set_num(cJSON *o, const char *k, int v)
+{
+	cJSON_DeleteItemFromObjectCaseSensitive(o, k);
+	cJSON_AddNumberToObject(o, k, v);
+}
+
+Req *steam_req_set_privacy(u64 steamid, const SteamPrivacy *p, const char *sessionid, const char *cookies)
+{
+	cJSON *ps = p->raw ? cJSON_Parse(p->raw) : NULL;
+	if (!ps) return NULL;
+	set_num(ps, "PrivacyProfile", p->profile);
+	set_num(ps, "PrivacyOwnedGames", p->games);
+	set_num(ps, "PrivacyFriendsList", p->friends);
+	set_num(ps, "PrivacyInventory", p->inventory);
+	set_num(ps, "PrivacyPlaytime", p->playtime_private ? 1 : p->games);
+	set_num(ps, "PrivacyInventoryGifts", p->gifts_private ? 1 : p->inventory);
+	char *js = cJSON_PrintUnformatted(ps);
+	cJSON_Delete(ps);
+	char *esc = url_escape(js);
+	size_t n = strlen(esc) + 160;
+	char *body = malloc(n), url[120];
+	snprintf(body, n, "sessionid=%s&Privacy=%s&eCommentPermission=%d", sessionid, esc, p->comments);
+	snprintf(url, sizeof url, "https://steamcommunity.com/profiles/%llu/ajaxsetprivacy/", (unsigned long long)steamid);
+	Req *r = net_request(url, body, cookies);
+	free(body);
+	free(esc);
+	free(js);
+	return r;
+}
+
+void steam_privacy_free(SteamPrivacy *p)
+{
+	free(p->raw);
+	memset(p, 0, sizeof *p);
+}
+
+Req *steam_req_themes(const char *token)
+{
+	return steam_get_service("IPlayerService/GetProfileThemesAvailable", cJSON_CreateObject(), token);
+}
+
+int steam_parse_themes(const char *json, char (*out)[24], int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *it;
+	cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(resp, "profile_themes")) {
+		const char *id = jstr(it, "theme_id");
+		if (!id || !*id || n >= max) continue;
+		copy(out[n++], 24, id);
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
+Req *steam_req_set_theme(const char *theme, const char *token)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON_AddStringToObject(in, "theme_id", theme);
+	return steam_post_service("IPlayerService/SetProfileTheme", in, token);
 }

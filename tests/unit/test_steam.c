@@ -274,6 +274,16 @@ int main(void) {
 	// Playtest (related_items, como lo da la tienda)
 	CHECK(steam_parse_playtest("{\"response\":{\"store_items\":[{\"appid\":2518930,\"related_items\":{\"playtests\":[{\"appid\":2528700}]}}]}}", 2518930) == 2528700);
 	CHECK(steam_parse_playtest("{\"response\":{\"store_items\":[{\"appid\":10}]}}", 10) == 0);
+	// Privacidad: la configuración de la página de edición del perfil (JSON escapado en un atributo)
+	SteamPrivacy pv = {0};
+	CHECK(steam_parse_privacy("<div id=\"profile_edit_config\" data-profile-edit=\"{&quot;strPersonaName&quot;:&quot;Mario &amp; co&quot;,&quot;Privacy&quot;:{&quot;PrivacySettings&quot;:"
+		"{&quot;PrivacyProfile&quot;:3,&quot;PrivacyInventory&quot;:2,&quot;PrivacyInventoryGifts&quot;:1,&quot;PrivacyOwnedGames&quot;:3,&quot;PrivacyPlaytime&quot;:1,&quot;PrivacyFriendsList&quot;:3,&quot;PrivacyNew&quot;:3},"
+		"&quot;eCommentPermission&quot;:0}}\"></div>", &pv));
+	CHECK(pv.profile == 3 && pv.inventory == 2 && pv.games == 3 && pv.playtime_private && pv.gifts_private && pv.comments == 0 && strstr(pv.raw, "PrivacyNew"));
+	steam_privacy_free(&pv);
+	CHECK(!steam_parse_privacy("<html>Iniciar sesión</html>", &pv));
+	char th[4][24];
+	CHECK(steam_parse_themes("{\"response\":{\"profile_themes\":[{\"theme_id\":\"Summer\"},{\"theme_id\":\"Midnight\"}]}}", th, 4) == 2 && !strcmp(th[1], "Midnight"));
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

@@ -28,7 +28,9 @@ SIZE = 112                      # cada fotograma (en pantalla se ve a ~100 px)
 FRAMES = 24                     # 72° / 3°
 SWING = (22.0, 68.0)            # extremos del balanceo: ángulo de la luz sobre la horizontal (arriba a la derecha)
 # Bombillo flojo y cálido, válvula muy sucia (mugre negra)
-LOOK = dict(dirt=1.0, amb=0.24, kd=1.05, tint=(1.0, 0.92, 0.80), ks=0.55)
+# Pintada de esmalte azul brillante (como la roja de la intro de Valve, pero azul) y con el cubo
+# de hierro oscuro
+LOOK = dict(dirt=1.0, amb=0.24, kd=1.05, tint=(1.0, 0.92, 0.80), ks=0.95, paint=True)
 
 
 def light_dir(th):
@@ -70,7 +72,7 @@ def grime_map(s, seed=7):
     return blot, fine, spots, scratches
 
 
-def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, ss=4, dirt=0.0, amb=0.42, kd=0.78, tint=(1, 1, 1), ks=0.75, split=False):
+def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, ss=4, dirt=0.0, amb=0.42, kd=0.78, tint=(1, 1, 1), ks=0.75, split=False, paint=False):
     """Válvula con relieve: mapa de alturas (aro como tubo, radios cilíndricos, cubo abombado y
     agarres esféricos) iluminado desde arriba a la derecha. Devuelve RGBA size×size.
     split: la mugre que no se repite cada 72° (manchas, grano, salpicaduras y arañazos) no se
@@ -121,6 +123,9 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
     V = np.array([0, 0, 1.0]); H = (L + V); H /= np.linalg.norm(H)
     diff = np.clip(n @ L, 0, 1)
     spec = np.clip(n @ H, 0, 1) ** 48
+    if paint:
+        # el esmalte: un brillo pequeño y fuerte más un lustre ancho y suave
+        spec = np.clip(n @ H, 0, 1) ** 90 + 0.18 * np.clip(n @ H, 0, 1) ** 12
     # sombra propia: hacia la luz, ¿algo más alto tapa?
     shadow = np.ones_like(z)
     lx, ly = L[0], L[1]; lz = L[2] / math.hypot(lx, ly)
@@ -138,6 +143,12 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
     # material: acero claro azulado (el mismo tono que la válvula de antes), más claro arriba
     t = (y + 1) / 2
     albedo = np.stack([0xdc + (0x5a - 0xdc) * t, 0xf0 + (0xb8 - 0xf0) * t, 0xff + (0xf6 - 0xff) * t], -1) / 255
+    if paint:
+        # esmalte azul saturado; el cubo (y el vástago que asoma) de hierro casi negro
+        albedo = np.stack([0x2a + (0x0c - 0x2a) * t, 0x8c + (0x3c - 0x8c) * t, 0xf0 + (0x9a - 0xf0) * t], -1) / 255
+        iron = np.array([0x30, 0x32, 0x36]) / 255
+        hubm = np.clip((hub * 0.82 - r) / (hub * 0.12), 0, 1)
+        albedo = albedo * (1 - hubm[..., None]) + iron * hubm[..., None]
     if dirt > 0:
         # Suciedad negra pegada a la válvula (gira con ella): manchas, mugre en lo hundido y en
         # las uniones, y salpicaduras; el azul sigue debajo

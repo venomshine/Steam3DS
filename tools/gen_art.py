@@ -291,7 +291,9 @@ def grimy_bg(w, h, seed, light=(0.5, 0.42), pipe_cols=(), pipe_rows=()):
 
     y, x = np.mgrid[0:h, 0:w].astype(float)
     t = y / (h - 1)
-    top, bot = np.array([0x22, 0x37, 0x4b]), np.array([0x10, 0x15, 0x1c])
+    # Los tonos de la intro de Valve: sepia y bronce oscuros que caen a negro, con las sombras
+    # algo azuladas
+    top, bot = np.array([0x3a, 0x30, 0x28]), np.array([0x0a, 0x0c, 0x10])
     base = top[None, None, :] * (1 - t[..., None]) + bot[None, None, :] * t[..., None]
     # Manchas de humedad y mugre fina
     stains = noise((3, 6, 12, 24), 0)
@@ -306,20 +308,23 @@ def grimy_bg(w, h, seed, light=(0.5, 0.42), pipe_cols=(), pipe_rows=()):
     lx, ly = light[0] * w, light[1] * h
     d = np.hypot((x - lx) / w, (y - ly) / h * 0.8)
     glow = np.exp(-(d / 0.30) ** 2) * 0.45
-    img = base * shade[..., None] + glow[..., None] * np.array([0x50, 0x9a, 0xd0])[None, None, :]
+    img = base * shade[..., None] + glow[..., None] * np.array([0x9a, 0x7a, 0x58])[None, None, :]
+    # Sombras hacia el azul frío (lo oscuro azulado, lo claro cálido)
+    lum = img.mean(-1, keepdims=True) / 255
+    img = img + (1 - np.clip(lum * 4, 0, 1)) * np.array([-3, 1, 9])
     # Tuberías desenfocadas (fuera de foco, detrás de la válvula): dan profundidad y ambiente
     pipes = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     pd = ImageDraw.Draw(pipes)
     for px, pw in pipe_cols:
         X, W = px * w, pw * w
         pd.rectangle([X, 0, X + W, h], fill=(6, 9, 13, 235))
-        pd.rectangle([X + W * 0.18, 0, X + W * 0.30, h], fill=(70, 100, 125, 120))   # brillo del metal
+        pd.rectangle([X + W * 0.18, 0, X + W * 0.30, h], fill=(110, 92, 70, 110))    # brillo del metal
         for yy_ in range(int(h * 0.15), h, int(h * 0.38)):                            # abrazaderas
             pd.rectangle([X - W * 0.12, yy_, X + W * 1.12, yy_ + h * 0.035], fill=(4, 6, 9, 240))
     for py, ph in pipe_rows:
         Y, H = py * h, ph * h
         pd.rectangle([0, Y, w, Y + H], fill=(6, 9, 13, 225))
-        pd.rectangle([0, Y + H * 0.15, w, Y + H * 0.28], fill=(70, 100, 125, 100))
+        pd.rectangle([0, Y + H * 0.15, w, Y + H * 0.28], fill=(110, 92, 70, 90))
     pipes = pipes.filter(ImageFilter.GaussianBlur(w * 0.012))
     pa = np.array(pipes, float)
     a = pa[..., 3:4] / 255
@@ -327,7 +332,7 @@ def grimy_bg(w, h, seed, light=(0.5, 0.42), pipe_cols=(), pipe_rows=()):
     # Viñeta sucia: esquinas oscuras con el borde ahumado e irregular
     vx, vy = (x / w - 0.5) * 2, (y / h - 0.5) * 2
     vr = np.sqrt(vx * vx * 0.85 + vy * vy) + (noise((4, 8, 16), 0) - 0.5) * 0.35
-    vign = np.clip(1 - np.clip((vr - 0.45) / 0.7, 0, 1) ** 1.4 * 0.92, 0, 1)
+    vign = np.clip(1 - np.clip((vr - 0.40) / 0.6, 0, 1) ** 1.3 * 0.97, 0, 1)
     img = img * vign[..., None]
     # Grano de película
     img += rng.normal(0, 4.0, img.shape)

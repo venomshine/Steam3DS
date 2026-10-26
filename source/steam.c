@@ -1351,6 +1351,112 @@ int steam_parse_people(const char *json, SteamPerson *out, int max)
 	return n;
 }
 
+Req *steam_req_achievements(u32 appid)
+{
+	char url[200];
+	snprintf(url, sizeof url, "https://api.steampowered.com/IPlayerService/GetGameAchievements/v1/?appid=%lu&language=%s",
+		(unsigned long)appid, g_lang);
+	return net_get(url, LANE_API);
+}
+
+int steam_parse_achievements(const char *json, Achievement **out)
+{
+	*out = NULL;
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	const cJSON *list = cJSON_GetObjectItemCaseSensitive(resp, "achievements");
+	int cap = cJSON_GetArraySize(list), n = 0;
+	*out = calloc(cap ? cap : 1, sizeof **out);
+	const cJSON *it;
+	cJSON_ArrayForEach(it, list) {
+		if (!*out || n >= cap) break;
+		Achievement *a = &(*out)[n];
+		copy_utf8(a->name, sizeof a->name, jstr(it, "localized_name"));
+		if (!a->name[0]) continue;
+		copy_utf8(a->desc, sizeof a->desc, jstr(it, "localized_desc"));
+		copy(a->icon, sizeof a->icon, jstr(it, "icon"));
+		copy(a->icon_gray, sizeof a->icon_gray, jstr(it, "icon_gray"));
+		const char *p = jstr(it, "player_percent_unlocked");
+		a->pct = p ? strtof(p, NULL) : (float)jnum(it, "player_percent_unlocked", 0);
+		a->hidden = jbool(it, "hidden");
+		n++;
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
+static cJSON *achv_input(u32 appid, u64 steamid)
+{
+	cJSON *in = cJSON_CreateObject();
+	char sid[24];
+	snprintf(sid, sizeof sid, "%llu", (unsigned long long)steamid);
+	cJSON_AddStringToObject(in, "steamid", sid);
+	cJSON_AddStringToObject(in, "language", g_lang);
+	cJSON *ids = cJSON_AddArrayToObject(in, "appids");
+	cJSON_AddItemToArray(ids, cJSON_CreateNumber(appid));
+	return in;
+}
+
+// Los que tienes (el mismo servicio con el que la biblioteca de Steam enseña tus logros)
+Req *steam_req_my_achievements(u32 appid, u64 steamid, const char *token)
+{
+	cJSON *in = achv_input(appid, steamid);
+	cJSON_AddNumberToObject(in, "max_achievements", 10000);
+	return steam_post_service("IPlayerService/GetTopAchievementsForGames", in, token);
+}
+
+// Se casan por el icono, que es único en cada juego
+int steam_mark_unlocked(const char *json, Achievement *a, int n)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	const cJSON *games = resp ? cJSON_GetObjectItemCaseSensitive(resp, "games") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int marked = 0;
+	const cJSON *g, *it;
+	cJSON_ArrayForEach(g, games) {
+		cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(g, "achievements")) {
+			const char *icon = jstr(it, "icon"), *name = jstr(it, "name");
+			for (int i = 0; i < n; i++) {
+				if (a[i].done) continue;
+				if ((icon && a[i].icon[0] && !strcmp(icon, a[i].icon)) || (!icon && name && !strcmp(name, a[i].name))) {
+					a[i].done = true;
+					marked++;
+					break;
+				}
+			}
+		}
+	}
+	cJSON_Delete(root);
+	return marked;
+}
+
+Req *steam_req_achievement_progress(u32 appid, u64 steamid, const char *token)
+{
+	return steam_post_service("IPlayerService/GetAchievementsProgress", achv_input(appid, steamid), token);
+}
+
+bool steam_parse_achievement_progress(const char *json, int *unlocked, int *total)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	const cJSON *p = resp ? cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(resp, "achievement_progress"), 0) : NULL;
+	bool ok = p != NULL;
+	if (ok) {
+		*unlocked = (int)jnum(p, "unlocked", 0);
+		*total = (int)jnum(p, "total", 0);
+	}
+	cJSON_Delete(root);
+	return ok;
+}
+
 Req *steam_post_service(const char *iface_method, cJSON *input, const char *token)
 {
 	char *js = cJSON_PrintUnformatted(input);

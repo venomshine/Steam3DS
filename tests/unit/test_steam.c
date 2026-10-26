@@ -144,6 +144,17 @@ int main(void) {
 	CHECK(steam_parse_people("{\"response\":{\"accounts\":[{\"public_data\":{\"steamid\":\"76561190000000101\",\"persona_name\":\"Kenji\"},"
 		"\"private_data\":{\"persona_state\":1,\"game_id\":\"1145360\",\"game_extra_info\":\"Hades\"}}]}}", pp, 2) == 1);
 	CHECK(pp[0].state == 1 && pp[0].game == 1145360 && !strcmp(pp[0].game_name, "Hades") && !strcmp(pp[0].name, "Kenji"));
+	// Logros: el esquema y los que tienes (casados por el icono)
+	Achievement *ac;
+	CHECK(steam_parse_achievements("{\"response\":{\"achievements\":[{\"localized_name\":\"Afortunado\",\"localized_desc\":\"Adquiere tu primer amuleto\","
+		"\"icon\":\"aa.jpg\",\"icon_gray\":\"ab.jpg\",\"hidden\":false,\"player_percent_unlocked\":\"76.7\"},"
+		"{\"localized_name\":\"Oculto\",\"icon\":\"bb.jpg\",\"hidden\":true,\"player_percent_unlocked\":\"2.1\"}]}}", &ac) == 2);
+	CHECK(ac[0].pct > 76.6f && ac[0].pct < 76.8f && ac[1].hidden && !ac[0].done);
+	CHECK(steam_mark_unlocked("{\"response\":{\"games\":[{\"appid\":367520,\"achievements\":[{\"name\":\"Oculto\",\"icon\":\"bb.jpg\"}]}]}}", ac, 2) == 1);
+	CHECK(ac[1].done && !ac[0].done);
+	free(ac);
+	int un, tot;
+	CHECK(steam_parse_achievement_progress("{\"response\":{\"achievement_progress\":[{\"appid\":367520,\"unlocked\":10,\"total\":63}]}}", &un, &tot) && un == 10 && tot == 63);
 	// Las etiquetas populares
 	StoreTag tg[4];
 	CHECK(steam_parse_tags("{\"response\":{\"tags\":[{\"tagid\":492,\"name\":\"Indie\"},{\"tagid\":19,\"name\":\"Acción\"}]}}", tg, 4) == 2);

@@ -234,6 +234,22 @@ typedef struct {
 	u32 last_off;           // última vez que se desconectó
 } SteamPerson;
 Req *steam_req_people(const u64 *ids, int n, const char *token);
+
+// Logros: los del juego (públicos, con el % de jugadores que los tienen) y cuáles tienes tú
+typedef struct {
+	char name[64];
+	char desc[160];
+	char icon[48], icon_gray[48];   // archivos en .../steamcommunity/public/images/apps/<appid>/
+	float pct;                      // % de jugadores que lo tienen
+	bool hidden;
+	bool done;                      // lo tienes
+} Achievement;
+Req *steam_req_achievements(u32 appid);
+int steam_parse_achievements(const char *json, Achievement **out);   // malloc; -1 si falla
+Req *steam_req_my_achievements(u32 appid, u64 steamid, const char *token);
+int steam_mark_unlocked(const char *json, Achievement *a, int n);   // cuántos marcó; -1 si falla
+Req *steam_req_achievement_progress(u32 appid, u64 steamid, const char *token);
+bool steam_parse_achievement_progress(const char *json, int *unlocked, int *total);
 int steam_parse_people(const char *json, SteamPerson *out, int max);
 Req *steam_get_service(const char *iface_method, cJSON *input, const char *token);   // los que solo van por GET
 bool steam_parse_cart(const char *json, CartInfo *c);           // respuesta con «cart»

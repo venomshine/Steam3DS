@@ -1714,3 +1714,313 @@ int steam_parse_userdata_owned(const char *json, u32 **ids)
 	cJSON_Delete(root);
 	return k;
 }
+
+// ----------------------------------------------------------------------------
+// Perfiles
+
+Req *steam_req_profile_items(u64 steamid)
+{
+	char url[200];
+	snprintf(url, sizeof url, "https://api.steampowered.com/IPlayerService/GetProfileItemsEquipped/v1/?steamid=%llu&language=%s",
+		(unsigned long long)steamid, g_lang);
+	return net_get(url, LANE_API);
+}
+
+bool steam_parse_profile_items(const char *json, SteamProfile *p)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (resp) {
+		copy(p->bg, sizeof p->bg, jstr(cJSON_GetObjectItemCaseSensitive(resp, "profile_background"), "image_large"));
+		const cJSON *f = cJSON_GetObjectItemCaseSensitive(resp, "avatar_frame");
+		const char *fr = jstr(f, "image_small");
+		copy(p->frame, sizeof p->frame, fr ? fr : jstr(f, "image_large"));
+		p->items_ok = true;
+	}
+	cJSON_Delete(root);
+	return resp != NULL;
+}
+
+Req *steam_req_profile_showcases(u64 steamid)
+{
+	char url[200];
+	snprintf(url, sizeof url, "https://api.steampowered.com/IPlayerService/GetProfileCustomization/v1/?steamid=%llu&include_inactive_customizations=false",
+		(unsigned long long)steamid);
+	return net_get(url, LANE_API);
+}
+
+static u64 jid(const cJSON *o, const char *k)
+{
+	const char *s = jstr(o, k);
+	return s ? strtoull(s, NULL, 10) : (u64)jnum(o, k, 0);
+}
+
+// Texto escrito por la gente (sobre mí, vitrina de texto): fuera emoticonos (ːnombreː), etiquetas
+// BBCode, espacios repetidos y líneas en blanco de más
+static void tidy_text(char *t)
+{
+	if (!t) return;
+	char *o = t;
+	const char *i = t;
+	int nl = 0;
+	bool sp = false, line_start = true;
+	while (*i) {
+		if (!strncmp(i, "ː", 2)) {   // ːcritterbirdː
+			const char *e = strstr(i + 2, "ː");
+			if (e && e - i < 40) {
+				i = e + 2;
+				continue;
+			}
+		}
+		if (*i == '[') {
+			const char *e = strchr(i, ']');
+			if (e && e - i < 24 && (isalpha((unsigned char)i[1]) || i[1] == '/')) {
+				i = e + 1;
+				continue;
+			}
+		}
+		char c = *i++;
+		if (c == '\r' || c == '\t') c = ' ';
+		if (c == '\n') {
+			while (o > t && o[-1] == ' ') o--;
+			if (++nl <= 2 && o > t) *o++ = '\n';
+			sp = false;
+			line_start = true;
+			continue;
+		}
+		if (c == ' ') {
+			sp = !line_start;
+			continue;
+		}
+		if (sp) *o++ = ' ';
+		sp = false;
+		line_start = false;
+		nl = 0;
+		*o++ = c;
+	}
+	while (o > t && (o[-1] == '\n' || o[-1] == ' ')) o--;
+	*o = 0;
+}
+
+bool steam_parse_profile_showcases(const char *json, SteamProfile *p)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return false;
+	}
+	const cJSON *c, *sl;
+	cJSON_ArrayForEach(c, cJSON_GetObjectItemCaseSensitive(resp, "customizations")) {
+		if (cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(c, "active"))) continue;
+		int type = (int)jnum(c, "customization_type", 0);
+		bool known = type == SHOW_COLLECTOR || type == SHOW_SHOTS || type == SHOW_TEXT || type == SHOW_FAV_GAME ||
+			type == SHOW_ARTWORK || type == SHOW_ONE_ARTWORK || type == SHOW_COMPLETIONIST;
+		if (!known || p->nshow >= PROFILE_MAX_SHOW) {
+			p->nother++;
+			continue;
+		}
+		Showcase *sh = &p->show[p->nshow];
+		memset(sh, 0, sizeof *sh);
+		sh->type = type;
+		cJSON_ArrayForEach(sl, cJSON_GetObjectItemCaseSensitive(c, "slots")) {
+			if (type == SHOW_TEXT) {
+				const char *t = jstr(sl, "title"), *n = jstr(sl, "notes");
+				if (t) tidy_text(sh->title = strdup(t));
+				if (n) tidy_text(sh->text = strdup(n));
+				sh->n = 1;
+				break;
+			}
+			if (sh->n >= SHOW_MAX_SLOTS) break;
+			u32 app = (u32)jnum(sl, "appid", 0);
+			u64 file = jid(sl, "publishedfileid");
+			if (!app && !file) continue;   // hueco vacío
+			sh->appid[sh->n] = app;
+			sh->file[sh->n] = file;
+			sh->n++;
+		}
+		if (sh->n) p->nshow++;
+	}
+	p->shows_ok = true;
+	cJSON_Delete(root);
+	return true;
+}
+
+Req *steam_req_profile_xml(u64 steamid)
+{
+	char url[160];
+	snprintf(url, sizeof url, "https://steamcommunity.com/profiles/%llu/?xml=1", (unsigned long long)steamid);
+	return net_get(url, LANE_API);
+}
+
+// El texto de <tag>…</tag> o <tag><![CDATA[…]]></tag>, solo el del perfil (no el de sus grupos)
+static bool xml_tag(const char *xml, const char *end, const char *tag, char *out, size_t n)
+{
+	char open[40];
+	snprintf(open, sizeof open, "<%s>", tag);
+	const char *a = strstr(xml, open);
+	if (!a || (end && a > end)) return false;
+	a += strlen(open);
+	const char *b;
+	if (!strncmp(a, "<![CDATA[", 9)) {
+		a += 9;
+		b = strstr(a, "]]>");
+	} else {
+		snprintf(open, sizeof open, "</%s>", tag);
+		b = strstr(a, open);
+	}
+	if (!b) return false;
+	size_t l = (size_t)(b - a);
+	if (out) {
+		if (l >= n) l = n - 1;
+		memcpy(out, a, l);
+		out[l] = 0;
+	}
+	return true;
+}
+
+static u32 parse_since(const char *s)
+{
+	// «November 13, 2015» (la comunidad siempre lo da en inglés)
+	static const char *months[] = {"January", "February", "March", "April", "May", "June", "July", "August",
+		"September", "October", "November", "December"};
+	int mon = -1, d = 0, y = 0;
+	for (int i = 0; i < 12; i++)
+		if (!strncmp(s, months[i], strlen(months[i]))) mon = i;
+	const char *sp = strchr(s, ' ');
+	if (mon < 0 || !sp || sscanf(sp + 1, "%d, %d", &d, &y) != 2) return 0;
+	struct tm tm = {0};
+	tm.tm_year = y - 1900;
+	tm.tm_mon = mon;
+	tm.tm_mday = d;
+	tm.tm_hour = 12;
+	return (u32)mktime(&tm);
+}
+
+bool steam_parse_profile_xml(const char *xml, SteamProfile *p)
+{
+	if (!xml || !strstr(xml, "<profile>")) return false;
+	const char *end = strstr(xml, "<groups>");
+	if (!end) end = strstr(xml, "<mostPlayedGames>");
+	char tmp[200];
+	if (xml_tag(xml, end, "steamID", tmp, sizeof tmp)) {
+		html_to_lines(tmp, p->name, sizeof p->name);
+	}
+	xml_tag(xml, end, "realname", p->realname, sizeof p->realname);
+	xml_tag(xml, end, "location", p->location, sizeof p->location);
+	xml_tag(xml, end, "avatarFull", p->avatar, sizeof p->avatar);
+	xml_tag(xml, end, "onlineState", p->state, sizeof p->state);
+	if (xml_tag(xml, end, "stateMessage", tmp, sizeof tmp)) html_to_lines(tmp, p->state_msg, sizeof p->state_msg);
+	if (xml_tag(xml, end, "memberSince", tmp, sizeof tmp)) p->since = parse_since(tmp);
+	if (xml_tag(xml, end, "privacyState", tmp, sizeof tmp)) p->is_private = strcmp(tmp, "public") != 0;
+	char *sum = malloc(4096);
+	if (sum && xml_tag(xml, end, "summary", sum, 4096)) {
+		size_t n = strlen(sum) * 2 + 16;
+		free(p->summary);
+		p->summary = malloc(n);
+		if (p->summary) {
+			html_to_lines(sum, p->summary, n);
+			tidy_text(p->summary);
+			if (!strcmp(p->summary, "No information given.") || !p->summary[0]) {
+				free(p->summary);
+				p->summary = NULL;
+			}
+		}
+	}
+	free(sum);
+	p->xml_ok = true;
+	return true;
+}
+
+void steam_profile_free(SteamProfile *p)
+{
+	for (int i = 0; i < p->nshow; i++) {
+		free(p->show[i].title);
+		free(p->show[i].text);
+	}
+	free(p->summary);
+	memset(p, 0, sizeof *p);
+}
+
+Req *steam_req_level(u64 steamid, const char *token)
+{
+	char url[1300];
+	snprintf(url, sizeof url, "https://api.steampowered.com/IPlayerService/GetSteamLevel/v1/?access_token=%s&steamid=%llu",
+		token, (unsigned long long)steamid);
+	return net_get(url, LANE_API);
+}
+
+int steam_parse_level(const char *json)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	int lv = resp && cJSON_GetObjectItemCaseSensitive(resp, "player_level") ? (int)jnum(resp, "player_level", 0) : -1;
+	cJSON_Delete(root);
+	return lv;
+}
+
+Req *steam_req_files(const u64 *ids, int n, const char *token)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON *arr = cJSON_AddArrayToObject(in, "publishedfileids");
+	for (int i = 0; i < n; i++) {
+		char t[24];
+		snprintf(t, sizeof t, "%llu", (unsigned long long)ids[i]);
+		cJSON_AddItemToArray(arr, cJSON_CreateString(t));
+	}
+	cJSON_AddBoolToObject(in, "short_description", true);
+	return steam_get_service("IPublishedFileService/GetDetails", in, token);
+}
+
+// La imagen de steamusercontent, ya reducida por Steam al ancho de la pantalla de arriba
+static void ugc_sized(const char *src, char *out, size_t n)
+{
+	char base[200];
+	snprintf(base, sizeof base, "%s", src);
+	char *q = strchr(base, '?');
+	if (q) *q = 0;
+	if (strstr(base, "steamusercontent.com")) snprintf(out, n, "%s?imw=400&imh=400&ima=fit&impolicy=Letterbox&letterbox=false", base);
+	else snprintf(out, n, "%s", base);
+}
+
+int steam_parse_files(const char *json, const u64 *ids, int n, char (*urls)[200])
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	int found = 0;
+	const cJSON *it, *list = resp ? cJSON_GetObjectItemCaseSensitive(resp, "publishedfiledetails") : NULL;
+	cJSON_ArrayForEach(it, list) {
+		u64 id = jid(it, "publishedfileid");
+		const char *u = jstr(it, "preview_url");
+		if (!u || !*u) continue;
+		for (int i = 0; i < n; i++) {
+			if (ids[i] == id && !urls[i][0]) {
+				ugc_sized(u, urls[i], sizeof urls[i]);
+				found++;
+			}
+		}
+	}
+	cJSON_Delete(root);
+	return found;
+}
+
+Req *steam_req_file_page(u64 id)
+{
+	char url[120];
+	snprintf(url, sizeof url, "https://steamcommunity.com/sharedfiles/filedetails/?id=%llu", (unsigned long long)id);
+	return net_get(url, LANE_API);
+}
+
+bool steam_parse_file_page(const char *html, char *url, size_t n)
+{
+	const char *a = html ? strstr(html, "<meta property=\"og:image\" content=\"") : NULL;
+	if (!a) return false;
+	a += strlen("<meta property=\"og:image\" content=\"");
+	const char *b = strchr(a, '"');
+	if (!b || b - a >= 200) return false;
+	char raw[200];
+	memcpy(raw, a, b - a);
+	raw[b - a] = 0;
+	ugc_sized(raw, url, n);
+	return url[0] != 0;
+}

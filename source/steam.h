@@ -282,3 +282,44 @@ typedef struct {
 	char country[4];
 } WalletInfo;
 bool steam_parse_wallet(const char *json, WalletInfo *w);
+
+// Perfil de Steam de cualquiera (también el tuyo): lo que lleva puesto (fondo y marco), sus vitrinas
+// y su ficha pública (nombre, nombre real, país, «sobre mí», desde cuándo es miembro)
+#define PROFILE_MAX_SHOW 10
+#define SHOW_MAX_SLOTS 8
+enum { SHOW_RARE_ACH = 1, SHOW_COLLECTOR = 2, SHOW_SHOTS = 7, SHOW_TEXT = 8, SHOW_FAV_GAME = 6, SHOW_ARTWORK = 13,
+	SHOW_ONE_ARTWORK = 22, SHOW_COMPLETIONIST = 23 };
+typedef struct {
+	int type;                       // tipo de vitrina de Steam (SHOW_*)
+	int n;                          // huecos con algo
+	u32 appid[SHOW_MAX_SLOTS];
+	u64 file[SHOW_MAX_SLOTS];       // capturas e ilustraciones (publishedfileid)
+	char *title, *text;             // vitrina de texto (malloc)
+} Showcase;
+typedef struct {
+	char bg[112];                   // fondo (ruta bajo .../steamcommunity/public/images/)
+	char frame[112];                // marco del avatar (PNG con transparencia)
+	Showcase show[PROFILE_MAX_SHOW];
+	int nshow, nother;              // nother: vitrinas que aquí no se pueden enseñar
+	bool items_ok, shows_ok, xml_ok;
+	char name[64], realname[64], location[64], avatar[160];
+	char state[24];                 // online, offline, in-game
+	char state_msg[96];
+	u32 since;                      // miembro desde (hora Unix)
+	bool is_private;
+	char *summary;                  // «sobre mí» en texto (malloc)
+} SteamProfile;
+Req *steam_req_profile_items(u64 steamid);
+bool steam_parse_profile_items(const char *json, SteamProfile *p);
+Req *steam_req_profile_showcases(u64 steamid);
+bool steam_parse_profile_showcases(const char *json, SteamProfile *p);
+Req *steam_req_profile_xml(u64 steamid);
+bool steam_parse_profile_xml(const char *xml, SteamProfile *p);
+void steam_profile_free(SteamProfile *p);
+Req *steam_req_level(u64 steamid, const char *token);
+int steam_parse_level(const char *json);   // -1 si falla
+// Imagen de una captura o ilustración: con la sesión (IPublishedFileService) y, si no, la de su página
+Req *steam_req_files(const u64 *ids, int n, const char *token);
+int steam_parse_files(const char *json, const u64 *ids, int n, char (*urls)[200]);   // cuántas encontró
+Req *steam_req_file_page(u64 id);
+bool steam_parse_file_page(const char *html, char *url, size_t n);

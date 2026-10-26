@@ -228,6 +228,29 @@ int main(void) {
 	CHECK(!strcmp(cb.ssa_text, "Acepto las condiciones del Acuerdo de Suscriptor a Steam (última actualización: 26 SEP 2024).") && !cb.withdrawal);
 	CHECK(steam_parse_checkout_page("<input id=\"payment_method\"><input id=\"accept_right_withdrawal\"><label for=\"accept_right_withdrawal\">Renuncio&nbsp;al desistimiento.</label>", &cb));
 	CHECK(cb.withdrawal && !strcmp(cb.withdrawal_text, "Renuncio al desistimiento.") && !cb.ssa_text[0]);
+	// Perfil: lo que lleva puesto, sus vitrinas (las que se pueden enseñar aquí) y su ficha pública
+	SteamProfile pr;
+	memset(&pr, 0, sizeof pr);
+	CHECK(steam_parse_profile_items(slurp("data/profile_items.json"), &pr));
+	printf("perfil: fondo %s marco %s\n", pr.bg, pr.frame);
+	CHECK(!strncmp(pr.bg, "items/", 6) && strstr(pr.frame, ".png"));
+	CHECK(steam_parse_profile_showcases(slurp("data/profile_showcases.json"), &pr));
+	printf("perfil: %d vitrinas (+%d)", pr.nshow, pr.nother);
+	for (int i = 0; i < pr.nshow; i++) if (pr.show[i].type == SHOW_TEXT) printf(" texto [%s] [%s]", pr.show[i].title, pr.show[i].text);
+	for (int i = 0; i < pr.nshow; i++) printf(" %d:%d", pr.show[i].type, pr.show[i].n);
+	printf("\n");
+	CHECK(pr.nshow >= 5 && pr.nother >= 1);
+	CHECK(steam_parse_profile_xml(slurp("data/profile.xml"), &pr));
+	printf("perfil: %s · %s · %s · desde %lu · %s\nsobre mi: %s\n", pr.name, pr.realname, pr.location, (unsigned long)pr.since, pr.state, pr.summary ? pr.summary : "-");
+	CHECK(pr.name[0] && pr.since > 1200000000 && !pr.is_private);
+	steam_profile_free(&pr);
+	char fu[200];
+	CHECK(steam_parse_file_page(slurp("data/file_page.html"), fu, sizeof fu) && strstr(fu, "imw=400"));
+	u64 pfids[2] = {111, 222};
+	char furls[2][200] = {{0}};
+	CHECK(steam_parse_files("{\"response\":{\"publishedfiledetails\":[{\"publishedfileid\":\"222\",\"preview_url\":\"https://images.steamusercontent.com/ugc/1/AB/\"}]}}", pfids, 2, furls) == 1);
+	CHECK(!furls[0][0] && strstr(furls[1], "/ugc/1/AB/?imw=400"));
+	CHECK(steam_parse_level("{\"response\":{\"player_level\":42}}") == 42 && steam_parse_level("{\"response\":{}}") == -1);
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

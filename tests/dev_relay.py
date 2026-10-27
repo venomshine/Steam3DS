@@ -33,7 +33,8 @@ ALLOWED = ("store.steampowered.com", "api.steampowered.com", "shared.akamai.stea
            "shared.fastly.steamstatic.com", "cdn.akamai.steamstatic.com", "steamcdn-a.akamaihd.net",
            "avatars.steamstatic.com", "avatars.akamai.steamstatic.com",
            "login.steampowered.com", "checkout.steampowered.com", "steamcommunity.com", "help.steampowered.com",
-           "images.steamusercontent.com", "avatars.fastly.steamstatic.com")
+           "images.steamusercontent.com", "avatars.fastly.steamstatic.com", "community.akamai.steamstatic.com",
+           "community.fastly.steamstatic.com")
 CACHE = None
 
 
@@ -117,6 +118,7 @@ FOLLOWED = {1145360}   # juegos que sigues (rgFollowedApps)
 PRIVACY = {"PrivacySettings": {"PrivacyProfile": 3, "PrivacyInventory": 3, "PrivacyInventoryGifts": 3, "PrivacyOwnedGames": 3,
                                "PrivacyPlaytime": 3, "PrivacyFriendsList": 2}, "eCommentPermission": 1}
 THEME = [""]
+POINTS = [12345]   # puntos de Steam de la cuenta simulada
 DQ_PAGE = [0]   # cola de descubrimiento simulada: cuántas veces se ha pedido una nueva
 PC_STATE = {}   # descargas del PC simulado: lo desinstalado y si las descargas están en pausa
 # Tus reseñas (appid -> datos), como las da IUserReviewsService; Cyberpunk ya tiene una
@@ -358,6 +360,9 @@ def fake_post_api(path, body):
         else:
             st["paused"] = not inp.get("enable", True)
         return {"response": {}}, 1
+    if path.endswith("RedeemPoints/v1/"):
+        POINTS[0] -= 500
+        return {"response": {"communityitemid": "123456789", "bundle_community_item_ids": []}}, 1
     if path.endswith("InstallClientApp/v1/"):
         return {"response": {}}, 1
     if path.endswith("MarkNotificationsRead/v1/"):
@@ -407,6 +412,8 @@ def fake_get(path, q):
         DQ_PAGE[0] = DQ_PAGE[0] + 1 if inp.get("rebuild_queue") else 0
         k = (DQ_PAGE[0] * 12) % len(pool)
         return {"response": {"appids": (pool[k:] + pool[:k])[:12], "country_code": "ES", "skipped": 0, "exhausted": False}}
+    if path.endswith("ILoyaltyRewardsService/GetSummary/v1/"):
+        return {"response": {"summary": {"points": str(POINTS[0]), "points_earned": "20000", "points_spent": str(20000 - POINTS[0])}}}
     if path.endswith("GetProfileThemesAvailable/v1/"):
         return {"response": {"profile_themes": [{"theme_id": t, "title": "#ProfileTheme_" + t} for t in ("Summer", "Midnight", "Cosmic")]}}
     if path.endswith("GetAllClientLogonInfo/v1/"):
@@ -692,6 +699,9 @@ class Relay(BaseHTTPRequestHandler):
                      or path.startswith("comment/Profile/render/")):
             for fid, real in PROFILE_AS.items():
                 url = url.replace(str(fid), str(real))
+        # El inventario de la cuenta simulada es uno público de verdad (el de Robin Walker)
+        if FAKE and path.startswith("inventory/%d/" % FAKE_ID):
+            url = url.replace(str(FAKE_ID), "76561197960435530")
         fake, extra = None, []
         if FAKE and method == "POST":
             fake = fake_post(host, path, self.body)

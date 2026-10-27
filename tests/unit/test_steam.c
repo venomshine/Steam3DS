@@ -315,6 +315,21 @@ int main(void) {
 	int ncm = steam_parse_comments(slurp("data/comments.json"), pcm, 6, &ctot);
 	printf("comentarios: %d de %d, el primero de %s (%lu): %.60s\n", ncm, ctot, ncm > 0 ? pcm[0].author : "-", ncm > 0 ? (unsigned long)pcm[0].when : 0UL, ncm > 0 ? pcm[0].text : "");
 	CHECK(ncm == 3 && ctot > 1000 && pcm[0].author[0] && pcm[0].text[0] && pcm[0].when > 1600000000 && strstr(pcm[0].avatar, "avatars.akamai."));
+	// Tienda de puntos
+	PointItem pti[2];
+	char pcur[32];
+	int ptot = 0;
+	CHECK(steam_parse_point_items("{\"response\":{\"next_cursor\":\"AoJR\",\"total_count\":2175,\"definitions\":[{\"appid\":10,\"defid\":780,\"community_item_class\":14,\"point_cost\":\"2000\",\"active\":true,"
+		"\"community_item_data\":{\"item_name\":\"Yellow frame\",\"item_title\":\"Marco amarillo\",\"item_image_small\":\"a.png\",\"item_image_large\":\"b.png\",\"animated\":true}}]}}", pti, 2, pcur, sizeof pcur, &ptot) == 1);
+	CHECK(pti[0].defid == 780 && pti[0].cost == 2000 && !strcmp(pti[0].name, "Marco amarillo") && !strcmp(pti[0].img, "b.png") && !strcmp(pcur, "AoJR") && ptot == 2175);
+	CHECK(steam_parse_points("{\"response\":{\"summary\":{\"points\":\"12345\"}}}") == 12345);
+	// Inventario
+	InvItem *sinv = NULL;
+	int itot = 0, nsinv = steam_parse_inventory(slurp("data/inventory.json"), &sinv, &itot);
+	printf("inventario: %d de %d, %s (%s) x%d\n", nsinv, itot, nsinv > 0 ? sinv[0].name : "-", nsinv > 0 ? sinv[0].type : "-", nsinv > 0 ? sinv[0].amount : 0);
+	CHECK(nsinv == 5 && itot > 1000 && sinv[0].amount >= 1 && sinv[0].icon[0]);
+	free(sinv);
+	CHECK(steam_parse_inventory("null", &sinv, &itot) == -1);
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

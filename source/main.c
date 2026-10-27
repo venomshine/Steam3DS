@@ -24,7 +24,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS, SC_USER, SC_ACCSET, SC_PCDL } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS, SC_USER, SC_ACCSET, SC_PCDL, SC_POINTS, SC_INV } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
@@ -164,7 +164,7 @@ static struct {
 } S;
 
 enum { BT_NONE, BT_IGNORE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
-	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW, BT_RUP, BT_RDOWN, BT_RTEXT, BT_RVIS, BT_RCANCEL, BT_RSEND, BT_PDL, BT_UADD, BT_UADDW, BT_UIGN, BT_FOLLOW };
+	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW, BT_RUP, BT_RDOWN, BT_RTEXT, BT_RVIS, BT_RCANCEL, BT_RSEND, BT_PDL, BT_UADD, BT_UADDW, BT_UIGN, BT_FOLLOW, BT_PPOINTS, BT_PINV };
 
 // Pestañas de la tienda
 #define HOME_PARTS 5
@@ -3786,6 +3786,317 @@ static void input_pcdl(u32 kd, u32 kh, touchPosition *tp)
 	}
 }
 
+// ---------------------------------------------------------------------------- Tienda de puntos
+
+static const int pt_cls[] = {3, 14, 15, 4, 11, 13};
+static const char *const pt_cls_name[] = {"Fondos de perfil", "Marcos de avatar", "Avatares animados", "Emoticonos", "Pegatinas", "Fondos de miniperfil"};
+#define PT_CLS 6
+#define PT_MAX 180
+static struct {
+	long long points;
+	Req *sum, *items, *redeem;
+	PointItem it[PT_MAX];
+	int n, total, cls, sel;
+	char cursor[64];
+	bool loaded, end, failed;
+	u32 confirm;
+	u64 confirm_at;
+} PS;
+
+static void points_load_more(void)
+{
+	if (PS.items || PS.end || PS.n >= PT_MAX) return;
+	PS.items = steam_req_point_items(pt_cls[PS.cls], PS.cursor);
+}
+
+static void points_set_cls(int c)
+{
+	if (PS.items) net_release(PS.items);
+	PS.items = NULL;
+	PS.cls = (c + PT_CLS) % PT_CLS;
+	PS.n = PS.sel = 0;
+	PS.cursor[0] = 0;
+	PS.loaded = PS.end = PS.failed = false;
+	PS.confirm = 0;
+	points_load_more();
+}
+
+static void open_points(void)
+{
+	if (PS.sum) net_release(PS.sum);
+	PS.sum = steam_req_points(auth_info()->steamid, auth_token());
+	PS.points = -1;
+	points_set_cls(PS.cls);
+	go_scene(SC_POINTS, 1);
+}
+
+static void points_poll(void)
+{
+	if (PS.sum && PS.sum->state >= REQ_DONE) {
+		PS.points = PS.sum->state == REQ_DONE ? steam_parse_points(PS.sum->data) : -1;
+		netlog("puntos de Steam: %lld", PS.points);
+		net_release(PS.sum);
+		PS.sum = NULL;
+	}
+	if (PS.items && PS.items->state >= REQ_DONE) {
+		int n = PS.items->state == REQ_DONE ? steam_parse_point_items(PS.items->data, PS.it + PS.n, PT_MAX - PS.n, PS.cursor, sizeof PS.cursor, &PS.total) : -1;
+		if (n < 0) PS.failed = !PS.n;
+		else PS.n += n;
+		PS.end = n <= 0 || !PS.cursor[0] || PS.n >= PT_MAX;
+		PS.loaded = true;
+		net_release(PS.items);
+		PS.items = NULL;
+	}
+	if (PS.redeem && PS.redeem->state >= REQ_DONE) {
+		Req *r = PS.redeem;
+		bool ok = r->state == REQ_DONE && r->http == 200 && (r->eresult == 1 || r->eresult == 0) && r->data && strstr(r->data, "\"response\"");
+		netlog("puntos de Steam: canjear -> %s (HTTP %ld, eresult %d)", ok ? "ok" : "fallo", r->http, r->eresult);
+		char t[160];
+		if (ok) snprintf(t, sizeof t, "%s", _("Canjeado. Ya lo tienes en tu cuenta para usarlo en tu perfil"));
+		else if (r->eresult == 107 || r->eresult == 6) snprintf(t, sizeof t, "%s", _("No tienes puntos suficientes"));
+		else if (r->eresult == 29 || r->eresult == 11) snprintf(t, sizeof t, "%s", _("Ya tienes este artículo"));
+		else snprintf(t, sizeof t, _("No se pudo canjear (código %d)"), r->eresult);
+		toast_icon(t, IC_COIN);
+		net_release(r);
+		PS.redeem = NULL;
+		if (ok) PS.sum = steam_req_points(auth_info()->steamid, auth_token());   // el saldo nuevo
+	}
+}
+
+static void fmt_points(long long p, char *out, size_t n)
+{
+	// Con separador de miles, como en Steam
+	char raw[24];
+	snprintf(raw, sizeof raw, "%lld", p < 0 ? 0 : p);
+	int len = strlen(raw), o = 0;
+	for (int i = 0; i < len && o < (int)n - 2; i++) {
+		if (i && (len - i) % 3 == 0) out[o++] = '.';
+		out[o++] = raw[i];
+	}
+	out[o] = 0;
+}
+
+static void draw_points_top(void)
+{
+	const float X = 16, W = TOP_W - 32;
+	char t[96], pts[24];
+	ui_icon(IC_COIN, X, 26, 13, COL_ACC);
+	ui_text(X + 18, 24, _("Tienda de puntos"), SZ_LARGE, COL_WHITE, AL_LEFT, 200);
+	if (PS.points >= 0) {
+		fmt_points(PS.points, pts, sizeof pts);
+		snprintf(t, sizeof t, _("Tienes %s puntos"), pts);
+		ui_text(TOP_W - X, 28, t, SZ_SMALL, COL_LIME, AL_RIGHT, 180);
+	}
+	if (!PS.n) {
+		if (PS.failed) ui_text(TOP_W / 2, 120, _("No se pudo cargar la tienda de puntos"), SZ_BODY, COL_DIM, AL_CENTER, 380);
+		else draw_net_wait(TOP_W / 2, 120, NULL);
+		return;
+	}
+	const PointItem *p = &PS.it[PS.sel < PS.n ? PS.sel : 0];
+	char url[200];
+	snprintf(url, sizeof url, "https://cdn.akamai.steamstatic.com/steamcommunity/public/images/items/%lu/%s", (unsigned long)p->appid, p->img);
+	const float iy = 48, ih = 112;
+	const Pic *pic = p->img[0] ? img_get(url, 400) : NULL;
+	ui_rect(X, iy, W, ih, C2D_Color32(0, 0, 0, 0x50));
+	if (pic) img_draw_fit(pic, X, iy, W, ih);
+	else ui_spinner(TOP_W / 2, iy + ih / 2, 6, COL_DIM);
+	ui_text(X, iy + ih + 6, p->name, SZ_BODY, COL_WHITE, AL_LEFT, W - 110);
+	fmt_points(p->cost, pts, sizeof pts);
+	snprintf(t, sizeof t, _("%s puntos"), pts);
+	ui_text(TOP_W - X, iy + ih + 7, t, SZ_SMALL, PS.points >= 0 && PS.points < p->cost ? COL_NEG : COL_LIME, AL_RIGHT, 110);
+	if (PS.confirm == p->defid && osGetTime() < PS.confirm_at)
+		ui_text_wrap(X, iy + ih + 26, W, _("Pulsa A otra vez para canjearlo. Los puntos se descuentan de tu cuenta de Steam."), SZ_SMALL, COL_ACC, 2, 14);
+	else if (p->desc[0]) ui_text_wrap(X, iy + ih + 26, W, p->desc, SZ_SMALL, COL_TXT, 3, 14);
+}
+
+static void draw_points_bottom(void)
+{
+	fx_bar(0, 0, BOT_W, LIST_Y, true);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_icon(IC_COIN, 28, 6, 12, COL_ACC);
+	ui_text(46, 5, _(pt_cls_name[PS.cls]), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 120);
+	char t[32];
+	if (PS.total) {
+		snprintf(t, sizeof t, "%d", PS.total);
+		ui_text(BOT_W - 10, 6, t, SZ_TINY, COL_DIM, AL_RIGHT, 0);
+	}
+	const float RH = 24, top = LIST_Y + 2;
+	const int vis = (int)((SCR_H - 18 - top) / RH);
+	int first = PS.sel - (vis - 2);
+	if (first < 0) first = 0;
+	for (int i = first; i < PS.n && i < first + vis; i++) {
+		const PointItem *p = &PS.it[i];
+		float y = top + (i - first) * RH;
+		bool on = i == PS.sel;
+		if (on) {
+			float br = 0.075f + 0.035f * sinf(g_time * 2.4f);
+			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
+			ui_rrect(3, y + 4, 2, RH - 8, 1, col_alpha(COL_ACC, 0.8f));
+		}
+		char pts[24];
+		fmt_points(p->cost, pts, sizeof pts);
+		ui_text(12, y + 5, p->name, SZ_SMALL, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 90);
+		ui_text(BOT_W - 12, y + 6, pts, SZ_TINY, COL_LIME, AL_RIGHT, 70);
+	}
+	if (PS.items) ui_spinner(BOT_W / 2, SCR_H - 30, 5, COL_DIM);
+	static const char *h[] = {"A", "Canjear", "↑↓", "Elegir", "L R", "Categoría", "B", "Volver"};
+	draw_hints(h, 4);
+}
+
+static void input_points(u32 kd, u32 kh, touchPosition *tp)
+{
+	if ((kd & KEY_B) || ((kd & KEY_TOUCH) && tp->py < LIST_Y && tp->px < 120)) {
+		go_scene(SC_PROFILE, -1);
+		return;
+	}
+	if (kd & KEY_L) points_set_cls(PS.cls - 1);
+	if (kd & KEY_R) points_set_cls(PS.cls + 1);
+	if (key_repeat(kd, kh, KEY_DOWN) && PS.sel + 1 < PS.n) PS.sel++;
+	if (key_repeat(kd, kh, KEY_UP) && PS.sel > 0) PS.sel--;
+	if (PS.sel >= PS.n - 6) points_load_more();
+	if (!(kd & KEY_A) || PS.sel >= PS.n || PS.redeem) return;
+	const PointItem *p = &PS.it[PS.sel];
+	// Dos veces para canjear: gasta puntos de tu cuenta
+	if (PS.confirm == p->defid && osGetTime() < PS.confirm_at) {
+		PS.confirm = 0;
+		PS.redeem = steam_req_redeem(p->defid, auth_token());
+	} else if (PS.points >= 0 && PS.points < p->cost) {
+		toast(_("No tienes puntos suficientes"));
+	} else {
+		PS.confirm = p->defid;
+		PS.confirm_at = osGetTime() + 4000;
+	}
+}
+
+// ---------------------------------------------------------------------------- Inventario
+
+static struct {
+	Req *req;
+	InvItem *it;
+	int n, total, sel;
+	bool done, failed;
+} IV;
+
+static void open_inv(void)
+{
+	if (IV.req) net_release(IV.req);
+	free(IV.it);
+	memset(&IV, 0, sizeof IV);
+	char ck[1200];
+	if (auth_web_cookies("steamcommunity.com", ck, sizeof ck)) IV.req = steam_req_inventory(auth_info()->steamid, ck);
+	else IV.failed = IV.done = true;
+	memset(ck, 0, sizeof ck);
+	go_scene(SC_INV, 1);
+}
+
+static void inv_poll(void)
+{
+	if (!IV.req || IV.req->state < REQ_DONE) return;
+	int n = IV.req->state == REQ_DONE ? steam_parse_inventory(IV.req->data, &IV.it, &IV.total) : -1;
+	netlog("inventario: %d objetos distintos de %d (HTTP %ld)", n, IV.total, IV.req->http);
+	IV.n = n < 0 ? 0 : n;
+	IV.failed = n < 0;
+	IV.done = true;
+	net_release(IV.req);
+	IV.req = NULL;
+}
+
+static void inv_icon(const InvItem *it, char *out, size_t n, int px)
+{
+	snprintf(out, n, "https://community.akamai.steamstatic.com/economy/image/%s/%dfx%df", it->icon, px, px);
+}
+
+#define INV_COLS 6
+#define INV_CELL 48
+
+static void draw_inv_top(void)
+{
+	const float X = 16, W = TOP_W - 32;
+	char t[96];
+	ui_icon(IC_CARD, X, 26, 13, COL_ACC);
+	ui_text(X + 18, 24, _("Inventario de Steam"), SZ_LARGE, COL_WHITE, AL_LEFT, 220);
+	if (IV.total) {
+		snprintf(t, sizeof t, IV.total == 1 ? _("%d objeto") : _("%d objetos"), IV.total);
+		ui_text(TOP_W - X, 28, t, SZ_SMALL, COL_DIM, AL_RIGHT, 120);
+	}
+	if (!IV.done) {
+		draw_net_wait(TOP_W / 2, 120, NULL);
+		return;
+	}
+	if (IV.failed || !IV.n) {
+		ui_text(TOP_W / 2, 110, IV.failed ? _("No se pudo cargar tu inventario") : _("Tu inventario está vacío"), SZ_BODY, COL_DIM, AL_CENTER, 380);
+		if (IV.failed) ui_text_wrap(X, 134, W, _("Si es privado, cámbialo en Configuración → Privacidad y perfil. Steam también limita las consultas seguidas: prueba en un momento."), SZ_SMALL, COL_DIM, 4, 15);
+		return;
+	}
+	const InvItem *it = &IV.it[IV.sel < IV.n ? IV.sel : 0];
+	char url[300];
+	inv_icon(it, url, sizeof url, 184);
+	const Pic *p = img_get(url, 200);
+	ui_rect(X, 48, 120, 120, C2D_Color32(0, 0, 0, 0x50));
+	if (p) img_draw_fit(p, X, 48, 120, 120);
+	else ui_spinner(X + 60, 108, 6, COL_DIM);
+	ui_text_wrap(X + 132, 50, W - 132, it->name, SZ_BODY, COL_WHITE, 3, 16);
+	ui_text_wrap(X + 132, 104, W - 132, it->type, SZ_SMALL, COL_DIM, 2, 14);
+	if (it->amount > 1) {
+		snprintf(t, sizeof t, _("Tienes %d"), it->amount);
+		ui_text(X + 132, 140, t, SZ_SMALL, COL_ACC, AL_LEFT, 0);
+	}
+	if (IV.total > IV.n) {
+		snprintf(t, sizeof t, _("Se muestran los primeros %d tipos de objetos"), IV.n);
+		ui_text(X, 206, t, SZ_TINY, COL_DIM, AL_LEFT, W);
+	}
+}
+
+static void draw_inv_bottom(void)
+{
+	fx_bar(0, 0, BOT_W, LIST_Y, true);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_icon(IC_CARD, 28, 6, 12, COL_ACC);
+	ui_text(46, 5, _("Inventario"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 60);
+	const float gx = (BOT_W - INV_COLS * INV_CELL) / 2, top = LIST_Y + 4;
+	const int rows_vis = (int)((SCR_H - 18 - top) / INV_CELL);
+	int row = IV.sel / INV_COLS, first = row - (rows_vis - 1);
+	if (first < 0) first = 0;
+	for (int i = first * INV_COLS; i < IV.n && i < (first + rows_vis) * INV_COLS; i++) {
+		float x = gx + (i % INV_COLS) * INV_CELL, y = top + (i / INV_COLS - first) * INV_CELL;
+		if (i == IV.sel) fx_select(x + 1, y + 1, INV_CELL - 2, INV_CELL - 2, 6, 1);
+		char url[300];
+		inv_icon(&IV.it[i], url, sizeof url, 96);
+		const Pic *p = img_get(url, 64);
+		if (p) img_draw_fit(p, x + 5, y + 5, INV_CELL - 10, INV_CELL - 10);
+		else ui_rect(x + 5, y + 5, INV_CELL - 10, INV_CELL - 10, col_alpha(COL_WHITE, 0.06f));
+		if (IV.it[i].amount > 1) {
+			char a[12];
+			snprintf(a, sizeof a, "%d", IV.it[i].amount);
+			ui_text(x + INV_CELL - 5, y + INV_CELL - 15, a, SZ_TINY, COL_WHITE, AL_RIGHT, 0);
+		}
+	}
+	static const char *h[] = {"← →", "Elegir", "↑↓", "Fila", "B", "Volver"};
+	draw_hints(h, 3);
+}
+
+static void input_inv(u32 kd, u32 kh, touchPosition *tp)
+{
+	if ((kd & KEY_B) || ((kd & KEY_TOUCH) && tp->py < LIST_Y && tp->px < 120)) {
+		go_scene(SC_PROFILE, -1);
+		return;
+	}
+	if (!IV.n) return;
+	if (key_repeat(kd, kh, KEY_RIGHT) && IV.sel + 1 < IV.n) IV.sel++;
+	if (key_repeat(kd, kh, KEY_LEFT) && IV.sel > 0) IV.sel--;
+	if (key_repeat(kd, kh, KEY_DOWN)) IV.sel = IV.sel + INV_COLS < IV.n ? IV.sel + INV_COLS : IV.n - 1;
+	if (key_repeat(kd, kh, KEY_UP) && IV.sel >= INV_COLS) IV.sel -= INV_COLS;
+	if ((kd & KEY_TOUCH) && tp->py >= LIST_Y + 4) {
+		const float gx = (BOT_W - INV_COLS * INV_CELL) / 2, top = LIST_Y + 4;
+		const int rows_vis = (int)((SCR_H - 18 - top) / INV_CELL);
+		int row = IV.sel / INV_COLS, first = row - (rows_vis - 1);
+		if (first < 0) first = 0;
+		int c = (int)((tp->px - gx) / INV_CELL), r = (int)((tp->py - top) / INV_CELL);
+		int i = (first + r) * INV_COLS + c;
+		if (c >= 0 && c < INV_COLS && i >= 0 && i < IV.n) IV.sel = i;
+	}
+}
+
 // ---------------------------------------------------------------------------- Editor de tu reseña
 
 static const Box B_RUP = {12, 64, 145, 30};
@@ -4333,14 +4644,16 @@ static void open_account_list(int ti)
 
 // ---------------------------------------------------------------------------- Perfil
 
-static const Box B_PLIB = {12, 78, 145, 30};
-static const Box B_PDL = {163, 78, 145, 30};
-static const Box B_PWISH = {12, 112, 145, 30};
-static const Box B_PVIEW = {163, 112, 145, 30};
-static const Box B_PFRIENDS = {12, 146, 145, 30};
-static const Box B_PACT = {163, 146, 145, 30};
-static const Box B_PSWITCH = {12, 180, 145, 30};
-static const Box B_PLOGOUT = {163, 180, 145, 30};
+static const Box B_PLIB = {12, 70, 145, 26};
+static const Box B_PDL = {163, 70, 145, 26};
+static const Box B_PWISH = {12, 99, 145, 26};
+static const Box B_PVIEW = {163, 99, 145, 26};
+static const Box B_PFRIENDS = {12, 128, 145, 26};
+static const Box B_PACT = {163, 128, 145, 26};
+static const Box B_PPOINTS = {12, 157, 145, 26};
+static const Box B_PINV = {163, 157, 145, 26};
+static const Box B_PSWITCH = {12, 186, 145, 26};
+static const Box B_PLOGOUT = {163, 186, 145, 26};
 
 static bool draw_user_bg(float dim);
 static void draw_user_avatar(float x, float y, float sz);
@@ -4429,8 +4742,10 @@ static void draw_profile_bottom(void)
 	draw_button_k(&B_PFRIENDS, NULL, S.pfocus == 4, IC_USERS, _("Amigos"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PFRIENDS);
 	draw_button_k(&B_PACT, NULL, S.pfocus == 5, IC_CODE, act_busy ? _("Activando…") : _("Activar un producto"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PACT);
 	u32 red = C2D_Color32(0x6a, 0x26, 0x22, 0xff);
-	draw_button_k(&B_PSWITCH, NULL, S.pfocus == 6, IC_USERS, _("Cambiar de cuenta"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PSWITCH);
-	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 7, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
+	draw_button_k(&B_PPOINTS, NULL, S.pfocus == 6, IC_COIN, _("Tienda de puntos"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PPOINTS);
+	draw_button_k(&B_PINV, NULL, S.pfocus == 7, IC_CARD, _("Inventario"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PINV);
+	draw_button_k(&B_PSWITCH, NULL, S.pfocus == 8, IC_USERS, _("Cambiar de cuenta"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PSWITCH);
+	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 9, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
 	static const char *hh[] = {"↑↓", "Elegir", "A", "Abrir", "B", "Volver", "START", "Menú"};
 	draw_hints(hh, 4);
 }
@@ -4467,6 +4782,8 @@ static void open_friends(void);
 static void open_accounts(void);
 static void open_user(u64 id, const SteamPerson *person);
 static void open_pcdl(void);
+static void open_points(void);
+static void open_inv(void);
 
 static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 {
@@ -4474,15 +4791,17 @@ static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		go_scene(SC_STORE, -1);
 		return;
 	}
-	static const int ids[] = {BT_PLIB, BT_PDL, BT_PWISH, BT_PVIEW, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PLOGOUT};
-	int b = press_update(kd, kh, ku, tp, ids, 8);
-	// Con la cruceta se elige un botón (cuatro filas de dos) y A lo pulsa
-	if (S.pfocus > 7) S.pfocus = 0;
-	if (key_repeat(kd, kh, KEY_DOWN)) S.pfocus = (S.pfocus + 2) % 8;
-	if (key_repeat(kd, kh, KEY_UP)) S.pfocus = (S.pfocus + 6) % 8;
+	static const int ids[] = {BT_PLIB, BT_PDL, BT_PWISH, BT_PVIEW, BT_PFRIENDS, BT_PACT, BT_PPOINTS, BT_PINV, BT_PSWITCH, BT_PLOGOUT};
+	int b = press_update(kd, kh, ku, tp, ids, 10);
+	// Con la cruceta se elige un botón (cinco filas de dos) y A lo pulsa
+	if (S.pfocus > 9) S.pfocus = 0;
+	if (key_repeat(kd, kh, KEY_DOWN)) S.pfocus = (S.pfocus + 2) % 10;
+	if (key_repeat(kd, kh, KEY_UP)) S.pfocus = (S.pfocus + 8) % 10;
 	if (kd & (KEY_LEFT | KEY_RIGHT)) S.pfocus ^= 1;
 	if (kd & KEY_A) b = ids[S.pfocus];
 	if (b == BT_PDL) open_pcdl();
+	if (b == BT_PPOINTS) open_points();
+	if (b == BT_PINV) open_inv();
 	if (b == BT_PVIEW) open_user(auth_info()->steamid, NULL);
 	if (b == BT_PLIB) open_account_list(TAB_LIBRARY);
 	if (b == BT_PWISH) open_account_list(TAB_WISHLIST);
@@ -8188,6 +8507,8 @@ static const Box *button_box(int id)
 	case BT_UADDW: return &B_UADDW;
 	case BT_UIGN: return &B_UIGN;
 	case BT_FOLLOW: return &B_FOLLOW;
+	case BT_PPOINTS: return &B_PPOINTS;
+	case BT_PINV: return &B_PINV;
 	case BT_RUP: return &B_RUP;
 	case BT_RDOWN: return &B_RDOWN;
 	case BT_RTEXT: return &B_RTEXT;
@@ -8837,6 +9158,8 @@ int main(int argc, char **argv)
 		case SC_USER: input_user(kd, kh, ku, &tp); break;
 		case SC_ACCSET: input_accset(kd, kh, &tp); break;
 		case SC_PCDL: input_pcdl(kd, kh, &tp); break;
+		case SC_POINTS: input_points(kd, kh, &tp); break;
+		case SC_INV: input_inv(kd, kh, &tp); break;
 		case SC_PAY: input_pay(kd, kh, ku, &tp, dt); break;
 		}
 		auth_update();
@@ -8904,6 +9227,8 @@ int main(int argc, char **argv)
 		}
 		accset_poll();
 		pcdl_poll();
+		points_poll();
+		inv_poll();
 
 		// Desplazamientos suaves
 		if (!CUR->finger) CUR->scroll = approach(CUR->scroll, CUR->scroll_target, 18);
@@ -8979,12 +9304,14 @@ int main(int argc, char **argv)
 		case SC_USER: draw_user_top(); break;
 		case SC_ACCSET: draw_accset_top(); break;
 		case SC_PCDL: draw_pcdl_top(); break;
+		case SC_POINTS: draw_points_top(); break;
+		case SC_INV: draw_inv_top(); break;
 		case SC_PAY: draw_pay_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS || S.scene == SC_USER || S.scene == SC_ACCSET || S.scene == SC_PCDL)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS || S.scene == SC_USER || S.scene == SC_ACCSET || S.scene == SC_PCDL || S.scene == SC_POINTS || S.scene == SC_INV)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -9010,6 +9337,8 @@ int main(int argc, char **argv)
 		case SC_USER: draw_user_bottom(); break;
 		case SC_ACCSET: draw_accset_bottom(); break;
 		case SC_PCDL: draw_pcdl_bottom(); break;
+		case SC_POINTS: draw_points_bottom(); break;
+		case SC_INV: draw_inv_bottom(); break;
 		case SC_PAY: draw_pay_bottom(); break;
 		}
 		C2D_ViewReset();

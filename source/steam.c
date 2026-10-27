@@ -2780,3 +2780,137 @@ Req *steam_req_post_comment(u64 steamid, const char *text, const char *sessionid
 	free(esc);
 	return r;
 }
+
+// ----------------------------------------------------------------------------
+// Tienda de puntos (ILoyaltyRewardsService)
+
+Req *steam_req_points(u64 steamid, const char *token)
+{
+	cJSON *in = cJSON_CreateObject();
+	char sid[24];
+	snprintf(sid, sizeof sid, "%llu", (unsigned long long)steamid);
+	cJSON_AddStringToObject(in, "steamid", sid);
+	return steam_get_service("ILoyaltyRewardsService/GetSummary", in, token);
+}
+
+long long steam_parse_points(const char *json)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	const cJSON *sum = resp ? cJSON_GetObjectItemCaseSensitive(resp, "summary") : NULL;
+	long long p = sum ? jbig(sum, "points") : -1;
+	cJSON_Delete(root);
+	return p;
+}
+
+Req *steam_req_point_items(int cls, const char *cursor)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON_AddNumberToObject(in, "count", 30);
+	if (cursor && *cursor) cJSON_AddStringToObject(in, "cursor", cursor);
+	cJSON *c = cJSON_AddArrayToObject(in, "community_item_classes");
+	cJSON_AddItemToArray(c, cJSON_CreateNumber(cls));
+	cJSON_AddStringToObject(in, "language", g_lang);
+	cJSON_AddNumberToObject(in, "sort", 2);   // las más nuevas primero, como al entrar en la tienda
+	char *js = cJSON_PrintUnformatted(in);
+	char *esc = url_escape(js);
+	size_t n = strlen(esc) + 128;
+	char *url = malloc(n);
+	snprintf(url, n, "https://api.steampowered.com/ILoyaltyRewardsService/QueryRewardItems/v1/?input_json=%s", esc);
+	Req *r = net_get(url, LANE_API);
+	free(url);
+	free(esc);
+	free(js);
+	cJSON_Delete(in);
+	return r;
+}
+
+int steam_parse_point_items(const char *json, PointItem *out, int max, char *cursor, size_t cursor_sz, int *total)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	copy(cursor, cursor_sz, jstr(resp, "next_cursor"));
+	*total = (int)jnum(resp, "total_count", 0);
+	int n = 0;
+	const cJSON *it;
+	cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(resp, "definitions")) {
+		if (n >= max) break;
+		if (cJSON_IsFalse(cJSON_GetObjectItemCaseSensitive(it, "active"))) continue;
+		const cJSON *d = cJSON_GetObjectItemCaseSensitive(it, "community_item_data");
+		PointItem *p = &out[n];
+		memset(p, 0, sizeof *p);
+		p->appid = (u32)jnum(it, "appid", 0);
+		p->defid = (u32)jnum(it, "defid", 0);
+		p->cls = (int)jnum(it, "community_item_class", 0);
+		p->cost = jbig(it, "point_cost");
+		const char *t = jstr(d, "item_title");
+		copy_utf8(p->name, sizeof p->name, t && *t ? t : jstr(d, "item_name"));
+		copy_utf8(p->desc, sizeof p->desc, jstr(d, "item_description"));
+		// La imagen fija: «large» (en marcos y avatares animados, «small» es la animación, de varios MB)
+		const char *im = jstr(d, "item_image_large");
+		p->animated = jbool(d, "animated");
+		copy(p->img, sizeof p->img, im && *im ? im : jstr(d, "item_image_small"));
+		if (p->defid && p->name[0]) n++;
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
+Req *steam_req_redeem(u32 defid, const char *token)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON_AddNumberToObject(in, "defid", defid);
+	return steam_post_service("ILoyaltyRewardsService/RedeemPoints", in, token);
+}
+
+// ----------------------------------------------------------------------------
+// Inventario (steamcommunity.com/inventory)
+
+Req *steam_req_inventory(u64 steamid, const char *cookies)
+{
+	char url[160];
+	snprintf(url, sizeof url, "https://steamcommunity.com/inventory/%llu/753/6?l=%s&count=500", (unsigned long long)steamid, g_lang);
+	return net_request(url, NULL, cookies);
+}
+
+int steam_parse_inventory(const char *json, InvItem **out, int *total)
+{
+	*out = NULL;
+	cJSON *root = cJSON_Parse(json);
+	if (!root || jnum(root, "success", 0) != 1) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	*total = (int)jnum(root, "total_inventory_count", 0);
+	const cJSON *assets = cJSON_GetObjectItemCaseSensitive(root, "assets");
+	const cJSON *descs = cJSON_GetObjectItemCaseSensitive(root, "descriptions");
+	int cap = cJSON_GetArraySize(descs), n = 0;
+	*out = calloc(cap ? cap : 1, sizeof **out);
+	u64 *keys = calloc(cap ? cap : 1, sizeof *keys);
+	const cJSON *d, *a;
+	cJSON_ArrayForEach(d, descs) {
+		if (!*out || !keys || n >= cap) break;
+		InvItem *it = &(*out)[n];
+		copy_utf8(it->name, sizeof it->name, jstr(d, "name"));
+		copy_utf8(it->type, sizeof it->type, jstr(d, "type"));
+		copy(it->icon, sizeof it->icon, jstr(d, "icon_url"));
+		keys[n] = strtoull(jstr(d, "classid") ? jstr(d, "classid") : "0", NULL, 10) * 1000003ULL + strtoull(jstr(d, "instanceid") ? jstr(d, "instanceid") : "0", NULL, 10);
+		if (it->name[0]) n++;
+	}
+	// Cuántos tienes de cada uno
+	cJSON_ArrayForEach(a, assets) {
+		u64 k = strtoull(jstr(a, "classid") ? jstr(a, "classid") : "0", NULL, 10) * 1000003ULL + strtoull(jstr(a, "instanceid") ? jstr(a, "instanceid") : "0", NULL, 10);
+		for (int i = 0; i < n; i++)
+			if (keys[i] == k) {
+				(*out)[i].amount += jstr(a, "amount") ? atoi(jstr(a, "amount")) : 1;
+				break;
+			}
+	}
+	free(keys);
+	cJSON_Delete(root);
+	return n;
+}

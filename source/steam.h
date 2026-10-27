@@ -443,3 +443,30 @@ typedef struct {
 Req *steam_req_comments(u64 steamid, int count);
 int steam_parse_comments(const char *json, ProfileComment *out, int max, int *total);   // -1 si falla
 Req *steam_req_post_comment(u64 steamid, const char *text, const char *sessionid, const char *cookies);
+
+// Tienda de puntos de Steam: tus puntos, los artículos de una clase (3 fondos, 14 marcos de avatar,
+// 15 avatares animados, 4 emoticonos, 11 pegatinas, 13 fondos de miniperfil) y canjear uno
+typedef struct {
+	u32 appid, defid;
+	int cls;
+	long long cost;
+	char name[96];
+	char desc[200];
+	char img[100];              // archivo en .../steamcommunity/public/images/items/<appid>/
+	bool animated;
+} PointItem;
+Req *steam_req_points(u64 steamid, const char *token);
+long long steam_parse_points(const char *json);   // -1 si falla
+Req *steam_req_point_items(int cls, const char *cursor);
+int steam_parse_point_items(const char *json, PointItem *out, int max, char *cursor, size_t cursor_sz, int *total);   // -1 si falla
+Req *steam_req_redeem(u32 defid, const char *token);
+
+// Tu inventario de Steam (cromos, fondos, emoticonos…: el de la comunidad, juego 753), los repetidos juntos
+typedef struct {
+	char name[96];
+	char type[64];
+	char icon[200];             // https://community.akamai.steamstatic.com/economy/image/<icon>/96fx96f
+	int amount;
+} InvItem;
+Req *steam_req_inventory(u64 steamid, const char *cookies);
+int steam_parse_inventory(const char *json, InvItem **out, int *total);   // malloc; -1 si falla (privado)

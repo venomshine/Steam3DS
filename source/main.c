@@ -450,8 +450,11 @@ static bool price_ok(const StoreRow *r)
 	return c >= 0 && c < price_limit_cents(S.price);
 }
 
-// Los juegos que ocultaste en tu biblioteca de Steam (colección «hidden» de la nube)
-static struct { Req *req; u32 *ids; int n; bool loaded; } HID;
+static void hidden_load(void);
+
+// Los juegos que ocultas en la biblioteca de la app (SELECT): Steam no deja leer desde la web los
+// que ocultaste en su cliente, así que se guardan en la SD, en un archivo por cuenta
+static struct { u32 *ids; int n, cap; bool loaded; } HID;
 
 static void tab_more(int ti)
 {
@@ -483,7 +486,7 @@ static void tab_more(int ti)
 		} else {
 			if (t->list.count) return;
 			t->list.req = steam_req_owned(auth_info()->steamid, auth_token());
-			if (!HID.req && !HID.loaded) HID.req = steam_req_hidden(auth_token());
+			hidden_load();
 		}
 	} else if (ti == TAB_WISHLIST) {
 		if (!auth_logged()) return;
@@ -669,14 +672,89 @@ static bool lib_hidden(u32 appid)
 	return false;
 }
 
-// Fuera de la lista los ocultos (y lib_base, la parte de GetOwnedGames, se ajusta)
+static void hidden_path(char *p, size_t n)
+{
+	snprintf(p, n, APP_DIR "/ocultos_%llu.txt", (unsigned long long)auth_info()->steamid);
+}
+
+static void hidden_load(void)
+{
+	if (HID.loaded || !auth_logged()) return;
+	HID.loaded = true;
+	char p[96], line[24];
+	hidden_path(p, sizeof p);
+	FILE *f = fopen(p, "r");
+	if (!f) return;
+	while (fgets(line, sizeof line, f)) {
+		u32 id = (u32)strtoul(line, NULL, 10);
+		if (!id || lib_hidden(id)) continue;
+		if (HID.n == HID.cap) {
+			int cap = HID.cap ? HID.cap * 2 : 32;
+			u32 *nn = realloc(HID.ids, cap * sizeof(u32));
+			if (!nn) break;
+			HID.ids = nn;
+			HID.cap = cap;
+		}
+		HID.ids[HID.n++] = id;
+	}
+	fclose(f);
+	netlog("biblioteca: %d juegos ocultos en la consola", HID.n);
+}
+
+static void hidden_save(void)
+{
+	char p[96];
+	hidden_path(p, sizeof p);
+	FILE *f = fopen(p, "w");
+	if (!f) return;
+	for (int i = 0; i < HID.n; i++) fprintf(f, "%lu\n", (unsigned long)HID.ids[i]);
+	fclose(f);
+}
+
+static void hidden_set(u32 appid, bool on)
+{
+	if (on == lib_hidden(appid)) return;
+	if (on) {
+		if (HID.n == HID.cap) {
+			int cap = HID.cap ? HID.cap * 2 : 32;
+			u32 *nn = realloc(HID.ids, cap * sizeof(u32));
+			if (!nn) return;
+			HID.ids = nn;
+			HID.cap = cap;
+		}
+		HID.ids[HID.n++] = appid;
+	} else {
+		for (int i = 0; i < HID.n; i++)
+			if (HID.ids[i] == appid) {
+				HID.ids[i] = HID.ids[--HID.n];
+				break;
+			}
+	}
+	hidden_save();
+}
+
+// Lo que no se ve en la lista: los ocultos (con cualquier orden) o los demás (en «Ocultos»)
+static int lib_mode;
+#define LIB_HIDDEN_MODE 3
+static RowList lib_aside;
+
+static void aside_add(const StoreRow *r)
+{
+	for (int i = 0; i < lib_aside.count; i++)
+		if (lib_aside.rows[i].appid == r->appid && lib_aside.rows[i].family == r->family) return;
+	add_row(&lib_aside, r);
+}
+
+// Aparta de la lista lo que no toca ver ahora (y lib_base, la parte de GetOwnedGames, se ajusta)
 static void lib_drop_hidden(Tab *t)
 {
-	if (!HID.n) return;
+	bool show_hidden = lib_mode == LIB_HIDDEN_MODE;
+	if (!HID.n && !show_hidden) return;
 	int n = 0, base = t->lib_base;
 	for (int i = 0; i < t->list.count; i++) {
-		if (lib_hidden(t->list.rows[i].appid)) {
+		if (lib_hidden(t->list.rows[i].appid) != show_hidden) {
 			if (i < t->lib_base) base--;
+			aside_add(&t->list.rows[i]);
 			continue;
 		}
 		t->list.rows[n++] = t->list.rows[i];
@@ -684,9 +762,25 @@ static void lib_drop_hidden(Tab *t)
 	int gone = t->list.count - n;
 	if (!gone) return;
 	t->list.count = n;
-	t->lib_base = base;
+	t->lib_base = base < 0 ? 0 : base;
 	if (t->list.total >= gone) t->list.total -= gone;
 	if (t->sel >= n) t->sel = t->sel_y = n ? n - 1 : 0;
+}
+
+// Al cambiar de vista (o al ocultar uno): todo vuelve a la lista y se aparta lo que no toca
+static void lib_regroup(Tab *t)
+{
+	for (int i = 0; i < lib_aside.count; i++) {
+		bool dup = false;
+		for (int j = 0; j < t->list.count && !dup; j++)
+			dup = t->list.rows[j].appid == lib_aside.rows[i].appid && t->list.rows[j].family == lib_aside.rows[i].family;
+		if (!dup) {
+			add_row(&t->list, &lib_aside.rows[i]);
+			t->list.total++;
+		}
+	}
+	lib_aside.count = 0;
+	lib_drop_hidden(t);
 }
 
 static void lib_sort(Tab *t)
@@ -768,26 +862,8 @@ static bool lib_type_ok(int type)
 	return type == 0 || type == 1 || type == 2 || type == 6 || type == 12;
 }
 
-static void hidden_poll(Tab *t)
-{
-	if (!HID.req || HID.req->state < REQ_DONE) return;
-	u32 *ids = NULL;
-	int n = HID.req->state == REQ_DONE ? steam_parse_hidden(HID.req->data, &ids) : -1;
-	netlog("biblioteca: %d juegos ocultos (HTTP %ld, eresult %d)", n, HID.req->http, HID.req->eresult);
-	// Si no vino la lista, qué contestó Steam (para saber si deja leerla con la sesión web)
-	if (n <= 0 && HID.req->data) netlog("biblioteca: ocultos, respuesta %.200s", HID.req->data);
-	net_release(HID.req);
-	HID.req = NULL;
-	HID.loaded = true;
-	free(HID.ids);
-	HID.ids = ids;
-	HID.n = n < 0 ? 0 : n;
-	lib_drop_hidden(t);
-}
-
 static void owned_poll(Tab *t)
 {
-	hidden_poll(t);
 	Req *r = t->list.req;
 	if (!r || r->state < REQ_DONE) return;
 	if (t->lib_stage == 2) {
@@ -916,7 +992,7 @@ static void wish_poll(Tab *t)
 // mayor descuento, precio más bajo o solo ofertas (lo que no está rebajado se aparta en wish_stash)
 static int lib_mode, wish_mode;
 static RowList wish_stash;
-static const char *const lib_mode_name[] = {"Por nombre", "Más jugados", "Jugados recientemente"};
+static const char *const lib_mode_name[] = {"Por nombre", "Más jugados", "Jugados recientemente", "Ocultos"};
 static const char *const wish_mode_name[] = {"Por prioridad", "Mayor descuento", "Precio más bajo", "Solo ofertas"};
 static const Tab *sort_tab;
 
@@ -949,6 +1025,7 @@ static int cmp_wish(const void *x, const void *y)
 
 static void lib_apply(Tab *t)
 {
+	lib_regroup(t);
 	if (t->list.count > 1) qsort(t->list.rows, t->list.count, sizeof *t->list.rows, cmp_lib);
 }
 
@@ -974,7 +1051,7 @@ static void list_mode_next(void)
 {
 	Tab *t = CUR;
 	if (S.tab == TAB_LIBRARY) {
-		lib_mode = (lib_mode + 1) % 3;
+		lib_mode = (lib_mode + 1) % 4;
 		lib_apply(t);
 		toast_icon(_(lib_mode_name[lib_mode]), IC_PAD);
 	} else if (S.tab == TAB_WISHLIST) {
@@ -1063,9 +1140,9 @@ static void account_lists_clear(void)
 	family_reset();
 	notif_reset();
 	flist_reset();
-	if (HID.req) net_release(HID.req);
 	free(HID.ids);
 	memset(&HID, 0, sizeof HID);
+	lib_aside.count = 0;
 	wish_stash.count = 0;
 	deals_checked = false;
 	for (int ti = TAB_LIBRARY; ti < TAB_H0; ti++) {
@@ -2161,6 +2238,8 @@ static void draw_store_bottom(void)
 	if (t->list.req && end_y < SCR_H) ui_spinner(BOT_W / 2, end_y + 14, 6, COL_DIM);
 	if (S.tab == TAB_SEARCH && !t->term[0] && !t->list.count)
 		ui_text(BOT_W / 2, top + 30, _("No hay búsquedas recientes"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+	if (S.tab == TAB_LIBRARY && lib_mode == LIB_HIDDEN_MODE && !t->list.count && !t->list.req)
+		ui_text_wrap(20, top + 24, BOT_W - 40, _("No has ocultado ningún juego. Pulsa SELECT sobre uno para ocultarlo de tu biblioteca."), SZ_SMALL, COL_DIM, 3, 15);
 	if (S.tab == TAB_WISHLIST && t->wish_loaded && !t->nwish)
 		ui_text(BOT_W / 2, top + 30, _("Tu lista de deseos está vacía"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 	else if (S.tab == TAB_WISHLIST && wish_mode == 3 && !t->list.count && !t->list.req)
@@ -2185,7 +2264,11 @@ static void draw_store_bottom(void)
 		static const char *hb[] = {"B", "Volver", "START", "Menú"};
 		if (t->list.count) draw_hints(hc, 5);
 		else draw_hints(hb, 2);
-	} else if (S.tab == TAB_LIBRARY || S.tab == TAB_WISHLIST) {
+	} else if (S.tab == TAB_LIBRARY) {
+		static const char *hl[] = {"A", "Abrir", "Y", "Ordenar", "SELECT", "Ocultar", "B", "Volver"};
+		static const char *hu[] = {"A", "Abrir", "Y", "Ordenar", "SELECT", "Mostrar", "B", "Volver"};
+		draw_hints(lib_mode == LIB_HIDDEN_MODE ? hu : hl, 4);
+	} else if (S.tab == TAB_WISHLIST) {
 		static const char *ho[] = {"A", "Abrir", "↑↓", "Elegir", "Y", "Ordenar", "B", "Volver"};
 		draw_hints(ho, 4);
 	} else if (S.tab >= TAB_COUNT) {
@@ -2277,6 +2360,9 @@ static const StoreRow *owned_row(u32 appid)
 	Tab *t = &tabs[TAB_LIBRARY];
 	for (int i = 0; i < t->list.count; i++)
 		if (t->list.rows[i].appid == appid && !t->list.rows[i].family) return &t->list.rows[i];
+	// Los que ahora no se ven en la lista (ocultos, o los demás en «Ocultos») también son tuyos
+	for (int i = 0; i < lib_aside.count; i++)
+		if (lib_aside.rows[i].appid == appid && !lib_aside.rows[i].family) return &lib_aside.rows[i];
 	return NULL;
 }
 
@@ -8739,6 +8825,23 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 			else shop_cart_remove(sel);
 		}
 		if ((kd & KEY_X) && c->n) open_pay();
+	}
+	if (S.tab == TAB_LIBRARY && (kd & KEY_SELECT)) {
+		// Ocultar el juego (o, en «Ocultos», volver a mostrarlo); se guarda en la SD
+		Tab *t = CUR;
+		if (t->sel >= 0 && t->sel < t->list.count && t->list.rows[t->sel].appid && !t->list.rows[t->sel].family) {
+			StoreRow r = t->list.rows[t->sel];
+			bool hide = !lib_hidden(r.appid);
+			hidden_set(r.appid, hide);
+			lib_apply(t);
+			char m[160];
+			if (hide) snprintf(m, sizeof m, _("Has ocultado %s. Lo verás en «Ocultos» (Y)"), r.name);
+			else snprintf(m, sizeof m, _("%s vuelve a tu biblioteca"), r.name);
+			toast_icon(m, IC_HIDE);
+			if (t->sel >= t->list.count) t->sel = t->sel_y = t->list.count ? t->list.count - 1 : 0;
+			t->sel_changed = osGetTime();
+		}
+		return;
 	}
 	if ((S.tab == TAB_LIBRARY || S.tab == TAB_WISHLIST) && (kd & KEY_Y)) {
 		list_mode_next();

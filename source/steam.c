@@ -1526,54 +1526,6 @@ Req *steam_post_service(const char *iface_method, cJSON *input, const char *toke
 	return r;
 }
 
-Req *steam_req_hidden(const char *token)
-{
-	cJSON *in = cJSON_CreateObject();
-	cJSON *vs = cJSON_AddArrayToObject(in, "versions");
-	cJSON *v = cJSON_CreateObject();
-	cJSON_AddNumberToObject(v, "enamespace", 1);
-	cJSON_AddNumberToObject(v, "version", 0);
-	cJSON_AddItemToArray(vs, v);
-	return steam_post_service("ICloudConfigStoreService/Download", in, token);   // suelta in
-}
-
-// {"response":{"data":[{"enamespace":1,"entries":[{"key":"user-collections.hidden",
-//  "value":"{\"id\":\"hidden\",\"added\":[730,…],\"removed\":[…]}"}]}]}}
-int steam_parse_hidden(const char *json, u32 **ids)
-{
-	*ids = NULL;
-	cJSON *root = cJSON_Parse(json);
-	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
-	if (!resp) {
-		cJSON_Delete(root);
-		return -1;
-	}
-	int n = 0, cap = 0;
-	const cJSON *d, *e;
-	cJSON_ArrayForEach(d, cJSON_GetObjectItemCaseSensitive(resp, "data")) {
-		cJSON_ArrayForEach(e, cJSON_GetObjectItemCaseSensitive(d, "entries")) {
-			const char *k = jstr(e, "key");
-			const char *v = jstr(e, "value");
-			if (!k || strcmp(k, "user-collections.hidden") || !v) continue;
-			cJSON *c = cJSON_Parse(v);
-			const cJSON *it;
-			cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(c, "added")) {
-				if (!cJSON_IsNumber(it)) continue;
-				if (n == cap) {
-					cap = cap ? cap * 2 : 32;
-					u32 *nn = realloc(*ids, cap * sizeof(u32));
-					if (!nn) break;
-					*ids = nn;
-				}
-				(*ids)[n++] = (u32)it->valuedouble;
-			}
-			cJSON_Delete(c);
-		}
-	}
-	cJSON_Delete(root);
-	return n;
-}
-
 static void amount(const cJSON *a, char *out, size_t n)
 {
 	copy(out, n, jstr(a, "formatted_amount"));

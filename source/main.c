@@ -1366,13 +1366,29 @@ static float hint_key(float x, float y, const char *key, bool draw)
 		}
 		return w + 3 + pw + 9;
 	}
+	// La cruceta, dibujada: el eje que se usa en blanco y el otro apagado (así ↑↓ y ← → no son
+	// la misma cruz cuando salen las dos)
+	bool vert = !strcmp(key, "↑↓"), horiz = !strcmp(key, "← →");
+	if (vert || horiz) {
+		if (draw) {
+			const float cx = x + 6, cy = y + 10, L = 4.5f, T = 1.3f;
+			u32 on = COL_WHITE, off = C2D_Color32(0xff, 0xff, 0xff, 0x55);
+			ui_rect(cx - L, cy - T, 2 * L, 2 * T, horiz ? on : off);
+			ui_rect(cx - T, cy - L, 2 * T, 2 * L, vert ? on : off);
+			if (vert) {
+				C2D_DrawTriangle(cx, cy - L - 1.5f, on, cx - 2, cy - L + 0.5f, on, cx + 2, cy - L + 0.5f, on, 0.5f);
+				C2D_DrawTriangle(cx, cy + L + 1.5f, on, cx - 2, cy + L - 0.5f, on, cx + 2, cy + L - 0.5f, on, 0.5f);
+			} else {
+				C2D_DrawTriangle(cx - L - 1.5f, cy, on, cx - L + 0.5f, cy - 2, on, cx - L + 0.5f, cy + 2, on, 0.5f);
+				C2D_DrawTriangle(cx + L + 1.5f, cy, on, cx + L - 0.5f, cy - 2, on, cx + L - 0.5f, cy + 2, on, 0.5f);
+			}
+		}
+		return 14;
+	}
 	char g[16] = "";
 	if (!strcmp(key, "L R")) {
 		const char *l = ui_button_glyph("L"), *r = ui_button_glyph("R");
 		if (l && r) snprintf(g, sizeof g, "%s%s", l, r);
-	} else if (!strcmp(key, "↑↓") || !strcmp(key, "← →")) {
-		const char *d = ui_button_glyph("+");
-		if (d) snprintf(g, sizeof g, "%s", d);
 	} else {
 		const char *b = ui_button_glyph(key);
 		if (b) snprintf(g, sizeof g, "%s", b);

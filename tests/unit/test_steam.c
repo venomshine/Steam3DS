@@ -328,6 +328,15 @@ int main(void) {
 			pg.fav_icon, pg.badges_total, pg.nbadges, pg.badge_name[0], pg.shots_total, pg.reviews_total);
 		CHECK(!strcmp(pg.fav_name, "Empleado de Valve") && pg.badges_total == 17 && pg.nbadges >= 4 && strstr(pg.badge_icon[0], "akamai"));
 	}
+	// Los juegos ocultos: la colección «hidden» de la nube
+	{
+		u32 *hid = NULL;
+		int nh = steam_parse_hidden("{\"response\":{\"data\":[{\"enamespace\":1,\"entries\":[{\"key\":\"user-collections.favorite\",\"value\":\"{\\\"added\\\":[1]}\"},"
+			"{\"key\":\"user-collections.hidden\",\"value\":\"{\\\"id\\\":\\\"hidden\\\",\\\"added\\\":[730,570],\\\"removed\\\":[]}\"}]}]}}", &hid);
+		CHECK(nh == 2 && hid[0] == 730 && hid[1] == 570);
+		free(hid);
+		CHECK(steam_parse_hidden("{}", &hid) == -1);
+	}
 	// Sus capturas y sus reseñas
 	{
 		ProfileShot ps[6];

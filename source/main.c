@@ -445,6 +445,9 @@ static bool price_ok(const StoreRow *r)
 	return c >= 0 && c < price_limit_cents(S.price);
 }
 
+// Los juegos que ocultaste en tu biblioteca de Steam (colección «hidden» de la nube)
+static struct { Req *req; u32 *ids; int n; bool loaded; } HID;
+
 static void tab_more(int ti)
 {
 	Tab *t = &tabs[ti];
@@ -475,6 +478,7 @@ static void tab_more(int ti)
 		} else {
 			if (t->list.count) return;
 			t->list.req = steam_req_owned(auth_info()->steamid, auth_token());
+			if (!HID.req && !HID.loaded) HID.req = steam_req_hidden(auth_token());
 		}
 	} else if (ti == TAB_WISHLIST) {
 		if (!auth_logged()) return;
@@ -652,8 +656,37 @@ static void seen_open(u32 appid)
 
 // Ordena la biblioteca por nombre sin que la selección salte a otro juego (si aún no te has
 // movido, se queda en el primero)
+
+static bool lib_hidden(u32 appid)
+{
+	for (int i = 0; i < HID.n; i++)
+		if (HID.ids[i] == appid) return true;
+	return false;
+}
+
+// Fuera de la lista los ocultos (y lib_base, la parte de GetOwnedGames, se ajusta)
+static void lib_drop_hidden(Tab *t)
+{
+	if (!HID.n) return;
+	int n = 0, base = t->lib_base;
+	for (int i = 0; i < t->list.count; i++) {
+		if (lib_hidden(t->list.rows[i].appid)) {
+			if (i < t->lib_base) base--;
+			continue;
+		}
+		t->list.rows[n++] = t->list.rows[i];
+	}
+	int gone = t->list.count - n;
+	if (!gone) return;
+	t->list.count = n;
+	t->lib_base = base;
+	if (t->list.total >= gone) t->list.total -= gone;
+	if (t->sel >= n) t->sel = t->sel_y = n ? n - 1 : 0;
+}
+
 static void lib_sort(Tab *t)
 {
+	lib_drop_hidden(t);
 	u32 sel = t->sel > 0 && t->sel < t->list.count ? t->list.rows[t->sel].appid : 0;
 	steam_sort_by_name(&t->list);
 	for (int i = 0; sel && i < t->list.count; i++)
@@ -730,8 +763,24 @@ static bool lib_type_ok(int type)
 	return type == 0 || type == 1 || type == 2 || type == 6 || type == 12;
 }
 
+static void hidden_poll(Tab *t)
+{
+	if (!HID.req || HID.req->state < REQ_DONE) return;
+	u32 *ids = NULL;
+	int n = HID.req->state == REQ_DONE ? steam_parse_hidden(HID.req->data, &ids) : -1;
+	netlog("biblioteca: %d juegos ocultos (HTTP %ld)", n, HID.req->http);
+	net_release(HID.req);
+	HID.req = NULL;
+	HID.loaded = true;
+	free(HID.ids);
+	HID.ids = ids;
+	HID.n = n < 0 ? 0 : n;
+	lib_drop_hidden(t);
+}
+
 static void owned_poll(Tab *t)
 {
+	hidden_poll(t);
 	Req *r = t->list.req;
 	if (!r || r->state < REQ_DONE) return;
 	if (t->lib_stage == 2) {
@@ -755,6 +804,7 @@ static void owned_poll(Tab *t)
 		netlog("biblioteca: GetOwnedGames %s (HTTP %ld, eresult %d, %d juegos)", ok ? "ok" : "mal", r->http, r->eresult, t->list.count);
 		if (!ok && r->state == REQ_DONE && r->data) netlog("biblioteca: respuesta %.120s", r->data);
 		if (!ok) t->list.count = 0;
+		lib_drop_hidden(t);
 		// Además, lo que la tienda sabe que tienes (la misma lista con la que marca «En tu
 		// biblioteca»): GetOwnedGames no trae las licencias gratis que aún no has jugado, y a
 		// algunas cuentas no les devuelve nada
@@ -1006,6 +1056,9 @@ static void account_lists_clear(void)
 	family_reset();
 	notif_reset();
 	flist_reset();
+	if (HID.req) net_release(HID.req);
+	free(HID.ids);
+	memset(&HID, 0, sizeof HID);
 	wish_stash.count = 0;
 	deals_checked = false;
 	for (int ti = TAB_LIBRARY; ti < TAB_H0; ti++) {

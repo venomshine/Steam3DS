@@ -98,7 +98,9 @@ if os.environ.get("RELAY_KENJI"):
 NAMES = {FAKE_ID: "VENOMSHiNE (prueba)", 76561190000000101: "Kenji", 76561190000000102: "Lucía", 76561190000000103: "Marco", 76561190000000109: "Sofía"}
 OWNED = [(1091500, "Cyberpunk 2077", 6120, 3), (381210, "Dead by Daylight", 2410, 1), (1145360, "Hades", 3900, 20),
          (292030, "The Witcher 3: Wild Hunt", 9300, 60), (413150, "Stardew Valley", 5200, 9), (730, "Counter-Strike 2", 12000, 2),
-         (570, "Dota 2", 0, 400), (1203620, "Enshrouded", 1500, 12)]
+         (570, "Dota 2", 0, 400), (1203620, "Enshrouded", 1500, 12), (251570, "7 Days to Die", 800, 30)]
+# Los juegos ocultos de la biblioteca (colección «hidden»): RELAY_HIDDEN=id,id (por defecto, Dota 2)
+HIDDEN = [int(x) for x in os.environ.get("RELAY_HIDDEN", "570").split(",") if x]
 WISH = [2138330, 1174180, 1716740, 668580]
 if os.environ.get("RELAY_WISH"):   # RELAY_WISH=id,id,…: otra lista de deseos (p. ej. con juegos en oferta)
     WISH = [int(x) for x in os.environ["RELAY_WISH"].split(",")]
@@ -128,6 +130,11 @@ REVIEWS = {1091500: {"review": "Después de las actualizaciones es otro juego. N
 
 def fake_post(host, path, body):
     """Devuelve (json, cabeceras extra) o None."""
+    if host == "api.steampowered.com" and path.endswith("ICloudConfigStoreService/Download/v1/"):
+        val = json.dumps({"id": "hidden", "name": "HIDDEN", "added": HIDDEN, "removed": []})
+        return {"response": {"data": [{"enamespace": 1, "version": "12", "entries": [
+            {"key": "user-collections.favorite", "value": json.dumps({"id": "favorite", "added": [730]})},
+            {"key": "user-collections.hidden", "value": val}]}]}}, []
     # Activar un producto: AAAAA-BBBBB-CCCCC es buena (Hollow Knight), TAKEN-TAKEN-TAKEN ya la usó otro,
     # WALLETCODE12345 es un código del monedero de 20 €; lo demás no es válido
     if host == "store.steampowered.com" and path in ("account/ajaxregisterkey/", "account/ajaxredeemwalletcode/"):

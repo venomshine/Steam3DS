@@ -246,31 +246,83 @@ def icon():
     return down(valve_logo(48, square=True), (48, 48))
 
 
+def inter(px, weight="Black"):
+    """Inter Display (si está): más contundente que DejaVu para el nombre del banner"""
+    p = "/usr/share/fonts/opentype/inter/InterDisplay-%s.otf" % weight
+    return ImageFont.truetype(p, px) if os.path.exists(p) else font(px, bold=weight != "Medium")
+
+
+def _paste_clip(dst, src, x, y):
+    """alpha_composite que admite posiciones negativas (recorta lo que se sale)"""
+    sx, sy = max(0, -x), max(0, -y)
+    dst.alpha_composite(src.crop((sx, sy, src.width, src.height)), (max(0, x), max(0, y)))
+
+
 def banner():
+    """Banner del menú HOME (256×128): fondo azul noche con luz por la izquierda y vapor suave,
+    el emblema grande con su halo y el nombre en grande; poco texto, para que se lea en la consola."""
     W, H = 256 * K, 128 * K
-    im = vgrad(W, H, (0x24, 0x3b, 0x50), NAVY_BOT)
-    g = down(glow(128), (int(150 * K), int(150 * K)))
-    im.alpha_composite(g, (int(-12 * K), int(-11 * K)))
-    im.alpha_composite(valve_logo(92, light=True), (int(6 * K), int(18 * K)))
+    y, x = np.mgrid[0:H, 0:W].astype(np.float32)
+    # Fondo: degradado en diagonal y un foco de luz detrás del emblema
+    t = np.clip((x / W) * 0.65 + (y / H) * 0.35, 0, 1)[..., None]
+    top, bot = np.array((0x1f, 0x3a, 0x55), np.float32), np.array((0x0b, 0x10, 0x18), np.float32)
+    img = top * (1 - t) + bot * t
+    cx, cy = 58 * K, 64 * K
+    r = np.sqrt((x - cx) ** 2 + (y - cy) ** 2) / (95 * K)
+    img += np.array((0x30, 0x6a, 0x9a), np.float32) * np.clip(1 - r, 0, 1)[..., None] ** 2 * 0.9
+    # Vapor: ruido suave en bandas que suben en diagonal
+    rng = np.random.default_rng(7)
+    n = Image.fromarray((rng.random((16, 32)) * 255).astype("uint8")).resize((W, H), Image.BICUBIC)
+    n = np.asarray(n.filter(ImageFilter.GaussianBlur(10 * K)), np.float32) / 255
+    band = 0.5 + 0.5 * np.sin((x * 0.6 - y) / (22 * K))
+    img += (n * band)[..., None] * np.array((0x26, 0x40, 0x58), np.float32) * 0.6
+    # Viñeta
+    vx, vy = x / W - 0.5, y / H - 0.5
+    img *= np.clip(1 - (vx * vx * 0.9 + vy * vy * 1.6) * 1.1, 0.35, 1)[..., None]
+    im = Image.fromarray(np.clip(img, 0, 255).astype("uint8"), "RGB").convert("RGBA")
+    # Emblema con halo
+    logo = valve_logo(100)
+    pad = 24 * K   # el halo necesita sitio alrededor para difuminarse sin cortes
+    halo = Image.new("RGBA", (logo.width + 2 * pad, logo.height + 2 * pad), (0x66, 0xc0, 0xf4, 0))
+    a = Image.new("L", halo.size, 0)
+    a.paste(logo.getchannel("A").point(lambda v: v * 0.6), (pad, pad))
+    halo.putalpha(a.filter(ImageFilter.GaussianBlur(8 * K)))
+    lx, ly = int(8 * K), int(14 * K)
+    im.alpha_composite(halo, (lx - pad, ly - pad)) if lx >= pad and ly >= pad else _paste_clip(im, halo, lx - pad, ly - pad)
+    im.alpha_composite(logo, (lx, ly))
     d = ImageDraw.Draw(im)
-    x0, maxw = 102 * K, 144 * K
-
-    def fit(text, px, bold=True):
-        # Letra más pequeña hasta que el texto quepa en el hueco
-        while px > 6 and d.textlength(text, font=font(px * K, bold)) > maxw:
-            px -= 0.5
-        return font(px * K, bold)
-
-    f = fit("Steam3DS", 30)
-    y = 50 * K
-    d.text((x0, y), "Steam", font=f, fill=(255, 255, 255, 255), anchor="ls")
-    x = x0 + d.textlength("Steam", font=f) - 0.6 * K
-    d.text((x, y), "3DS", font=f, fill=ACC + (255,), anchor="ls")
-    d.line([(x0 + K, 62 * K), (x0 + maxw, 62 * K)], fill=(0x66, 0xc0, 0xf4, 110), width=int(1.2 * K))
-    f2 = fit("Tienda · Ofertas · Biblioteca", 12, bold=False)
-    d.text((x0 + K, 80 * K), "Tienda · Ofertas · Biblioteca", font=f2, fill=(0xc7, 0xd5, 0xe0, 255), anchor="ls")
-    f3 = font(9 * K, bold=False)
-    d.text((x0 + K, 98 * K), "hecho por VENOMSHiNE", font=f3, fill=(0x8f, 0x98, 0xa0, 255), anchor="ls")
+    # El nombre: «Steam» en blanco y «3DS» en el azul de Steam, en grande
+    x0, maxw = 116 * K, 132 * K
+    px = 34
+    while px > 12 and d.textlength("Steam3DS", font=inter(px * K)) > maxw:
+        px -= 0.5
+    f = inter(px * K)
+    base = 64 * K
+    sw = d.textlength("Steam", font=f)
+    tw = d.textlength("Steam3DS", font=f)
+    # Sombra suave bajo el nombre
+    sh = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    ds = ImageDraw.Draw(sh)
+    ds.text((x0, base + 2 * K), "Steam3DS", font=f, fill=(0, 0, 0, 170), anchor="ls")
+    im.alpha_composite(sh.filter(ImageFilter.GaussianBlur(2.2 * K)))
+    d.text((x0, base), "Steam", font=f, fill=(255, 255, 255, 255), anchor="ls")
+    # «3DS» con degradado vertical (claro arriba)
+    m = Image.new("L", im.size, 0)
+    ImageDraw.Draw(m).text((x0 + sw, base), "3DS", font=f, fill=255, anchor="ls")
+    g = vgrad(W, H, (0xa8, 0xe0, 0xff), (0x1a, 0x9f, 0xff))
+    im.paste(g, (0, 0), m)
+    # Raya fina y lema en mayúsculas espaciadas
+    ly2 = base + 9 * K
+    d.rounded_rectangle([x0 + K, ly2, x0 + tw, ly2 + int(1.6 * K)], radius=K, fill=(0x66, 0xc0, 0xf4, 150))
+    tag = "TU STEAM EN LA 3DS"
+    ft = inter(int(9.5 * K), "SemiBold")
+    sp = 1.35 * K
+    tx = x0 + K
+    for ch in tag:
+        d.text((tx, ly2 + 15 * K), ch, font=ft, fill=(0xd6, 0xe4, 0xef, 255), anchor="ls")
+        tx += d.textlength(ch, font=ft) + sp
+    fb = inter(int(8 * K), "Medium")
+    d.text((x0 + K, ly2 + 31 * K), "por VENOMSHiNE", font=fb, fill=(0x8a, 0xa4, 0xb8, 255), anchor="ls")
     return down(im, (256, 128)).convert("RGB")
 
 

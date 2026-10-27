@@ -5387,39 +5387,40 @@ static const char *notif_game(u32 appid)
 	return NULL;
 }
 
-// El texto de cada aviso, como en la campana de Steam
+// El texto de cada aviso, como en la campana de Steam (los números son los de
+// ESteamNotificationType: 1 es la prueba, 2 regalo, 3 comentario, 4 objetos, 5 solicitud…)
 static void notif_text(const SteamNotif *n, char *out, size_t sz)
 {
 	const char *g = notif_game(n->appid);
 	switch (n->type) {
-	case 1: snprintf(out, sz, "%s", _("Has recibido un regalo")); break;
-	case 2: snprintf(out, sz, "%s", _("Nuevo comentario en tu perfil")); break;
-	case 3: snprintf(out, sz, "%s", _("Tienes objetos nuevos en tu inventario")); break;
-	case 4: snprintf(out, sz, "%s", _("Nueva solicitud de amistad")); break;
-	case 5: snprintf(out, sz, "%s", _("Han empezado unas rebajas en Steam")); break;
-	case 6:
+	case 2: snprintf(out, sz, "%s", _("Has recibido un regalo")); break;
+	case 3: snprintf(out, sz, "%s", _("Nuevo comentario en tu perfil")); break;
+	case 4: snprintf(out, sz, "%s", _("Tienes objetos nuevos en tu inventario")); break;
+	case 5: snprintf(out, sz, "%s", _("Nueva solicitud de amistad")); break;
+	case 6: snprintf(out, sz, "%s", _("Han empezado unas rebajas en Steam")); break;
+	case 7:
 		if (g) snprintf(out, sz, _("Ya puedes precargar %s"), g);
 		else snprintf(out, sz, "%s", _("Ya puedes precargar un juego"));
 		break;
-	case 7:
+	case 8:
 		if (g) snprintf(out, sz, _("%s, de tu lista de deseos, está en oferta"), g);
 		else snprintf(out, sz, "%s", _("Un juego de tu lista de deseos está en oferta"));
 		break;
-	case 8: snprintf(out, sz, "%s", _("Nueva oferta de intercambio")); break;
-	case 11: snprintf(out, sz, "%s", _("Es tu turno en una partida")); break;
-	case 12: snprintf(out, sz, "%s", _("Nuevo mensaje en el chat")); break;
-	case 15: snprintf(out, sz, "%s", _("Te han invitado a una Familia de Steam")); break;
-	case 16: snprintf(out, sz, "%s", _("Petición de compra en tu familia")); break;
-	case 21:
+	case 9: snprintf(out, sz, "%s", _("Nueva oferta de intercambio")); break;
+	case 12: snprintf(out, sz, "%s", _("Es tu turno en una partida")); break;
+	case 13: snprintf(out, sz, "%s", _("Nuevo mensaje en el chat")); break;
+	case 16: snprintf(out, sz, "%s", _("Te han invitado a una Familia de Steam")); break;
+	case 17: snprintf(out, sz, "%s", _("Petición de compra en tu familia")); break;
+	case 22:
 		if (g) snprintf(out, sz, _("Ya tienes %s en tu biblioteca"), g);
 		else snprintf(out, sz, "%s", _("Tienes un juego nuevo en tu biblioteca"));
 		break;
-	case 26:
+	case 27:
 		if (n->title[0]) snprintf(out, sz, "%s", n->title);
 		else if (g) snprintf(out, sz, _("Novedades de %s"), g);
 		else snprintf(out, sz, "%s", _("Novedades de un juego que sigues"));
 		break;
-	case 27:
+	case 28:
 		if (g) snprintf(out, sz, _("Invitación a la prueba de %s"), g);
 		else snprintf(out, sz, "%s", _("Invitación a una prueba de juego"));
 		break;
@@ -5432,13 +5433,13 @@ static void notif_text(const SteamNotif *n, char *out, size_t sz)
 static Icon notif_icon(int type)
 {
 	switch (type) {
-	case 1: return IC_CARD;
-	case 2: case 12: return IC_CHAT;
-	case 4: case 15: case 16: return IC_USERS;
-	case 5: case 8: return IC_COIN;
-	case 6: return IC_PC;
-	case 7: return IC_HEART;
-	case 21: case 27: return IC_PAD;
+	case 2: return IC_CARD;
+	case 3: case 13: return IC_CHAT;
+	case 5: case 16: case 17: return IC_USERS;
+	case 6: case 9: return IC_COIN;
+	case 7: return IC_PC;
+	case 8: return IC_HEART;
+	case 22: case 28: return IC_PAD;
 	default: return IC_BELL;
 	}
 }
@@ -5569,7 +5570,7 @@ static void draw_notifs_top(void)
 		const char *g = notif_game(n->appid);
 		if (g) ui_text_wrap(X + iw + 12, iy, W - iw - 12, g, SZ_BODY, COL_WHITE, 3, 16);
 		ui_text_wrap(X + iw + 12, iy + ih - 30, W - iw - 12, _("Pulsa A para ver su página"), SZ_SMALL, COL_ACC, 2, 14);
-	} else if (n->type == 1 || n->type == 4 || n->type == 8 || n->type == 15) {
+	} else if (n->type == 2 || n->type == 5 || n->type == 9 || n->type == 16) {
 		ui_text_wrap(X + 28, y + 24, W - 28, _("Ábrelo desde la app de Steam en el móvil o en el PC para responder."), SZ_SMALL, COL_TXT, 3, 15);
 	}
 }

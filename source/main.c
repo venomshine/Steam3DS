@@ -4873,6 +4873,35 @@ static void user_poll(void)
 		if (UP.page_i < UP.nf) UP.page = steam_req_file_page(UP.fid[UP.page_i]);
 		else UP.page_i = -1;
 	}
+	// Un GIF reducido por Steam tarda muchísimo la primera vez (y pesa casi lo mismo): se pide el
+	// original y lo reduce la consola. Los demás formatos, ya reducidos
+	for (int i = 0; i < UP.nf; i++) {
+		char *u = UP.furl[i];
+		if (!u[0] || u[0] == '-' || UP.fready[i]) continue;
+		if (!UP.fhead[i]) {
+			char base[200];
+			snprintf(base, sizeof base, "%s", u);
+			char *q = strchr(base, '?');
+			if (q && strstr(base, "steamusercontent.com")) {
+				*q = 0;
+				UP.fhead[i] = net_head(base);
+			}
+			if (!UP.fhead[i]) {
+				UP.fready[i] = true;
+				known_add(UP.fid[i], u);
+			}
+			continue;
+		}
+		Req *h = UP.fhead[i];
+		if (h->state < REQ_DONE) continue;
+		bool gif = h->state == REQ_DONE && strstr(h->ctype, "gif") && (h->clen < 0 || h->clen <= (4 << 20));
+		netlog("perfil: ilustración %llu es %s (%ld bytes)%s", (unsigned long long)UP.fid[i], h->ctype[0] ? h->ctype : "?", h->clen, gif ? ": se pide el original" : "");
+		if (gif) *strchr(u, '?') = 0;
+		UP.fready[i] = true;
+		known_add(UP.fid[i], u);
+		net_release(h);
+		UP.fhead[i] = NULL;
+	}
 	if (UP.page && UP.page->state >= REQ_DONE) {
 		if (UP.page->http == 429 && UP.page_retry < 3) {
 			// Demasiadas seguidas: se espera un poco y se vuelve a intentar la misma
@@ -4893,7 +4922,7 @@ static void user_poll(void)
 static const char *user_file_url(u64 id)
 {
 	for (int i = 0; i < UP.nf; i++)
-		if (UP.fid[i] == id) return UP.furl[i][0] ? UP.furl[i] : NULL;   // «-»: no se pudo
+		if (UP.fid[i] == id) return UP.furl[i][0] == '-' ? UP.furl[i] : UP.furl[i][0] && UP.fready[i] ? UP.furl[i] : NULL;   // «-»: no se pudo
 	return NULL;
 }
 

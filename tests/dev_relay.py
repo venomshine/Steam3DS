@@ -91,6 +91,9 @@ FRIENDS = [76561190000000101, 76561190000000102, 76561190000000103]
 # xPaw (fondo y marco), St4ck (muchas vitrinas), Robin Walker (juego favorito) y Tfue (ilustraciones)
 PROFILE_AS = {FAKE_ID: 76561197972494985, 76561190000000101: 76561198023414915, 76561190000000102: 76561198059667390,
               76561190000000103: 76561198260200125}
+# RELAY_KENJI=<steamid>: Kenji pasa a ser ese perfil público (para probar uno concreto)
+if os.environ.get("RELAY_KENJI"):
+    PROFILE_AS[76561190000000101] = int(os.environ["RELAY_KENJI"])
 NAMES = {FAKE_ID: "VENOMSHiNE (prueba)", 76561190000000101: "Kenji", 76561190000000102: "Lucía", 76561190000000103: "Marco"}
 OWNED = [(1091500, "Cyberpunk 2077", 6120, 3), (381210, "Dead by Daylight", 2410, 1), (1145360, "Hades", 3900, 20),
          (292030, "The Witcher 3: Wild Hunt", 9300, 60), (413150, "Stardew Valley", 5200, 9), (730, "Counter-Strike 2", 12000, 2),

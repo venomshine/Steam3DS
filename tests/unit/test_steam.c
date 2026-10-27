@@ -288,6 +288,9 @@ int main(void) {
 	TopAch ta[4];
 	CHECK(steam_parse_top_achievements("{\"response\":{\"games\":[{\"appid\":601220,\"achievements\":[{\"statid\":1,\"bit\":30,\"name\":\"Leyenda\",\"icon\":\"a.jpg\",\"player_percent_unlocked\":\"0.4\"}]}]}}", ta, 4) == 1);
 	CHECK(ta[0].appid == 601220 && !strcmp(ta[0].key, "1_30") && !strcmp(ta[0].name, "Leyenda") && ta[0].pct < 0.5f);
+	// La página de una ilustración: la imagen que enseña (ActualMedia) y nunca la genérica del Workshop
+	CHECK(steam_parse_file_page("<meta property=\"og:image\" content=\"https://x/og.jpg\"><img id=\"ActualMedia\" class=\"artPreviewImage\" src=\"https://images.steamusercontent.com/ugc/9/Z/?imw=1024\">", fu, sizeof fu) && strstr(fu, "/ugc/9/Z/?imw=400"));
+	CHECK(!steam_parse_file_page("<meta property=\"og:image\" content=\"https://community.fastly.steamstatic.com/public/shared/images/sharedfiles/steam_workshop_default_image.png\">", fu, sizeof fu));
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

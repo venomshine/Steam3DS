@@ -32,6 +32,8 @@ typedef struct Req {
 	char *data;             // cuerpo (terminado en '\0')
 	size_t len, cap;
 	char country[4];        // de la cookie steamCountry, si la manda
+	char ctype[32];         // Content-Type de la respuesta (en minúsculas)
+	long clen;              // Content-Length (-1 si no vino)
 	char *login_cookie;     // valor de la cookie steamLoginSecure, si la manda (se borra al soltar)
 
 	// Trabajo pesado que se hace en el hilo de red al terminar bien (leer un JSON grande): así la

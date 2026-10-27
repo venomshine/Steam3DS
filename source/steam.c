@@ -2028,14 +2028,22 @@ Req *steam_req_file_page(u64 id)
 
 bool steam_parse_file_page(const char *html, char *url, size_t n)
 {
-	const char *a = html ? strstr(html, "<meta property=\"og:image\" content=\"") : NULL;
-	if (!a) return false;
-	a += strlen("<meta property=\"og:image\" content=\"");
+	// La imagen que enseña la página (ActualMedia); si no está, la de la vista previa (og:image).
+	// La imagen genérica del Workshop no vale: es la que sale cuando la página no tiene la suya
+	const char *a = html ? strstr(html, "id=\"ActualMedia\"") : NULL;
+	if (a) a = strstr(a, "src=\"");
+	if (a) a += 5;
+	else {
+		a = html ? strstr(html, "<meta property=\"og:image\" content=\"") : NULL;
+		if (!a) return false;
+		a += strlen("<meta property=\"og:image\" content=\"");
+	}
 	const char *b = strchr(a, '"');
 	if (!b || b - a >= 200) return false;
 	char raw[200];
 	memcpy(raw, a, b - a);
 	raw[b - a] = 0;
+	if (strstr(raw, "steam_workshop_default")) return false;
 	ugc_sized(raw, url, n);
 	return url[0] != 0;
 }

@@ -107,7 +107,7 @@ static bool cache_get(Req *r)
 	char path[96];
 	cache_name(r->url, path, sizeof path);
 	struct stat st;
-	if (stat(path, &st) != 0 || st.st_size <= 8 || st.st_size > (1 << 20)) return false;
+	if (stat(path, &st) != 0 || st.st_size <= 8 || st.st_size > (4 << 20) + 8) return false;
 	FILE *f = fopen(path, "rb");
 	if (!f) return false;
 	u32 h[2];
@@ -129,7 +129,7 @@ static bool cache_get(Req *r)
 
 static void cache_put(const Req *r)
 {
-	if (!r->data || !r->len || r->len > (1 << 20) || cache_bytes < 0 || cache_clear_req) return;
+	if (!r->data || !r->len || r->len > (4 << 20) || cache_bytes < 0 || cache_clear_req) return;   // hasta 4 MB (GIF originales)
 	char path[96], tmp[100];
 	cache_name(r->url, path, sizeof path);
 	snprintf(tmp, sizeof tmp, "%s.tmp", path);
@@ -389,6 +389,7 @@ static Req *req_new(const char *url, NetLane lane)
 #endif
 	r->url = strdup(url);
 	r->lane = lane;
+	r->clen = -1;
 	r->refs = 2;   // quien la pide + el hilo de red
 	return r;
 }
@@ -484,6 +485,18 @@ static size_t on_header(char *p, size_t sz, size_t n, void *ud)
 			r->country[2] = 0;
 		}
 	}
+	static const char ck[] = "content-type:", lk[] = "content-length:";
+	if (len > sizeof ck && strncasecmp(p, ck, sizeof ck - 1) == 0) {
+		const char *v = p + sizeof ck - 1;
+		while (*v == ' ') v++;
+		size_t i = 0;
+		while (i < sizeof r->ctype - 1 && v[i] && v[i] != '\r' && v[i] != '\n' && v[i] != ';') {
+			char c = v[i];
+			r->ctype[i++] = c >= 'A' && c <= 'Z' ? c + 32 : c;
+		}
+		r->ctype[i] = 0;
+	}
+	if (len > sizeof lk && strncasecmp(p, lk, sizeof lk - 1) == 0) r->clen = strtol(p + sizeof lk - 1, NULL, 10);
 	// La hora de verdad (UTC) viene en la cabecera Date: la de la consola es la local y puede ir mal
 	static const char dk[] = "date:";
 	if (len > 30 && strncasecmp(p, dk, sizeof(dk) - 1) == 0) {

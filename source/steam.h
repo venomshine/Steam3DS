@@ -218,10 +218,6 @@ typedef struct {
 
 // POST a un servicio de la Web API con sesión (input_json en el cuerpo)
 Req *steam_post_service(const char *iface_method, cJSON *input, const char *token);
-// Los juegos ocultos de tu biblioteca de Steam, del archivo que el cliente de Steam guarda en el PC
-// (userdata/<cuenta>/config/cloudstorage/cloud-storage-namespace-1.json): la colección «hidden».
-// La web de Steam no los da. Devuelve cuántos (-1 si no es ese archivo)
-int steam_parse_cloud_hidden(const char *json, u32 **ids);
 
 // Notificaciones de Steam (la campana): regalos, ofertas de tu lista de deseos, amigos, comentarios…
 typedef struct {

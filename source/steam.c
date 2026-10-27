@@ -3317,37 +3317,3 @@ bool steam_parse_family(const char *json, SteamFamily *out)
 	cJSON_Delete(root);
 	return out->n > 0;
 }
-
-// [["user-collections.hidden",{"key":"user-collections.hidden","value":"{\"id\":\"hidden\",
-//   \"added\":[730,…],\"removed\":[…]}",…}],…] (si se borró, «is_deleted» y sin value)
-int steam_parse_cloud_hidden(const char *json, u32 **ids)
-{
-	*ids = NULL;
-	cJSON *root = cJSON_Parse(json);
-	if (!cJSON_IsArray(root)) {
-		cJSON_Delete(root);
-		return -1;
-	}
-	int n = 0, cap = 0;
-	const cJSON *pair;
-	cJSON_ArrayForEach(pair, root) {
-		const cJSON *k = cJSON_GetArrayItem(pair, 0), *o = cJSON_GetArrayItem(pair, 1);
-		if (!cJSON_IsString(k) || strcmp(k->valuestring, "user-collections.hidden") || !cJSON_IsObject(o)) continue;
-		const char *v = jstr(o, "value");
-		cJSON *c = v ? cJSON_Parse(v) : NULL;
-		const cJSON *it;
-		cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(c, "added")) {
-			if (!cJSON_IsNumber(it) || it->valuedouble <= 0) continue;
-			if (n == cap) {
-				cap = cap ? cap * 2 : 64;
-				u32 *nn = realloc(*ids, cap * sizeof(u32));
-				if (!nn) break;
-				*ids = nn;
-			}
-			(*ids)[n++] = (u32)it->valuedouble;
-		}
-		cJSON_Delete(c);
-	}
-	cJSON_Delete(root);
-	return n;
-}

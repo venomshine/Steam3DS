@@ -328,15 +328,6 @@ int main(void) {
 			pg.fav_icon, pg.badges_total, pg.nbadges, pg.badge_name[0], pg.shots_total, pg.reviews_total);
 		CHECK(!strcmp(pg.fav_name, "Empleado de Valve") && pg.badges_total == 17 && pg.nbadges >= 4 && strstr(pg.badge_icon[0], "akamai"));
 	}
-	// Los ocultos, del archivo del cliente de Steam en el PC
-	{
-		u32 *hid = NULL;
-		int nh = steam_parse_cloud_hidden("[[\"user-collections.favorite\",{\"key\":\"user-collections.favorite\",\"value\":\"{\\\"added\\\":[1]}\"}],"
-			"[\"user-collections.hidden\",{\"key\":\"user-collections.hidden\",\"timestamp\":1,\"value\":\"{\\\"id\\\":\\\"hidden\\\",\\\"name\\\":\\\"HIDDEN\\\",\\\"added\\\":[730,570],\\\"removed\\\":[440]}\"}]]", &hid);
-		CHECK(nh == 2 && hid[0] == 730 && hid[1] == 570);
-		free(hid);
-		CHECK(steam_parse_cloud_hidden("{}", &hid) == -1);
-	}
 	// Sus capturas y sus reseñas
 	{
 		ProfileShot ps[6];

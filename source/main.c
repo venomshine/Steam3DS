@@ -14,6 +14,7 @@
 #include "i18n.h"
 #include "img.h"
 #include "net.h"
+#include "cm.h"
 #include "pay.h"
 #include "shop.h"
 #include "steam.h"
@@ -451,10 +452,11 @@ static bool price_ok(const StoreRow *r)
 }
 
 static void hidden_load(void);
+static void hidden_ask(void);
 
-// Los juegos que ocultas en la biblioteca de la app (SELECT): Steam no deja leer desde la web los
-// que ocultaste en su cliente, así que se guardan en la SD, en un archivo por cuenta
-static struct { u32 *ids; int n, cap; bool loaded; } HID;
+// Los juegos que ocultaste en Steam (tu colección «Ocultos»). La web de Steam no los da: se piden
+// a un servidor de Steam como lo hace el chat web (cm.c) y se guarda una copia en la SD
+static struct { u32 *ids; int n, cap; bool loaded, asked; } HID;
 
 static void tab_more(int ti)
 {
@@ -487,6 +489,7 @@ static void tab_more(int ti)
 			if (t->list.count) return;
 			t->list.req = steam_req_owned(auth_info()->steamid, auth_token());
 			hidden_load();
+			hidden_ask();
 		}
 	} else if (ti == TAB_WISHLIST) {
 		if (!auth_logged()) return;
@@ -677,49 +680,10 @@ static void hidden_path(char *p, size_t n)
 	snprintf(p, n, APP_DIR "/ocultos_%llu.txt", (unsigned long long)auth_info()->steamid);
 }
 
-static void hidden_save(void);
-
-// Tus ocultos de Steam: el cliente del PC los guarda en userdata/<cuenta>/config/cloudstorage/
-// cloud-storage-namespace-1.json; si copias ese archivo a la carpeta de la app, se importan todos
-// (la lista de Steam manda) y el archivo se renombra para no volver a leerlo
-#define HIDDEN_IMPORT APP_DIR "/cloud-storage-namespace-1.json"
-
-static void hidden_import(void)
-{
-	FILE *f = fopen(HIDDEN_IMPORT, "rb");
-	if (!f) return;
-	fseek(f, 0, SEEK_END);
-	long sz = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	char *buf = sz > 0 && sz < 16 * 1024 * 1024 ? malloc(sz + 1) : NULL;
-	size_t got = buf ? fread(buf, 1, sz, f) : 0;
-	fclose(f);
-	if (!buf) return;
-	buf[got] = 0;
-	u32 *ids = NULL;
-	int n = steam_parse_cloud_hidden(buf, &ids);
-	free(buf);
-	netlog("biblioteca: importar ocultos de Steam -> %d", n);
-	if (n < 0) {
-		toast_icon(_("Ese archivo no es el de tus colecciones de Steam"), IC_HIDE);
-		return;
-	}
-	free(HID.ids);
-	HID.ids = ids;
-	HID.n = HID.cap = n;
-	HID.loaded = true;
-	hidden_save();
-	rename(HIDDEN_IMPORT, HIDDEN_IMPORT ".importado");
-	char m[128];
-	snprintf(m, sizeof m, n == 1 ? _("Importado %d juego oculto de Steam") : _("Importados %d juegos ocultos de Steam"), n);
-	toast_icon(m, IC_HIDE);
-}
-
+// La copia de la última lista que dio Steam (así se aplica al momento, sin esperar a la conexión)
 static void hidden_load(void)
 {
-	if (!auth_logged()) return;
-	hidden_import();
-	if (HID.loaded) return;
+	if (!auth_logged() || HID.loaded) return;
 	HID.loaded = true;
 	char p[96], line[24];
 	hidden_path(p, sizeof p);
@@ -738,7 +702,7 @@ static void hidden_load(void)
 		HID.ids[HID.n++] = id;
 	}
 	fclose(f);
-	netlog("biblioteca: %d juegos ocultos en la consola", HID.n);
+	netlog("biblioteca: %d juegos ocultos (la última vez)", HID.n);
 }
 
 static void hidden_save(void)
@@ -751,26 +715,35 @@ static void hidden_save(void)
 	fclose(f);
 }
 
-static void hidden_set(u32 appid, bool on)
+// Pide a Steam tu colección «Ocultos» en segundo plano (una vez por sesión de la app)
+static void hidden_ask(void)
 {
-	if (on == lib_hidden(appid)) return;
-	if (on) {
-		if (HID.n == HID.cap) {
-			int cap = HID.cap ? HID.cap * 2 : 32;
-			u32 *nn = realloc(HID.ids, cap * sizeof(u32));
-			if (!nn) return;
-			HID.ids = nn;
-			HID.cap = cap;
-		}
-		HID.ids[HID.n++] = appid;
-	} else {
-		for (int i = 0; i < HID.n; i++)
-			if (HID.ids[i] == appid) {
-				HID.ids[i] = HID.ids[--HID.n];
-				break;
-			}
+	if (!auth_logged() || HID.asked) return;
+	static char jar[10240];
+	if (!auth_web_jar(jar, sizeof jar)) return;
+	if (cm_hidden_start(jar)) HID.asked = true;
+	memset(jar, 0, sizeof jar);
+}
+
+static void lib_apply(Tab *t);
+
+// Llegan tus ocultos de Steam: mandan sobre la copia de la SD
+static void hidden_poll(void)
+{
+	u32 *ids = NULL;
+	int n = 0;
+	char err[128];
+	if (!cm_hidden_poll(&ids, &n, err, sizeof err)) return;
+	netlog("biblioteca: ocultos de Steam -> %d%s%s", n, err[0] ? " · " : "", err);
+	if (n < 0 || !HID.asked) {   // falló, o cambiaste de cuenta mientras tanto
+		free(ids);
+		return;
 	}
+	free(HID.ids);
+	HID.ids = ids;
+	HID.n = HID.cap = n;
 	hidden_save();
+	lib_apply(&tabs[TAB_LIBRARY]);
 }
 
 // Lo que no se ve en la lista: los ocultos (con cualquier orden) o los demás (en «Ocultos»)
@@ -904,6 +877,14 @@ static bool lib_type_ok(int type)
 
 static void owned_poll(Tab *t)
 {
+	hidden_poll();
+	// Con otra cuenta (o si no se pudo lanzar), se vuelve a pedir
+	static u64 next_ask;
+	if (!HID.asked && t->started && auth_logged() && osGetTime() >= next_ask) {
+		next_ask = osGetTime() + 5000;
+		hidden_load();
+		hidden_ask();
+	}
 	Req *r = t->list.req;
 	if (!r || r->state < REQ_DONE) return;
 	if (t->lib_stage == 2) {
@@ -1181,7 +1162,7 @@ static void account_lists_clear(void)
 	notif_reset();
 	flist_reset();
 	free(HID.ids);
-	memset(&HID, 0, sizeof HID);
+	memset(&HID, 0, sizeof HID);   // si hay una consulta en marcha, su resultado se descarta al llegar
 	lib_aside.count = 0;
 	wish_stash.count = 0;
 	deals_checked = false;
@@ -2278,15 +2259,8 @@ static void draw_store_bottom(void)
 	if (t->list.req && end_y < SCR_H) ui_spinner(BOT_W / 2, end_y + 14, 6, COL_DIM);
 	if (S.tab == TAB_SEARCH && !t->term[0] && !t->list.count)
 		ui_text(BOT_W / 2, top + 30, _("No hay búsquedas recientes"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
-	if (S.tab == TAB_LIBRARY && lib_mode == LIB_HIDDEN_MODE && !t->list.count && !t->list.req) {
-		// Cómo traer los que ocultaste en Steam: el archivo de colecciones del cliente del PC
-		char how[300];
-		snprintf(how, sizeof how, _("Para traer los juegos que ocultaste en Steam, copia del PC el archivo cloud-storage-namespace-1.json de la carpeta Steam/userdata/%lu/config/cloudstorage a /3ds/Steam3DS en la SD y vuelve a abrir tu biblioteca."),
-			(unsigned long)(auth_info()->steamid - 76561197960265728ULL));
-		ui_text(BOT_W / 2, top + 14, _("No hay juegos ocultos"), SZ_BODY, COL_WHITE, AL_CENTER, 0);
-		ui_text_wrap(16, top + 38, BOT_W - 32, how, SZ_SMALL, COL_DIM, 6, 15);
-		ui_text_wrap(16, top + 132, BOT_W - 32, _("También puedes ocultar un juego con SELECT."), SZ_SMALL, COL_DIM, 2, 15);
-	}
+	if (S.tab == TAB_LIBRARY && lib_mode == LIB_HIDDEN_MODE && !t->list.count && !t->list.req)
+		ui_text(BOT_W / 2, top + 30, HID.asked ? _("No tienes juegos ocultos en Steam") : _("Consultando tus juegos ocultos…"), SZ_SMALL, COL_DIM, AL_CENTER, BOT_W - 32);
 	if (S.tab == TAB_WISHLIST && t->wish_loaded && !t->nwish)
 		ui_text(BOT_W / 2, top + 30, _("Tu lista de deseos está vacía"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 	else if (S.tab == TAB_WISHLIST && wish_mode == 3 && !t->list.count && !t->list.req)
@@ -2312,9 +2286,8 @@ static void draw_store_bottom(void)
 		if (t->list.count) draw_hints(hc, 5);
 		else draw_hints(hb, 2);
 	} else if (S.tab == TAB_LIBRARY) {
-		static const char *hl[] = {"A", "Abrir", "Y", "Ordenar", "SELECT", "Ocultar", "B", "Volver"};
-		static const char *hu[] = {"A", "Abrir", "Y", "Ordenar", "SELECT", "Mostrar", "B", "Volver"};
-		draw_hints(lib_mode == LIB_HIDDEN_MODE ? hu : hl, 4);
+		static const char *hl[] = {"A", "Abrir", "↑↓", "Elegir", "Y", "Ordenar", "B", "Volver"};
+		draw_hints(hl, 4);
 	} else if (S.tab == TAB_WISHLIST) {
 		static const char *ho[] = {"A", "Abrir", "↑↓", "Elegir", "Y", "Ordenar", "B", "Volver"};
 		draw_hints(ho, 4);
@@ -5174,12 +5147,6 @@ static Scene acct_back = SC_STORE;   // de dónde se abrió (el perfil vuelve al
 
 static void open_account_list(int ti)
 {
-	if (ti == TAB_LIBRARY && auth_logged()) {
-		// Por si acabas de copiar a la SD el archivo con tus ocultos de Steam
-		int before = HID.n;
-		hidden_load();
-		if (HID.n != before) lib_apply(&tabs[TAB_LIBRARY]);
-	}
 	if (S.scene != SC_STORE) acct_back = S.scene == SC_PROFILE ? SC_PROFILE : SC_STORE;
 	else if (S.tab < TAB_COUNT) acct_back = SC_STORE;
 	if (S.tab < TAB_COUNT) S.prev_tab = S.tab;
@@ -8878,23 +8845,6 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 			else shop_cart_remove(sel);
 		}
 		if ((kd & KEY_X) && c->n) open_pay();
-	}
-	if (S.tab == TAB_LIBRARY && (kd & KEY_SELECT)) {
-		// Ocultar el juego (o, en «Ocultos», volver a mostrarlo); se guarda en la SD
-		Tab *t = CUR;
-		if (t->sel >= 0 && t->sel < t->list.count && t->list.rows[t->sel].appid && !t->list.rows[t->sel].family) {
-			StoreRow r = t->list.rows[t->sel];
-			bool hide = !lib_hidden(r.appid);
-			hidden_set(r.appid, hide);
-			lib_apply(t);
-			char m[160];
-			if (hide) snprintf(m, sizeof m, _("Has ocultado %s. Lo verás en «Ocultos» (Y)"), r.name);
-			else snprintf(m, sizeof m, _("%s vuelve a tu biblioteca"), r.name);
-			toast_icon(m, IC_HIDE);
-			if (t->sel >= t->list.count) t->sel = t->sel_y = t->list.count ? t->list.count - 1 : 0;
-			t->sel_changed = osGetTime();
-		}
-		return;
 	}
 	if ((S.tab == TAB_LIBRARY || S.tab == TAB_WISHLIST) && (kd & KEY_Y)) {
 		list_mode_next();

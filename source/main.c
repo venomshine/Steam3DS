@@ -4894,8 +4894,12 @@ static void open_login(void)
 }
 
 
+static Scene acct_back = SC_STORE;   // de dónde se abrió (el perfil vuelve al perfil)
+
 static void open_account_list(int ti)
 {
+	if (S.scene != SC_STORE) acct_back = S.scene == SC_PROFILE ? SC_PROFILE : SC_STORE;
+	else if (S.tab < TAB_COUNT) acct_back = SC_STORE;
 	if (S.tab < TAB_COUNT) S.prev_tab = S.tab;
 	S.tab = ti;
 	go_scene(SC_STORE, 1);
@@ -8325,6 +8329,11 @@ static void close_account_list(void)
 {
 	S.tab = S.prev_tab;
 	S.tab_x = S.prev_tab;
+	if (acct_back == SC_PROFILE) {
+		acct_back = SC_STORE;
+		go_scene(SC_PROFILE, -1);
+		return;
+	}
 	go_scene(SC_STORE, -1);
 }
 

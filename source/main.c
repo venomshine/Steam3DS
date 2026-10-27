@@ -528,9 +528,18 @@ static u64 seen_owner;       // cuenta de la lista cargada
 static u32 added_now[8];     // añadidos desde la app en esta sesión: nuevos aunque aún no hubiera lista
 static int nadded_now;
 
+static bool added_now_has(u32 appid);
+
 static void note_added(u32 appid)
 {
-	if (nadded_now < 8) added_now[nadded_now++] = appid;
+	if (nadded_now < 8 && !added_now_has(appid)) added_now[nadded_now++] = appid;
+}
+
+static bool added_now_has(u32 appid)
+{
+	for (int i = 0; appid && i < nadded_now; i++)
+		if (added_now[i] == appid) return true;
+	return false;
 }
 
 static void seen_path(char *p, size_t n)
@@ -754,7 +763,11 @@ static void owned_poll(Tab *t)
 		net_release(r);
 		t->list.req = NULL;
 		if (auth_web_cookies("store.steampowered.com", ck, sizeof ck)) {
-			t->list.req = net_request("https://store.steampowered.com/dynamicstore/userdata/", NULL, ck);
+			// Con la hora en la dirección: si no, puede llegar una copia guardada de antes (sin lo último
+			// que añadiste, como una demo)
+			char ud[96];
+			snprintf(ud, sizeof ud, "https://store.steampowered.com/dynamicstore/userdata/?t=%llu", (unsigned long long)time(NULL));
+			t->list.req = net_request(ud, NULL, ck);
 			t->lib_stage = 1;
 			t->list.err[0] = 0;
 		} else if (!ok) {
@@ -2217,6 +2230,7 @@ static bool family_app(u32 appid)
 static bool owned_app(u32 appid)
 {
 	if (owned_row(appid)) return true;
+	if (added_now_has(appid)) return true;   // lo acabas de añadir (Steam tarda en enseñarlo)
 	Tab *t = &tabs[TAB_LIBRARY];
 	if (t->lib_stage == 2)
 		for (int i = 0; i < t->nwish; i++)
@@ -9466,7 +9480,9 @@ static void shop_events(void)
 				note_added(ev.appid);
 				library_changed();
 				snprintf(t, sizeof t, _("Añadido a tu biblioteca: %s"), ev.what);
-			} else if (ev.code == 1009) {
+			} else if (ev.code == 1009 || ev.code == 29) {
+				// Ya la tenías (Steam: «ya comprado» o petición repetida): el botón pasa a «En tu biblioteca»
+				note_added(ev.appid);
 				snprintf(t, sizeof t, "%s", _("Ya está en tu biblioteca"));
 			} else {
 				snprintf(t, sizeof t, _("No se pudo añadir a tu biblioteca: %s"), shop_err(ev.code));

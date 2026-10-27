@@ -483,6 +483,10 @@ void shop_update(void)
 			}
 		} else if (H.kind == SH_CART_ADD || H.kind == SH_CART_REMOVE) {
 			if (ok && steam_parse_cart(r->data, &H.cart)) cart_changed();
+		} else if (H.kind == SH_FREE && !ok) {
+			// Para saber por qué no se añadió (la respuesta de Steam, sin datos de la cuenta)
+			netlog("cuenta: licencia gratis %lu -> HTTP %ld, eresult %d, %.160s", (unsigned long)H.appid, r->http, r->eresult,
+				r->data ? r->data : "");
 		} else if (H.kind == SH_FREE && ok) {
 			// Si Steam no añadió nada, el detalle de la compra dice por qué
 			cJSON *root = cJSON_Parse(r->data);

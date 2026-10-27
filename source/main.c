@@ -152,9 +152,9 @@ static struct {
 	int price;                   // Buscar: paso de la barra de precio (ver price_units)
 	float price_x;               // el tirador, animado hacia price
 	u64 price_changed;           // cuándo se movió la barra (se aplica al soltarla un momento)
-	StoreTag tags[6];            // búsquedas populares: las etiquetas más usadas de la tienda
-	int ntags;
-	Req *tags_req;
+	StoreRow top[3];             // Buscar: «Búsquedas populares», lo más visitado ahora en la tienda
+	int ntop;
+	Req *tags_req;               // la petición de esos tres
 	float search_x;              // la píldora se estira sobre las pestañas (0..1)
 	int pfocus;                  // botón elegido con la cruceta en el perfil
 	bool has_demo_btn;           // la ficha tiene el botón de la demo (o el del playtest)
@@ -983,7 +983,7 @@ static void store_tabs_reload(void)
 	}
 	if (S.tags_req) net_release(S.tags_req);
 	S.tags_req = NULL;
-	S.ntags = 0;   // las búsquedas populares, en el idioma nuevo
+	S.ntop = 0;   // los populares, en el idioma nuevo
 	tab_more(cur_ti());
 }
 
@@ -1112,19 +1112,13 @@ static void add_header(RowList *l, const char *name)
 
 static void add_popular(RowList *l)
 {
-	if (!S.ntags) return;
+	if (!S.ntop) return;
 	add_header(l, _("Búsquedas populares"));
-	for (int i = 0; i < S.ntags; i++) {
-		StoreRow r = {0};
-		r.cents = -1;
-		r.tagid = S.tags[i].id;
-		snprintf(r.name, sizeof r.name, "%s", S.tags[i].name);
-		add_row(l, &r);
-	}
+	for (int i = 0; i < S.ntop; i++) add_row(l, &S.top[i]);
 }
 
-// Sin búsqueda: arriba las recientes (filas sin appid), las búsquedas populares (las etiquetas más
-// usadas) y debajo todo el catálogo por relevancia, por páginas y con el filtro de precio
+// Sin búsqueda: arriba los tres juegos más buscados del momento y, justo debajo, todo el catálogo
+// por relevancia, por páginas y con el filtro de precio
 static void search_show_browse(void)
 {
 	Tab *t = &tabs[TAB_SEARCH];
@@ -1134,17 +1128,8 @@ static void search_show_browse(void)
 	t->list.err[0] = 0;
 	t->term[0] = 0;
 	t->tag = 0;
-	if (S.nrecents) {
-		add_header(&t->list, _("Búsquedas recientes"));
-		for (int i = 0; i < S.nrecents && i < 3; i++) {
-			StoreRow r = {0};
-			r.cents = -1;
-			snprintf(r.name, sizeof r.name, "%s", S.recents[i]);
-			add_row(&t->list, &r);
-		}
-	}
 	add_popular(&t->list);
-	if (!S.ntags && !S.tags_req && S.ctx_ready) S.tags_req = steam_req_popular_tags();
+	if (!S.ntop && !S.tags_req && S.ctx_ready) S.tags_req = steam_req_most_visited(10);
 	add_header(&t->list, _("Explorar la tienda"));
 	t->browse = true;
 	t->raw_next = t->raw_total = 0;
@@ -1185,20 +1170,21 @@ static void search_tag(u32 id, const char *name)
 	tab_more(TAB_SEARCH);
 }
 
-// Llegan las etiquetas populares: se quedan las seis primeras que son géneros o estilos (las de
-// «Un jugador», «2D» o «3D» no dicen mucho) y, si se está viendo el catálogo, se meten encima
+// Llegan las búsquedas populares: se quedan las tres primeras y, si se está viendo el catálogo, se meten
+// encima
 static void tags_poll(void)
 {
 	Req *r = S.tags_req;
 	if (!r || r->state < REQ_DONE) return;
-	StoreTag all[24];
-	int n = r->state == REQ_DONE ? steam_parse_tags(r->data, all, 24) : -1;
+	RowList got = {0};
+	bool ok = r->state == REQ_DONE && (steam_take_rows(r, &got, false) || steam_parse_rows(r->data, &got, false));
 	net_release(r);
 	S.tags_req = NULL;
-	if (n <= 0) return;
-	S.ntags = 0;
-	for (int i = 0; i < n && S.ntags < 6; i++)
-		if (all[i].id != 4182 && all[i].id != 3871 && all[i].id != 4191) S.tags[S.ntags++] = all[i];
+	S.ntop = 0;
+	for (int i = 0; ok && i < got.count && S.ntop < 3; i++)
+		if (got.rows[i].appid) S.top[S.ntop++] = got.rows[i];
+	rowlist_free(&got);
+	if (!S.ntop) return;
 	Tab *t = &tabs[TAB_SEARCH];
 	if (!t->browse || t->tag || t->term[0]) return;
 	const char *ex = _("Explorar la tienda");

@@ -128,6 +128,7 @@ Req *steam_req_query(StoreQuery q, int start, int count);
 Req *steam_req_browse(int start, int count, bool free_only, u32 tagid);
 // Las etiquetas más usadas de la tienda (las «búsquedas populares» de Buscar), en tu idioma
 Req *steam_req_popular_tags(void);
+Req *steam_req_most_visited(int count);   // las «Búsquedas populares» de la web: lo más visitado ahora (filas)
 typedef struct { u32 id; char name[40]; } StoreTag;
 int steam_parse_tags(const char *json, StoreTag *out, int max);
 Req *steam_req_offers(int start, int count);

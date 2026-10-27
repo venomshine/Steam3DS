@@ -216,6 +216,8 @@ bool steam_parse_rows(const char *json, RowList *list, bool append)
 	const cJSON *meta = resp ? cJSON_GetObjectItemCaseSensitive(resp, "metadata") : NULL;
 	if (!append) list->count = 0;
 	int added = 0;
+	// Lo más visitado (IUserStoreVisitService) llega en «items»
+	if (!items && resp) items = cJSON_GetObjectItemCaseSensitive(resp, "items");
 	const cJSON *it;
 	cJSON_ArrayForEach(it, items) {
 		// Lo que no está en la tienda (herramientas, servidores, apps ocultas) llega sin nombre y
@@ -311,6 +313,19 @@ Req *steam_req_browse(int start, int count, bool free_only, u32 tagid)
 	cJSON_AddBoolToObject(dr, "include_reviews", true);
 	cJSON_AddBoolToObject(dr, "include_release", true);
 	return service_rows("IStoreQueryService/Query", in);
+}
+
+// Lo más visitado de la tienda ahora mismo: lo que la web de Steam enseña como «Búsquedas
+// populares» al abrir la lupa sin escribir nada (con el precio de tu país)
+Req *steam_req_most_visited(int count)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON_AddNumberToObject(in, "count", count);
+	cJSON_AddItemToObject(in, "context", context());
+	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
+	cJSON_AddBoolToObject(dr, "include_reviews", true);
+	cJSON_AddBoolToObject(dr, "include_release", true);
+	return service_rows("IUserStoreVisitService/GetMostVisitedItemsOnStore", in);
 }
 
 Req *steam_req_popular_tags(void)

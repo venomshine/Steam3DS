@@ -101,7 +101,6 @@ static const TrEntry tr_table[] = {
 	{"Buscar en la tienda…", "Search the store…", "ストアを検索…"},
 	{"Buscar esto", "Search this", "これを検索"},
 	{"Búsquedas populares", "Popular searches", "人気の検索"},
-	{"Búsquedas recientes", "Recent searches", "最近の検索"},
 	{"CAPTURAS", "SCREENSHOTS", "スクリーンショット"},
 	{"COLECCIONISTA DE JUEGOS", "GAME COLLECTOR", "ゲームコレクター"},
 	{"COMENTARIOS (%d)", "COMMENTS (%d)", "コメント（%d）"},

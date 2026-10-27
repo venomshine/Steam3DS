@@ -419,7 +419,6 @@ TR = {
     'Los publica y actualiza Valve; Steam3DS solo enlaza a ellos.': ('They are published and updated by Valve; Steam3DS only links to them.', 'これらは Valve が公開・更新しています。Steam3DS はリンクしているだけです。'),
 
     # Buscar: catálogo y barra de precio
-    "Búsquedas recientes": ("Recent searches", "最近の検索"),
     "Explorar la tienda": ("Browse the store", "ストアを見る"),
     "Búsquedas populares": ("Popular searches", "人気の検索"),
     "Familia": ("Family", "ファミリー"),

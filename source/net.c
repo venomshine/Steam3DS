@@ -379,6 +379,50 @@ static Req *lane_pop(Lane *l)
 	return r;
 }
 
+// La sesión web (auth.c): el tarro con las cookies de cada dominio y dónde avisar si Steam
+// renueva alguna por el camino (se llama desde el hilo de red)
+static bool (*jar_provider)(char *out, size_t sz);
+static void (*cookie_hook)(const char *host, const char *cookie);
+
+void net_set_web_session(bool (*provider)(char *out, size_t sz), void (*hook)(const char *host, const char *cookie))
+{
+	jar_provider = provider;
+	cookie_hook = hook;
+}
+
+// Las cabeceras de quien pide; si traen la cookie de sesión de Steam, en su lugar va el tarro
+// entero (cada cookie a su dominio y la de renovar): así, si Steam manda a renovar la sesión,
+// se renueva como en un navegador en vez de fallar
+static void set_headers(Req *r, const char *headers)
+{
+	if (!headers) return;
+	const char *ck = strstr(headers, "Cookie: steamLoginSecure=");
+	static char jar[10240];
+	if (ck && (ck == headers || ck[-1] == '\n') && !r->jar && jar_provider && jar_provider(jar, sizeof jar)) {
+		r->jar = strdup(jar);
+		memset(jar, 0, sizeof jar);
+		// Fuera la línea de la cookie (el resto de cabeceras se quedan)
+		size_t n = strlen(headers);
+		char *h = malloc(n + 1);
+		if (h) {
+			const char *e = strchr(ck, '\n');
+			size_t a = ck - headers;
+			memcpy(h, headers, a);
+			size_t b = 0;
+			if (e) {
+				b = n - (e + 1 - headers);
+				memcpy(h + a, e + 1, b);
+			}
+			h[a + b] = 0;
+			if (a + b > 0 && h[a + b - 1] == '\n') h[a + b - 1] = 0;
+			r->headers = h[0] ? h : NULL;
+			if (!h[0]) free(h);
+		}
+		return;
+	}
+	r->headers = strdup(headers);
+}
+
 static Req *req_new(const char *url, NetLane lane)
 {
 	Req *r = calloc(1, sizeof(Req));
@@ -443,7 +487,7 @@ Req *net_request(const char *url, const char *body, const char *headers)
 	Req *r = req_new(url, LANE_API);
 	if (!r) return NULL;
 	if (body) r->post = strdup(body);
-	if (headers) r->headers = strdup(headers);
+	set_headers(r, headers);
 	lane_push(&lanes[LANE_API], r);
 	return r;
 }
@@ -453,8 +497,8 @@ Req *net_request_jar(const char *url, const char *body, const char *headers, con
 	Req *r = req_new(url, LANE_API);
 	if (!r) return NULL;
 	if (body) r->post = strdup(body);
-	if (headers) r->headers = strdup(headers);
 	if (jar) r->jar = strdup(jar);
+	set_headers(r, headers);
 	lane_push(&lanes[LANE_API], r);
 	return r;
 }
@@ -1043,6 +1087,24 @@ static void run_req(Lane *l, Req *r)
 
 	u64 t0 = osGetTime();
 	CURLcode rc = perform(l, c);
+	if (r->jar && r->post && rc == CURLE_OK) {
+		// Steam mandó a renovar la sesión y volvió a la misma dirección: al seguir las
+		// redirecciones el POST pasó a ser un GET (Steam responde 404). Con la cookie ya renovada
+		// en el tarro, se manda otra vez el formulario
+		long nred = 0;
+		char *eff = NULL;
+		curl_easy_getinfo(c, CURLINFO_REDIRECT_COUNT, &nred);
+		curl_easy_getinfo(c, CURLINFO_EFFECTIVE_URL, &eff);
+		if (nred > 0 && eff && !strcmp(eff, r->url)) {
+			r->len = 0;
+			if (r->data) r->data[0] = 0;
+			size_t u = strlen(r->redir);
+			if (u + 12 < sizeof r->redir) snprintf(r->redir + u, sizeof r->redir - u, " > (POST)");
+			curl_easy_setopt(c, CURLOPT_POSTFIELDS, r->post);
+			curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)strlen(r->post));
+			rc = perform(l, c);
+		}
+	}
 	curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &r->http);
 	double tdns = 0, ttcp = 0, ttls = 0, tfirst = 0;
 	curl_easy_getinfo(c, CURLINFO_NAMELOOKUP_TIME, &tdns);
@@ -1059,11 +1121,17 @@ static void run_req(Lane *l, Req *r)
 	if (r->jar) {
 		// Si Steam renovó la sesión por el camino, la cookie nueva del dominio pedido se guarda
 		// (en login_cookie) para las siguientes peticiones; luego se vacía todo
-		char host[64] = "";
+		// host: el dominio de la cookie en el tarro; real: el de Steam (en pruebas, el de la ruta)
+		char host[64] = "", real[64] = "";
 		const char *h = strstr(r->url, "://");
 		h = h ? h + 3 : r->url;
 		size_t hn = strcspn(h, "/:?");
 		if (hn < sizeof host) snprintf(host, sizeof host, "%.*s", (int)hn, h);
+		snprintf(real, sizeof real, "%s", host);
+#ifdef DEV_RELAY
+		const char *oh = strstr(r->url, ":8099/");
+		if (oh) snprintf(real, sizeof real, "%.*s", (int)strcspn(oh + 6, "/"), oh + 6);
+#endif
 		struct curl_slist *ck = NULL;
 		if (host[0] && curl_easy_getinfo(c, CURLINFO_COOKIELIST, &ck) == CURLE_OK) {
 			for (struct curl_slist *i = ck; i; i = i->next) {
@@ -1089,6 +1157,7 @@ static void run_req(Lane *l, Req *r)
 			}
 			curl_slist_free_all(ck);
 		}
+		if (r->login_cookie && cookie_hook) cookie_hook(real, r->login_cookie);
 		curl_easy_setopt(c, CURLOPT_COOKIELIST, "ALL");
 	}
 

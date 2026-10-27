@@ -586,6 +586,10 @@ def cart_cents():
 # manda a renovarlo a login.steampowered.com/jwt/refresh, que solo lo renueva con la cookie
 # steamRefresh_steam (sin ella devuelve al checkout y se entra en bucle)
 PAY_REFRESH = os.environ.get("RELAY_PAY_REFRESH") == "1"
+# RELAY_WEB_REFRESH=1: lo mismo en la tienda al seguir o ignorar un juego (el POST vuelve como GET
+# tras renovar y Steam responde 404, como en la consola)
+WEB_REFRESH = os.environ.get("RELAY_WEB_REFRESH") == "1"
+WEB_REFRESH_PATHS = ("explore/followgame/", "recommended/ignorerecommendation")
 RELAY_BASE = "http://127.0.0.1:8099/"
 
 
@@ -730,7 +734,24 @@ class Relay(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if FAKE and PAY_REFRESH and host == "login.steampowered.com" and path == "jwt/refresh":
+        if FAKE and WEB_REFRESH and host == "store.steampowered.com" and path in WEB_REFRESH_PATHS:
+            ck = cookies_of(self.headers)
+            if "renewed" not in ck.get("steamLoginSecure", ""):
+                back = RELAY_BASE + host + "/" + path
+                self.send_response(302)
+                self.send_header("Location", RELAY_BASE + "login.steampowered.com/jwt/refresh?redir=" + urllib.parse.quote(back, safe=""))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                sys.stderr.write("FAKE %s %s -> 302 a jwt/refresh\n" % (method, path))
+                return
+            if method == "GET":
+                self.send_response(404)
+                self.send_header("Content-Length", "4")
+                self.end_headers()
+                self.wfile.write(b"null")
+                sys.stderr.write("FAKE GET %s -> 404\n" % path)
+                return
+        if FAKE and (PAY_REFRESH or WEB_REFRESH) and host == "login.steampowered.com" and path == "jwt/refresh":
             ck = cookies_of(self.headers)
             self.send_response(302)
             if ck.get("steamRefresh_steam", "").startswith(str(FAKE_ID)):

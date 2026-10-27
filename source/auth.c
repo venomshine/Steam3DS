@@ -38,6 +38,39 @@ static char sessionid[28];
 static Req *xfer_req[MAX_WEB];
 static char xfer_host[MAX_WEB][40];
 
+// Cookies renovadas por el camino: llegan desde el hilo de red y se aplican en auth_update
+static LightLock renew_lock;
+static struct { char host[40]; char cookie[1100]; bool set; } renewed[MAX_WEB];
+
+static void web_renewed(const char *host, const char *cookie)
+{
+	if (!cookie || strlen(cookie) < 20 || strlen(cookie) >= sizeof renewed[0].cookie) return;
+	LightLock_Lock(&renew_lock);
+	int k = -1;
+	for (int i = 0; i < MAX_WEB && k < 0; i++)
+		if (renewed[i].set && !strcmp(renewed[i].host, host)) k = i;
+	for (int i = 0; i < MAX_WEB && k < 0; i++)
+		if (!renewed[i].set) k = i;
+	if (k >= 0) {
+		snprintf(renewed[k].host, sizeof renewed[k].host, "%s", host);
+		snprintf(renewed[k].cookie, sizeof renewed[k].cookie, "%s", cookie);
+		renewed[k].set = true;
+	}
+	LightLock_Unlock(&renew_lock);
+}
+
+static void apply_renewed(void)
+{
+	LightLock_Lock(&renew_lock);
+	for (int i = 0; i < MAX_WEB; i++) {
+		if (!renewed[i].set) continue;
+		auth_web_update(renewed[i].host, renewed[i].cookie);
+		memset(&renewed[i], 0, sizeof renewed[i]);
+	}
+	LightLock_Unlock(&renew_lock);
+}
+
+
 // Las cuentas guardadas: la activa es además la de session.ini
 typedef struct { AuthAccount pub; char refresh[1024]; } SavedAcc;
 static SavedAcc acc[AUTH_MAX_ACCOUNTS];
@@ -365,6 +398,8 @@ static void transfers_done(u64 now)
 void auth_init(void)
 {
 	memset(&A, 0, sizeof A);
+	LightLock_Init(&renew_lock);
+	net_set_web_session(auth_web_jar, web_renewed);
 	acc_load();
 	// Con varias cuentas guardadas se elige al arrancar; con una, se entra con ella como siempre
 	if (nacc >= 2) {
@@ -511,6 +546,7 @@ void auth_update(void)
 {
 	u64 now = osGetTime();
 	cJSON *root;
+	apply_renewed();
 
 	// 1) QR pedido
 	if (begin_req && begin_req->state >= REQ_DONE) {

@@ -67,6 +67,9 @@ Req *net_post(const char *url, const char *body);
 Req *net_get_parsed(const char *url, NetLane lane, bool (*parse)(Req *r), void *out, void (*out_free)(void *out));
 // GET (body NULL) o POST con cabeceras extra separadas por '\n' ("Cookie: …", "Content-Type: …")
 Req *net_request(const char *url, const char *body, const char *headers);
+// La sesión web: provider da el tarro de cookies (se usa cuando una petición trae «Cookie:
+// steamLoginSecure=…»); hook recibe, desde el hilo de red, la cookie que Steam renovó por el camino
+void net_set_web_session(bool (*provider)(char *out, size_t sz), void (*hook)(const char *host, const char *cookie));
 // Igual, pero con las cookies en un «tarro» por dominio (jar: líneas «dominio\tFALSE\t/\tTRUE\t0\tnombre\tvalor»)
 Req *net_request_jar(const char *url, const char *body, const char *headers, const char *jar);
 void net_release(Req *r);

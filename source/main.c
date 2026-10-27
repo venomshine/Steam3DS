@@ -4744,6 +4744,14 @@ static struct {
 	char furl[UP_FILES][200];
 	int nf, page_i;              // page_i: la siguiente que se busca en su página (-1 aún no toca)
 	u64 page_at;                 // no antes de esta hora (la comunidad limita las peticiones seguidas)
+	Req *fhead[UP_FILES];        // la cabecera de cada imagen: si es un GIF se pide el original
+	bool fready[UP_FILES];
+	// Sus juegos: cuántos, horas, lo más jugado y lo último que ha jugado (con sus logros)
+	RowList games;
+	Req *games_req, *prog_req[3];
+	bool games_done, games_private;
+	int top[3], recent[3], prog_un[3], prog_tot[3];
+	long total_min;
 	TopAch ach[96];              // sus logros de los juegos de su vitrina de logros
 	int nach;
 	Req *ach_req[3];
@@ -4753,12 +4761,35 @@ static struct {
 	Scene back;
 } UP;
 
+// Las imágenes de las ilustraciones ya encontradas en esta sesión (así no se vuelve a pedir su página)
+static struct { u64 id; char url[200]; } known[32];
+static int nknown;
+
+static const char *known_file(u64 id)
+{
+	for (int i = 0; i < nknown; i++)
+		if (known[i].id == id) return known[i].url;
+	return NULL;
+}
+
+static void known_add(u64 id, const char *url)
+{
+	if (known_file(id) || url[0] == '-') return;
+	int i = nknown < 32 ? nknown++ : (int)(id % 32);
+	known[i].id = id;
+	snprintf(known[i].url, sizeof known[i].url, "%s", url);
+}
+
 static void user_reset(void)
 {
-	Req **all[] = {&UP.items, &UP.shows, &UP.xml, &UP.lvreq, &UP.files, &UP.page, &UP.ach_req[0], &UP.ach_req[1], &UP.ach_req[2]};
+	Req **all[] = {&UP.items, &UP.shows, &UP.xml, &UP.lvreq, &UP.files, &UP.page, &UP.ach_req[0], &UP.ach_req[1], &UP.ach_req[2],
+		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2]};
 	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
 		if (*all[i]) net_release(*all[i]);
+	for (int i = 0; i < UP_FILES; i++)
+		if (UP.fhead[i]) net_release(UP.fhead[i]);
 	rowlist_free(&UP.apps);
+	rowlist_free(&UP.games);
 	steam_profile_free(&UP.p);
 	Scene back = UP.back;
 	memset(&UP, 0, sizeof UP);
@@ -4787,6 +4818,8 @@ static void user_load(u64 id)
 	UP.shows = steam_req_profile_showcases(id);
 	UP.xml = steam_req_profile_xml(id);
 	if (auth_logged()) UP.lvreq = steam_req_level(id, auth_token());
+	if (auth_logged()) UP.games_req = steam_req_owned(id, auth_token());
+	for (int i = 0; i < 3; i++) UP.top[i] = UP.recent[i] = UP.prog_tot[i] = -1;
 }
 
 static bool user_loading(void)
@@ -4845,12 +4878,62 @@ static void user_poll(void)
 				if (!dup) UP.ach_req[nreq++] = steam_req_my_achievements(sc->appid[k], UP.id, auth_token());
 			}
 		}
+		// La imagen de cada una sale de su página en la comunidad (IPublishedFileService/GetDetails no
+		// acepta la sesión). Las que ya se vieron en esta sesión no se vuelven a pedir
 		if (UP.nf) {
-			if (auth_logged()) UP.files = steam_req_files(UP.fid, UP.nf, auth_token());
-			else UP.page_i = 0;
+			for (int i = 0; i < UP.nf; i++) {
+				const char *k = known_file(UP.fid[i]);
+				if (k) {
+					snprintf(UP.furl[i], sizeof UP.furl[0], "%s", k);
+					UP.fready[i] = true;
+				}
+			}
+			UP.page_i = 0;
 		}
 	}
 	list_poll(&UP.apps, false);
+	if (UP.games_req && UP.games_req->state >= REQ_DONE) {
+		bool ok = UP.games_req->state == REQ_DONE && steam_parse_owned(UP.games_req->data, &UP.games);
+		// Steam contesta {"response":{}} si sus juegos no son visibles para ti
+		UP.games_private = !ok || (!UP.games.count && !strstr(UP.games_req->data ? UP.games_req->data : "", "game_count"));
+		netlog("perfil %llu: %d juegos%s (HTTP %ld)", (unsigned long long)UP.id, UP.games.count, UP.games_private ? " (privados)" : "", UP.games_req->http);
+		net_release(UP.games_req);
+		UP.games_req = NULL;
+		UP.games_done = true;
+		// Lo más jugado y lo último jugado (tres de cada)
+		UP.total_min = 0;
+		for (int i = 0; i < UP.games.count; i++) {
+			const StoreRow *r = &UP.games.rows[i];
+			UP.total_min += r->minutes;
+			for (int k = 0; k < 3; k++) {
+				if (r->minutes > 0 && (UP.top[k] < 0 || r->minutes > UP.games.rows[UP.top[k]].minutes)) {
+					for (int j = 2; j > k; j--) UP.top[j] = UP.top[j - 1];
+					UP.top[k] = i;
+					break;
+				}
+			}
+			for (int k = 0; k < 3; k++) {
+				if (r->last_played && (UP.recent[k] < 0 || r->last_played > UP.games.rows[UP.recent[k]].last_played)) {
+					for (int j = 2; j > k; j--) UP.recent[j] = UP.recent[j - 1];
+					UP.recent[k] = i;
+					break;
+				}
+			}
+		}
+		for (int k = 0; k < 3 && auth_logged(); k++)
+			if (UP.recent[k] >= 0) UP.prog_req[k] = steam_req_achievement_progress(UP.games.rows[UP.recent[k]].appid, UP.id, auth_token());
+	}
+	for (int k = 0; k < 3; k++) {
+		Req *r = UP.prog_req[k];
+		if (!r || r->state < REQ_DONE) continue;
+		int un = 0, tot = 0;
+		if (r->state == REQ_DONE && steam_parse_achievement_progress(r->data, &un, &tot)) {
+			UP.prog_un[k] = un;
+			UP.prog_tot[k] = tot;
+		}
+		net_release(r);
+		UP.prog_req[k] = NULL;
+	}
 	for (int i = 0; i < 3; i++) {
 		Req *r = UP.ach_req[i];
 		if (!r || r->state < REQ_DONE) continue;
@@ -5172,6 +5255,72 @@ static float draw_showcase(const Showcase *s, float y, bool draw)
 	return h;
 }
 
+// Sus juegos: totales, lo más jugado y su actividad reciente (con el progreso de logros)
+static float draw_user_games(float y)
+{
+	const float x = 12, w = TOP_W - 24;
+	char t[160];
+	if (!auth_logged()) return 0;
+	if (!UP.games_done) {
+		fx_glass(x, y, w, 40, 10, 1, 0);
+		ui_spinner(TOP_W / 2, y + 20, 6, COL_DIM);
+		return 48;
+	}
+	if (UP.games_private || !UP.games.count) {
+		fx_glass(x, y, w, 34, 10, 1, 0);
+		ui_icon(IC_LOCK, x + 10, y + 11, 12, COL_DIM);
+		ui_text(x + 28, y + 10, UP.games_private ? _("Sus juegos no son visibles para ti") : _("Todavía no tiene juegos"), SZ_SMALL, COL_DIM, AL_LEFT, w - 40);
+		return 42;
+	}
+	int ntop = 0, nrec = 0;
+	for (int k = 0; k < 3; k++) ntop += UP.top[k] >= 0, nrec += UP.recent[k] >= 0;
+	float h = 30 + (ntop ? 16 + ntop * 22 : 0) + (nrec ? 18 + nrec * 44 : 0) + 4;
+	if (y > SCR_H || y + h < 18) return h + 8;
+	fx_glass(x, y, w, h, 10, 1, 0);
+	snprintf(t, sizeof t, _("%d juegos · %ld h jugadas"), UP.games.count, (UP.total_min + 30) / 60);
+	ui_text(x + 10, y + 8, t, SZ_BODY, COL_TXT, AL_LEFT, w - 20);
+	float cy = y + 30;
+	if (ntop) {
+		ui_text(x + 10, cy, _("LO MÁS JUGADO"), SZ_TINY, COL_ACC, AL_LEFT, 0);
+		cy += 16;
+		int maxm = UP.games.rows[UP.top[0]].minutes;
+		for (int k = 0; k < ntop; k++) {
+			const StoreRow *r = &UP.games.rows[UP.top[k]];
+			char hrs[16];
+			snprintf(hrs, sizeof hrs, "%d h", (r->minutes + 30) / 60);
+			ui_text(x + 10, cy, r->name, SZ_SMALL, COL_WHITE, AL_LEFT, w - 80);
+			ui_text(x + w - 10, cy, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+			ui_rrect(x + 10, cy + 14, w - 20, 4, 2, C2D_Color32(0xff, 0xff, 0xff, 0x14));
+			ui_rrect(x + 10, cy + 14, (w - 20) * r->minutes / (float)(maxm ? maxm : 1), 4, 2, COL_ACC);
+			cy += 22;
+		}
+	}
+	if (nrec) {
+		ui_text(x + 10, cy + 2, _("ACTIVIDAD RECIENTE"), SZ_TINY, COL_ACC, AL_LEFT, 0);
+		cy += 18;
+		for (int k = 0; k < nrec; k++) {
+			const StoreRow *r = &UP.games.rows[UP.recent[k]];
+			char url[200], when[40], hrs[32];
+			app_img(r->appid, "capsule_184x69.jpg", url, sizeof url);
+			draw_img_slot(url, x + 10, cy + 2, 100, 37, true);
+			ui_text(x + 118, cy + 1, r->name, SZ_SMALL, COL_WHITE, AL_LEFT, w - 128);
+			notif_when(r->last_played, when, sizeof when);
+			snprintf(hrs, sizeof hrs, _("%d h en total"), (r->minutes + 30) / 60);
+			snprintf(t, sizeof t, "%s · %s", hrs, when);
+			ui_text(x + 118, cy + 15, t, SZ_TINY, COL_DIM, AL_LEFT, w - 128);
+			if (UP.prog_tot[k] > 0) {
+				float bw = w - 128 - 112;
+				snprintf(t, sizeof t, _("%d de %d logros"), UP.prog_un[k], UP.prog_tot[k]);
+				ui_rrect(x + 118, cy + 31, bw, 4, 2, C2D_Color32(0xff, 0xff, 0xff, 0x14));
+				ui_rrect(x + 118, cy + 31, bw * UP.prog_un[k] / (float)UP.prog_tot[k], 4, 2, COL_LIME);
+				ui_text(x + w - 10, cy + 27, t, SZ_TINY, COL_DIM, AL_RIGHT, 106);
+			}
+			cy += 44;
+		}
+	}
+	return h + 8;
+}
+
 static void draw_user_top(void)
 {
 	if (UP.qr) {
@@ -5210,6 +5359,7 @@ static void draw_user_top(void)
 		ui_text_wrap(20, y, TOP_W - 40, UP.p.summary, SZ_SMALL, COL_TXT, 14, 14);
 		y += nl * 14 + 10;
 	}
+	if (!UP.p.is_private) y += draw_user_games(y);
 	if (UP.p.is_private) {
 		ui_icon(IC_LOCK, TOP_W / 2 - 9, y + 4, 18, COL_DIM);
 		ui_text(TOP_W / 2, y + 28, _("Este perfil es privado"), SZ_BODY, COL_DIM, AL_CENTER, 0);

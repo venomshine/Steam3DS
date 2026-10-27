@@ -761,6 +761,9 @@ static struct {
 	u32 *drop;
 	int ndrop, capdrop;
 	bool started;
+	u32 *cand;            // playtests y betas que la tienda aún enseña: se miran en su ficha (CM)
+	int ncand, capcand;
+	int pics;             // 0 sin mirar, 1 mirando, 2 hecho
 } MRG;
 
 static bool lib_merged(u32 appid)
@@ -833,6 +836,61 @@ static bool name_has_playtest(const char *s)
 	return false;
 }
 
+static bool name_has_beta(const char *s)
+{
+	for (; s && *s; s++)
+		if (!strncasecmp(s, "beta", 4)) return true;
+	return false;
+}
+
+static void merge_drop(u32 appid)
+{
+	if (lib_merged(appid)) return;
+	if (MRG.ndrop == MRG.capdrop) {
+		int cap = MRG.capdrop ? MRG.capdrop * 2 : 32;
+		u32 *nd = realloc(MRG.drop, cap * sizeof(u32));
+		if (!nd) return;
+		MRG.drop = nd;
+		MRG.capdrop = cap;
+	}
+	MRG.drop[MRG.ndrop++] = appid;
+}
+
+// Un playtest cerrado puede seguir visible en la tienda: lo que manda es su ficha, la que lee el
+// cliente de Steam (por la misma conexión que los ocultos, al acabar con la tienda)
+static void closed_poll(Tab *t)
+{
+	u32 *ids = NULL;
+	int n = 0;
+	char err[128];
+	if (MRG.pics != 1 && cm_closed_poll(&ids, &n, err, sizeof err)) free(ids);   // de antes (otra cuenta)
+	static u64 next_try;
+	if (MRG.pics == 0 && MRG.started && !MRG.req && MRG.next >= MRG.nids && osGetTime() >= next_try) {
+		next_try = osGetTime() + 2000;   // si aún están los ocultos en marcha, en un rato
+		if (!MRG.ncand) {
+			MRG.pics = 2;
+			return;
+		}
+		static char jar[10240];
+		if (auth_web_jar(jar, sizeof jar) && cm_closed_start(jar, MRG.cand, MRG.ncand)) {
+			MRG.pics = 1;
+			netlog("biblioteca: mirando %d playtests en su ficha", MRG.ncand);
+		}
+		memset(jar, 0, sizeof jar);
+		return;
+	}
+	if (MRG.pics != 1) return;
+	if (!cm_closed_poll(&ids, &n, err, sizeof err)) return;
+	MRG.pics = 2;
+	netlog("biblioteca: playtests cerrados -> %d%s%s", n, err[0] ? " · " : "", err);
+	for (int i = 0; i < n; i++) {
+		merge_drop(ids[i]);
+		netlog("biblioteca: aparte %lu (playtest cerrado)", (unsigned long)ids[i]);
+	}
+	free(ids);
+	if (n > 0) lib_drop_hidden(t);
+}
+
 static void merge_poll(Tab *t)
 {
 	if (MRG.req && MRG.req->state >= REQ_DONE) {
@@ -847,15 +905,19 @@ static void merge_poll(Tab *t)
 			bool playtest = m[i].type == 12 || (row && name_has_playtest(row->name));
 			// Las demos y las betas van aparte aunque tengas el juego (como en el cliente de Steam)
 			bool child = m[i].parent && m[i].parent != m[i].appid && m[i].type != 1 && m[i].type != 12 && lib_find(t, m[i].parent);
-			if (!((playtest && !alive) || child) || lib_merged(m[i].appid)) continue;
-			if (MRG.ndrop == MRG.capdrop) {
-				int cap = MRG.capdrop ? MRG.capdrop * 2 : 32;
-				u32 *nd = realloc(MRG.drop, cap * sizeof(u32));
-				if (!nd) break;
-				MRG.drop = nd;
-				MRG.capdrop = cap;
+			if (alive && !child && (playtest || (row && name_has_beta(row->name))) && MRG.ncand < 200) {
+				if (MRG.ncand == MRG.capcand) {
+					int cap = MRG.capcand ? MRG.capcand * 2 : 16;
+					u32 *nc = realloc(MRG.cand, cap * sizeof(u32));
+					if (nc) {
+						MRG.cand = nc;
+						MRG.capcand = cap;
+					}
+				}
+				if (MRG.ncand < MRG.capcand) MRG.cand[MRG.ncand++] = m[i].appid;
 			}
-			MRG.drop[MRG.ndrop++] = m[i].appid;
+			if (!((playtest && !alive) || child) || lib_merged(m[i].appid)) continue;
+			merge_drop(m[i].appid);
 			dropped++;
 			netlog("biblioteca: aparte %lu (%s, tipo %d, padre %lu)", (unsigned long)m[i].appid, child ? "va dentro de otro" : "playtest terminado", m[i].type, (unsigned long)m[i].parent);
 		}
@@ -964,6 +1026,7 @@ static void owned_poll(Tab *t)
 {
 	hidden_poll();
 	merge_poll(t);
+	closed_poll(t);
 	// Con otra cuenta (o si no se pudo lanzar), se vuelve a pedir
 	static u64 next_ask;
 	if (!HID.asked && t->started && auth_logged() && osGetTime() >= next_ask) {
@@ -1253,6 +1316,7 @@ static void account_lists_clear(void)
 	if (MRG.req) net_release(MRG.req);
 	free(MRG.ids);
 	free(MRG.drop);
+	free(MRG.cand);
 	memset(&MRG, 0, sizeof MRG);
 	wish_stash.count = 0;
 	deals_checked = false;
@@ -1340,6 +1404,7 @@ static void library_changed(void)
 	if (MRG.req) net_release(MRG.req);
 	MRG.req = NULL;
 	MRG.started = false;   // la biblioteca nueva se vuelve a mirar (lo ya agrupado se queda)
+	MRG.ncand = MRG.pics = 0;
 }
 
 // Buscar: las recientes se guardan en la SD, la última primero

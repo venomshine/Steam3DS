@@ -46,6 +46,10 @@ static unsigned long long now_ms(void) { return osGetTime(); }
 #define EMSG_LOGOFF 706
 #define EMSG_LOGON_RESPONSE 751
 #define EMSG_LOGON 5514
+#define EMSG_PICS_INFO 8903
+#define EMSG_PICS_INFO_RESPONSE 8904
+#define EMSG_PICS_TOKENS 8905
+#define EMSG_PICS_TOKENS_RESPONSE 8906
 #define PROTO_MASK 0x80000000u
 
 // ---------------------------------------------------------------------------- protobuf (lo justo)
@@ -385,6 +389,7 @@ typedef struct {
 	// lo que se espera
 	bool logged_on;
 	int logon_eresult;
+	uint64_t want_job;    // el trabajo cuya respuesta se espera
 	bool got_response;
 	int resp_eresult;
 	uint8_t *resp;
@@ -510,7 +515,7 @@ static void cm_packet(Cm *c, const uint8_t *d, size_t n, int depth)
 		c->logged_on = true;
 		if (sid) c->steamid = sid;
 		c->session = (int32_t)session;
-	} else if (emsg == EMSG_SERVICE_RESPONSE && job_target == 1) {
+	} else if (job_target && job_target == c->want_job) {
 		c->got_response = true;
 		c->resp_eresult = (int)eresult;
 		free(c->resp);
@@ -648,9 +653,138 @@ static int parse_hidden(Cm *c, uint32_t **ids)
 	return n;
 }
 
+// ---------------------------------------------------------------------------- playtests terminados
+
+// ¿Qué dice la ficha de la app (la que lee el cliente de Steam)? En «common», releasestate: un playtest
+// que el estudio ya cerró deja de estar «released» y el cliente no lo deja abrir
+static bool appinfo_closed(const uint8_t *d, size_t n)
+{
+	static const char key[] = "\"releasestate\"";
+	for (size_t i = 0; i + sizeof key < n; i++) {
+		if (memcmp(d + i, key, sizeof key - 1)) continue;
+		size_t j = i + sizeof key - 1;
+		while (j < n && d[j] != '"') j++;
+		size_t k = ++j;
+		while (k < n && d[k] != '"') k++;
+		if (k >= n) return false;
+		return !(k - j == 8 && !memcmp(d + j, "released", 8));
+	}
+	return false;   // sin el dato (sin permiso para verla), no se toca
+}
+
+// Los tokens de acceso de tus apps (sin ellos, la ficha de un playtest llega vacía) y después las
+// fichas. Devuelve cuántas están cerradas (en *out) o -1
+static int pics_closed(Ws *w, Cm *c, const uint32_t *apps, int n, uint32_t **out, char *err, size_t errsz)
+{
+	Pb hdr = {0}, req = {0};
+	c->want_job = 2;
+	c->got_response = false;
+	pb_fixed64(&hdr, 10, 2);
+	for (int i = 0; i < n; i++) pb_u64(&req, 2, apps[i]);
+	bool sent = cm_send(w, c, EMSG_PICS_TOKENS, &hdr, &req);
+	free(hdr.b);
+	free(req.b);
+	if (!sent || !cm_wait(w, c, &c->got_response)) return -1;
+	uint64_t *tok = calloc(n, sizeof(uint64_t));
+	if (!tok) return -1;
+	int ntok = 0;
+	PbR r = {c->resp, c->resp + c->resp_n};
+	PbF f, g;
+	while (pbr_next(&r, &f)) {
+		if (f.field != 3 || f.wire != 2) continue;   // app_access_tokens
+		uint64_t id = 0, at = 0;
+		PbR a = {f.d, f.d + f.len};
+		while (pbr_next(&a, &g)) {
+			if (g.field == 1) id = g.v;
+			else if (g.field == 2) at = g.v;
+		}
+		for (int i = 0; i < n; i++)
+			if (apps[i] == id) {
+				tok[i] = at;
+				ntok++;
+			}
+	}
+	netlog("cm: %d de %d playtests con permiso para ver su ficha", ntok, n);
+	hdr = (Pb){0};
+	req = (Pb){0};
+	c->want_job = 3;
+	c->got_response = false;
+	pb_fixed64(&hdr, 10, 3);
+	for (int i = 0; i < n; i++) {
+		Pb a = {0};
+		pb_u64(&a, 1, apps[i]);
+		if (tok[i]) pb_u64(&a, 2, tok[i]);
+		pb_bytes(&req, 2, a.b, a.n);
+		free(a.b);
+	}
+	pb_u64(&req, 7, 1);   // todo en una respuesta
+	free(tok);
+	sent = cm_send(w, c, EMSG_PICS_INFO, &hdr, &req);
+	free(hdr.b);
+	free(req.b);
+	if (!sent || !cm_wait(w, c, &c->got_response)) return -1;
+	int closed = 0, seen = 0;
+	*out = malloc(n * sizeof(uint32_t));
+	if (!*out) return -1;
+	r = (PbR){c->resp, c->resp + c->resp_n};
+	while (pbr_next(&r, &f)) {
+		if (f.field != 1 || f.wire != 2) continue;   // apps
+		uint64_t id = 0;
+		const uint8_t *buf = NULL;
+		size_t bl = 0;
+		PbR a = {f.d, f.d + f.len};
+		while (pbr_next(&a, &g)) {
+			if (g.field == 1) id = g.v;
+			else if (g.field == 5 && g.wire == 2) {
+				buf = g.d;
+				bl = g.len;
+			}
+		}
+		if (!buf) continue;
+		seen++;
+		if (appinfo_closed(buf, bl) && closed < n) (*out)[closed++] = (uint32_t)id;
+	}
+	netlog("cm: %d fichas leídas, %d playtests cerrados", seen, closed);
+	(void)err;
+	(void)errsz;
+	return closed;
+}
+
+// ---------------------------------------------------------------------------- la sesión
+
+// Lo que se pide en la sesión: tus ocultos, o qué playtests de la lista ya están cerrados
+typedef struct {
+	int kind;   // 0 ocultos, 1 playtests
+	const uint32_t *apps;
+	int napps;
+} Job;
+
+static int hidden_call(Ws *w, Cm *c, uint32_t **ids, char *err, size_t errsz)
+{
+	// CloudConfigStore.Download#1, espacio 1 (las colecciones de tu biblioteca)
+	Pb hdr = {0}, req = {0}, nv = {0};
+	c->want_job = 1;
+	pb_fixed64(&hdr, 10, 1);
+	pb_str(&hdr, 12, "CloudConfigStore.Download#1");
+	pb_u64(&nv, 1, 1);
+	pb_u64(&nv, 2, 0);
+	pb_bytes(&req, 1, nv.b, nv.n);
+	bool sent = cm_send(w, c, EMSG_SERVICE_CALL, &hdr, &req);
+	free(hdr.b);
+	free(req.b);
+	free(nv.b);
+	if (!sent || !cm_wait(w, c, &c->got_response)) return -1;
+	netlog("cm: colecciones -> eresult %d, %u bytes", c->resp_eresult, (unsigned)c->resp_n);
+	if (c->resp_eresult != 1) {
+		snprintf(err, errsz, "Steam no dio tus colecciones (eresult %d)", c->resp_eresult);
+		return -1;
+	}
+	return parse_hidden(c, ids);
+}
+
 // La sesión con el servidor: con token del chat web (o anónima, solo para las pruebas sin cuenta)
 static int cm_session(const char *endpoint, const char *account, const char *token, uint64_t steamid,
-                      uint32_t **ids, char *err, size_t errsz)
+                      const Job *job, uint32_t **ids, char *err, size_t errsz)
 {
 	Ws w = {0};
 	w.err = err;
@@ -683,24 +817,8 @@ static int cm_session(const char *endpoint, const char *account, const char *tok
 		snprintf(err, errsz, "Steam no aceptó la sesión (eresult %d)", c.logon_eresult);
 		goto out;
 	}
-	// CloudConfigStore.Download#1, espacio 1 (las colecciones de tu biblioteca)
-	Pb hdr = {0}, req = {0}, nv = {0};
-	pb_fixed64(&hdr, 10, 1);
-	pb_str(&hdr, 12, "CloudConfigStore.Download#1");
-	pb_u64(&nv, 1, 1);
-	pb_u64(&nv, 2, 0);
-	pb_bytes(&req, 1, nv.b, nv.n);
-	sent = cm_send(&w, &c, EMSG_SERVICE_CALL, &hdr, &req);
-	free(hdr.b);
-	free(req.b);
-	free(nv.b);
-	if (!sent || !cm_wait(&w, &c, &c.got_response)) goto out;
-	netlog("cm: colecciones -> eresult %d, %u bytes", c.resp_eresult, (unsigned)c.resp_n);
-	if (c.resp_eresult != 1) {
-		snprintf(err, errsz, "Steam no dio tus colecciones (eresult %d)", c.resp_eresult);
-		goto out;
-	}
-	result = parse_hidden(&c, ids);
+	if (job->kind == 1) result = pics_closed(&w, &c, job->apps, job->napps, ids, err, errsz);
+	else result = hidden_call(&w, &c, ids, err, errsz);
 	cm_send(&w, &c, EMSG_LOGOFF, NULL, NULL);
 out:
 	free(c.resp);
@@ -723,7 +841,8 @@ static int pick_endpoint(char *out, size_t n)
 	return ok;
 }
 
-int cm_fetch_hidden(const char *jar, uint32_t **ids, char *err, size_t errsz)
+// Con tu sesión web: el token del chat web, un servidor de Steam y la sesión con el trabajo
+static int cm_run(const char *jar, const Job *job, uint32_t **ids, char *err, size_t errsz)
 {
 	*ids = NULL;
 	err[0] = 0;
@@ -745,9 +864,21 @@ int cm_fetch_hidden(const char *jar, uint32_t **ids, char *err, size_t errsz)
 	char ep[96];
 	int n = -1;
 	if (!pick_endpoint(ep, sizeof ep)) snprintf(err, errsz, "%s", "no se pudo saber a qué servidor de Steam conectar");
-	else n = cm_session(ep, account, token, strtoull(sid, NULL, 10), ids, err, errsz);
+	else n = cm_session(ep, account, token, strtoull(sid, NULL, 10), job, ids, err, errsz);
 	cJSON_Delete(root);
 	return n;
+}
+
+int cm_fetch_hidden(const char *jar, uint32_t **ids, char *err, size_t errsz)
+{
+	Job job = {0};
+	return cm_run(jar, &job, ids, err, errsz);
+}
+
+int cm_fetch_closed(const char *jar, const uint32_t *apps, int n, uint32_t **ids, char *err, size_t errsz)
+{
+	Job job = {1, apps, n};
+	return cm_run(jar, &job, ids, err, errsz);
 }
 
 // ---------------------------------------------------------------------------- en un hilo
@@ -755,41 +886,54 @@ int cm_fetch_hidden(const char *jar, uint32_t **ids, char *err, size_t errsz)
 static struct {
 	volatile bool running, done;
 	char *jar;
+	Job job;
+	uint32_t *apps;
 	uint32_t *ids;
 	int n;
 	char err[128];
 } T;
 
-static void hidden_thread(void *arg)
+static void cm_thread(void *arg)
 {
 	(void)arg;
-	T.n = cm_fetch_hidden(T.jar, &T.ids, T.err, sizeof T.err);
+	T.n = cm_run(T.jar, &T.job, &T.ids, T.err, sizeof T.err);
 	memset(T.jar, 0, strlen(T.jar));
 	free(T.jar);
 	T.jar = NULL;
+	free(T.apps);
+	T.apps = NULL;
 	T.done = true;
 }
 
 #ifdef CM_HOST_TEST
-static void *hidden_thread_p(void *a)
+static void *cm_thread_p(void *a)
 {
-	hidden_thread(a);
+	cm_thread(a);
 	return NULL;
 }
 #else
 static Thread th;
 #endif
 
-bool cm_hidden_start(const char *jar)
+static bool cm_start(const char *jar, int kind, const uint32_t *apps, int n)
 {
 	if (T.running) return false;
 	memset(&T, 0, sizeof T);
 	T.jar = strdup(jar ? jar : "");
-	if (!T.jar) return false;
+	if (n > 0) T.apps = malloc(n * sizeof(uint32_t));
+	if (!T.jar || (n > 0 && !T.apps)) {
+		free(T.jar);
+		free(T.apps);
+		T.jar = NULL;
+		T.apps = NULL;
+		return false;
+	}
+	if (n > 0) memcpy(T.apps, apps, n * sizeof(uint32_t));
+	T.job = (Job){kind, T.apps, n};
 	T.running = true;
 #ifdef CM_HOST_TEST
 	pthread_t p;
-	pthread_create(&p, NULL, hidden_thread_p, NULL);
+	pthread_create(&p, NULL, cm_thread_p, NULL);
 	pthread_detach(p);
 #else
 	if (th) {
@@ -798,10 +942,12 @@ bool cm_hidden_start(const char *jar)
 	}
 	s32 prio = 0x30;
 	svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
-	th = threadCreate(hidden_thread, NULL, 64 * 1024, prio + 1, -2, false);
+	th = threadCreate(cm_thread, NULL, 64 * 1024, prio + 1, -2, false);
 	if (!th) {
 		free(T.jar);
+		free(T.apps);
 		T.jar = NULL;
+		T.apps = NULL;
 		T.running = false;
 		return false;
 	}
@@ -809,9 +955,9 @@ bool cm_hidden_start(const char *jar)
 	return true;
 }
 
-bool cm_hidden_poll(uint32_t **ids, int *n, char *err, size_t errsz)
+static bool cm_poll(int kind, uint32_t **ids, int *n, char *err, size_t errsz)
 {
-	if (!T.running || !T.done) return false;
+	if (!T.running || !T.done || T.job.kind != kind) return false;
 	*ids = T.ids;
 	*n = T.n;
 	snprintf(err, errsz, "%s", T.err);
@@ -820,10 +966,16 @@ bool cm_hidden_poll(uint32_t **ids, int *n, char *err, size_t errsz)
 	return true;
 }
 
+bool cm_hidden_start(const char *jar) { return cm_start(jar, 0, NULL, 0); }
+bool cm_hidden_poll(uint32_t **ids, int *n, char *err, size_t errsz) { return cm_poll(0, ids, n, err, errsz); }
+bool cm_closed_start(const char *jar, const uint32_t *apps, int n) { return n > 0 && cm_start(jar, 1, apps, n); }
+bool cm_closed_poll(uint32_t **ids, int *n, char *err, size_t errsz) { return cm_poll(1, ids, n, err, errsz); }
+
 #ifdef CM_HOST_TEST
-// Prueba sin cuenta: sesión anónima contra un servidor de verdad (la llamada a las colecciones debe
-// contestar con un error de permisos: así se comprueba todo el camino)
-int main(void)
+// Prueba sin cuenta: sesión anónima contra un servidor de verdad. Sin appids, la llamada a las
+// colecciones debe contestar con un error de permisos; con appids, se leen sus fichas (las de los
+// playtests llegan vacías sin el token de quien los tiene)
+int main(int argc, char **argv)
 {
 	curl_global_init(CURL_GLOBAL_ALL);
 	char ep[96], err[128] = "";
@@ -831,9 +983,14 @@ int main(void)
 		printf("sin servidor\n");
 		return 1;
 	}
+	uint32_t apps[64];
+	int na = 0;
+	for (int i = 1; i < argc && na < 64; i++) apps[na++] = (uint32_t)strtoul(argv[i], NULL, 10);
+	Job job = {na ? 1 : 0, apps, na};
 	uint32_t *ids = NULL;
-	int n = cm_session(ep, NULL, NULL, 0, &ids, err, sizeof err);
+	int n = cm_session(ep, NULL, NULL, 0, &job, &ids, err, sizeof err);
 	printf("resultado %d, %s\n", n, err);
+	for (int i = 0; i < n; i++) printf("cerrado %u\n", ids[i]);
 	free(ids);
 	return 0;
 }

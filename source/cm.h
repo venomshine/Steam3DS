@@ -16,3 +16,9 @@ int cm_fetch_hidden(const char *jar, uint32_t **ids, char *err, size_t errsz);
 // true cuando terminó, con el resultado (n < 0 si falló)
 bool cm_hidden_start(const char *jar);
 bool cm_hidden_poll(uint32_t **ids, int *n, char *err, size_t errsz);
+
+// Cuáles de estos playtests ya cerró su estudio (como los ve el cliente de Steam: la ficha de la app,
+// con el token de acceso de tu cuenta). En un hilo, como los ocultos; *ids, los cerrados
+int cm_fetch_closed(const char *jar, const uint32_t *apps, int n, uint32_t **ids, char *err, size_t errsz);
+bool cm_closed_start(const char *jar, const uint32_t *apps, int n);
+bool cm_closed_poll(uint32_t **ids, int *n, char *err, size_t errsz);

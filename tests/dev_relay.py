@@ -688,7 +688,7 @@ class Relay(BaseHTTPRequestHandler):
         if FAKE and host == "store.steampowered.com" and path == "dynamicstore/userdata/":
             ck = cookies_of(self.headers)
             ok = ck.get("steamLoginSecure", "").startswith(str(FAKE_ID))
-            body = json.dumps({"rgWishlist": WISH, "rgOwnedPackages": [], "rgOwnedApps": [a for a, *_ in OWNED] + [228980, 1, 4406010],
+            body = json.dumps({"rgWishlist": WISH, "rgOwnedPackages": [], "rgOwnedApps": [a for a, *_ in OWNED] + [228980, 1, 4406010, 4019420, 3948220, 2076040],
                                "rgIgnoredApps": {str(a): r for a, r in IGNORED.items()}, "rgFollowedApps": sorted(FOLLOWED)} if ok else {}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

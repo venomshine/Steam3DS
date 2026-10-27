@@ -768,7 +768,9 @@ static void hidden_poll(Tab *t)
 	if (!HID.req || HID.req->state < REQ_DONE) return;
 	u32 *ids = NULL;
 	int n = HID.req->state == REQ_DONE ? steam_parse_hidden(HID.req->data, &ids) : -1;
-	netlog("biblioteca: %d juegos ocultos (HTTP %ld)", n, HID.req->http);
+	netlog("biblioteca: %d juegos ocultos (HTTP %ld, eresult %d)", n, HID.req->http, HID.req->eresult);
+	// Si no vino la lista, qué contestó Steam (para saber si deja leerla con la sesión web)
+	if (n <= 0 && HID.req->data) netlog("biblioteca: ocultos, respuesta %.200s", HID.req->data);
 	net_release(HID.req);
 	HID.req = NULL;
 	HID.loaded = true;
@@ -1407,7 +1409,7 @@ static float hint_key(float x, float y, const char *key, bool draw)
 		snprintf(first, sizeof first, "%.*s", (int)(plus - key), key);
 		float w = hint_key(x, y, first, draw);
 		float pw = ui_text_w("+", SZ_TINY);
-		if (draw) ui_text(x + w + 1, y + 5, "+", SZ_TINY, COL_DIM, AL_LEFT, 0);
+		if (draw) ui_text(x + w + 1, y + 3, "+", SZ_TINY, COL_DIM, AL_LEFT, 0);
 		// La flecha de la cruceta, dibujada (no todas las fuentes traen ← → ↑ ↓)
 		float ax = x + w + 3 + pw, cx = ax + 4, cy = y + 10;
 		if (draw) {
@@ -1433,7 +1435,7 @@ static float hint_key(float x, float y, const char *key, bool draw)
 	}
 	if (g[0]) {
 		float w = ui_text_w(g, SZ_SMALL);
-		if (draw) ui_text(x, y + 5, g, SZ_SMALL, COL_WHITE, AL_LEFT, 0);   // a la altura de las teclas dibujadas (START)
+		if (draw) ui_text(x, y + 3, g, SZ_SMALL, COL_WHITE, AL_LEFT, 0);   // a la altura de las teclas dibujadas (START)
 		return w;
 	}
 	float kw = ui_text_w(key, SZ_TINY) + 6;

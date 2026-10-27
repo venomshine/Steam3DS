@@ -2533,7 +2533,10 @@ static void myshots_poll(const AppInfo *a)
 		if (MS.req) net_release(MS.req);
 		memset(&MS, 0, sizeof MS);
 		MS.appid = a->appid;
-		MS.req = steam_req_my_shots(auth_info()->steamid, a->appid, auth_token());
+		char ck[1200] = "";
+		auth_web_cookies("steamcommunity.com", ck, sizeof ck);
+		MS.req = steam_req_my_shots(auth_info()->steamid, a->appid, ck);
+		memset(ck, 0, sizeof ck);
 	}
 	if (MS.req && MS.req->state >= REQ_DONE) {
 		int n = MS.req->state == REQ_DONE ? steam_parse_my_shots(MS.req->data, MS.appid, MS.s, MAX_MYSHOTS, &MS.total) : -1;

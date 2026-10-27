@@ -418,6 +418,9 @@ def live():
 
 def fake_get(path, q):
     inp = json.loads(q.get("input_json", "{}") or "{}")
+    # Los logros van por GET (como en Steam: por POST, 405): mismas respuestas que por POST
+    if path.endswith("GetTopAchievementsForGames/v1/"):
+        return fake_post_api(path, urllib.parse.urlencode({"input_json": q.get("input_json", "{}")}))
     if path.endswith("GetSteamNotifications/v1/"):
         now = int(time.time())
         ns = ([{"notification_id": "9100", "notification_type": 3, "body_data": json.dumps({}), "read": False, "ago": 5}] if live() else []) + NOTIFS
@@ -672,6 +675,7 @@ def fake_checkout(method, path, q, body, headers):
 METHOD_ONLY = {
     "IAccountCartService/GetCart/v1/": "GET",
     "IUserAccountService/GetClientWalletDetails/v1/": "POST",
+    "IPlayerService/GetTopAchievementsForGames/v1/": "GET",
 }
 
 

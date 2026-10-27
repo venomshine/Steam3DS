@@ -351,7 +351,7 @@ typedef struct {
 	char caption[96];
 	u32 when;               // cuándo la hiciste (hora Unix)
 } MyShot;
-Req *steam_req_my_shots(u64 steamid, u32 appid, const char *token);
+Req *steam_req_my_shots(u64 steamid, u32 appid, const char *cookies);
 int steam_parse_my_shots(const char *json, u32 appid, MyShot *out, int max, int *total);   // -1 si falla
 
 // Tu reseña de un juego (has = false si no has escrito ninguna)

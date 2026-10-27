@@ -1455,7 +1455,7 @@ Req *steam_req_my_achievements(u32 appid, u64 steamid, const char *token)
 {
 	cJSON *in = achv_input(appid, steamid);
 	cJSON_AddNumberToObject(in, "max_achievements", 10000);
-	return steam_post_service("IPlayerService/GetTopAchievementsForGames", in, token);
+	return steam_get_service("IPlayerService/GetTopAchievementsForGames", in, token);   // por POST: 405
 }
 
 // Se casan por el icono, que es único en cada juego
@@ -2189,24 +2189,39 @@ bool steam_parse_file_page(const char *html, char *url, size_t n)
 // ----------------------------------------------------------------------------
 // Tus capturas
 
-Req *steam_req_my_shots(u64 steamid, u32 appid, const char *token)
+// De tu página de capturas en la comunidad, solo las de ese juego (IPublishedFileService/GetUserFiles
+// rechaza el token de la sesión web: 401). cookies: las de la comunidad, por si tu perfil es privado
+Req *steam_req_my_shots(u64 steamid, u32 appid, const char *cookies)
 {
-	cJSON *in = cJSON_CreateObject();
-	char sid[24];
-	snprintf(sid, sizeof sid, "%llu", (unsigned long long)steamid);
-	cJSON_AddStringToObject(in, "steamid", sid);
-	cJSON_AddNumberToObject(in, "appid", appid);
-	cJSON_AddNumberToObject(in, "filetype", 4);          // k_EPublishedFileInfoMatchingFileType_Screenshots
-	cJSON_AddNumberToObject(in, "numperpage", 50);
-	cJSON_AddNumberToObject(in, "page", 1);
-	cJSON_AddStringToObject(in, "sortmethod", "created");
-	cJSON_AddBoolToObject(in, "return_short_description", true);
-	cJSON_AddBoolToObject(in, "strip_description_bbcode", true);
-	return steam_get_service("IPublishedFileService/GetUserFiles", in, token);
+	char url[220];
+	snprintf(url, sizeof url, "https://steamcommunity.com/profiles/%llu/screenshots/?appid=%lu&sort=newestfirst&browsefilter=myfiles&view=imagewall&l=%s",
+		(unsigned long long)steamid, (unsigned long)appid, g_lang);
+	return cookies && *cookies ? net_request(url, NULL, cookies) : net_get(url, LANE_API);
 }
 
 int steam_parse_my_shots(const char *json, u32 appid, MyShot *out, int max, int *total)
 {
+	// La página de capturas de la comunidad (lo normal ahora)
+	if (json && strstr(json, "profile_media_item")) {
+		ProfileShot *ps = malloc(50 * sizeof *ps);
+		if (!ps) return -1;
+		int n = steam_parse_profile_shots(json, ps, max < 50 ? max : 50);
+		int k = 0;
+		for (int i = 0; i < n; i++) {
+			if (appid && ps[i].appid && ps[i].appid != appid) continue;
+			memset(&out[k], 0, sizeof out[k]);
+			snprintf(out[k].url, sizeof out[k].url, "%.199s", ps[i].url);
+			copy_utf8(out[k].caption, sizeof out[k].caption, ps[i].desc);
+			k++;
+		}
+		free(ps);
+		*total = k;
+		return k;
+	}
+	if (json && strstr(json, "sharedfiles")) {   // la página, sin capturas de este juego
+		*total = 0;
+		return 0;
+	}
 	cJSON *root = cJSON_Parse(json);
 	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
 	if (!resp) {

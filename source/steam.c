@@ -449,6 +449,68 @@ int steam_parse_items_meta(const char *json, ItemMeta *out, int max)
 	return n;
 }
 
+Req *steam_req_assets(const u32 *ids, int n)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON *arr = cJSON_AddArrayToObject(in, "ids");
+	for (int i = 0; i < n; i++) {
+		cJSON *o = cJSON_CreateObject();
+		cJSON_AddNumberToObject(o, "appid", ids[i]);
+		cJSON_AddItemToArray(arr, o);
+	}
+	cJSON_AddItemToObject(in, "context", context());
+	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
+	cJSON_AddBoolToObject(dr, "include_assets", true);
+	char *js = cJSON_PrintUnformatted(in);
+	char *esc = url_escape(js);
+	size_t un = strlen(esc) + 96;
+	char *url = malloc(un);
+	snprintf(url, un, "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=%s", esc);
+	Req *r = net_get(url, LANE_API);
+	free(url);
+	free(esc);
+	free(js);
+	cJSON_Delete(in);
+	return r;
+}
+
+// asset_url_format es «steam/apps/ID/${FILENAME}?t=…»
+static void asset_url(const cJSON *as, const char *key, char *out, size_t n)
+{
+	out[0] = 0;
+	const char *fmt = jstr(as, "asset_url_format"), *file = jstr(as, key);
+	const char *at = fmt ? strstr(fmt, "${FILENAME}") : NULL;
+	if (!at || !file || !*file) return;
+	snprintf(out, n, "https://shared.akamai.steamstatic.com/store_item_assets/%.*s%s%s", (int)(at - fmt), fmt, file, at + 11);
+}
+
+int steam_parse_assets(const char *json, AppAssets *out, int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *it;
+	cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(resp, "store_items")) {
+		if (n >= max) break;
+		AppAssets *a = &out[n];
+		memset(a, 0, sizeof *a);
+		a->appid = (u32)jnum(it, "id", 0);
+		if (!a->appid) continue;
+		const cJSON *as = cJSON_GetObjectItemCaseSensitive(it, "assets");
+		if (as) {
+			asset_url(as, "small_capsule", a->capsule, sizeof a->capsule);
+			asset_url(as, "header", a->header, sizeof a->header);
+		}
+		n++;
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
 void steam_icon_url(const StoreRow *r, char *out, size_t n)
 {
 	if (r->icon[0]) snprintf(out, n, "https://shared.akamai.steamstatic.com/community_assets/images/apps/%lu/%s.jpg", (unsigned long)r->appid, r->icon);

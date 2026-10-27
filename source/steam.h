@@ -149,6 +149,11 @@ Req *steam_req_items(const u32 *ids, int n, bool assets);
 typedef struct { u32 appid; int success; bool visible; int type; u32 parent; } ItemMeta;
 Req *steam_req_items_meta(const u32 *ids, int n);
 int steam_parse_items_meta(const char *json, ItemMeta *out, int max);   // -1 si falla   // assets: también el icono
+// Las imágenes de un juego como las da la tienda (las nuevas van en una carpeta con código: la
+// dirección de siempre, …/apps/ID/capsule_184x69.jpg, da 404). Vacías si no tiene
+typedef struct { u32 appid; char capsule[200]; char header[200]; } AppAssets;
+Req *steam_req_assets(const u32 *ids, int n);
+int steam_parse_assets(const char *json, AppAssets *out, int max);   // -1 si falla
 // URL del icono de 32×32 de una fila (vacía si Steam no lo da)
 void steam_icon_url(const StoreRow *r, char *out, size_t n);      // nombres, precios y reseñas de varios a la vez
 bool steam_parse_review_summary(const char *json, AppInfo *a);

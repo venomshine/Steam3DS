@@ -7214,9 +7214,65 @@ static void draw_img_slot(const char *url, float x, float y, float w, float h, b
 	}
 }
 
-static void app_img(u32 appid, const char *file, char *out, size_t n)
+// Las imágenes de los juegos (cápsula pequeña o cabecera). Las de los juegos nuevos van en una
+// carpeta con código y la dirección de siempre da 404 (Forza Horizon 6): se pregunta a la tienda
+// por tandas y se recuerda. state: 0 por pedir, 1 pedida, 2 lista
+#define NASSET 96
+static struct { u32 appid; u8 state; u32 used; char capsule[200], header[200]; } ASSET[NASSET];
+static Req *asset_req;
+
+static const char *app_img(u32 appid, bool header, char *out, size_t n)
 {
-	snprintf(out, n, "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/%lu/%s", (unsigned long)appid, file);
+	int k = -1;
+	for (int i = 0; i < NASSET && k < 0; i++)
+		if (ASSET[i].appid == appid) k = i;
+	if (k < 0) {
+		// Sitio nuevo: uno libre o el que hace más que no se usa (y no está pedido)
+		for (int i = 0; i < NASSET; i++) {
+			if (ASSET[i].state == 1) continue;
+			if (k < 0 || !ASSET[i].appid || (ASSET[k].appid && ASSET[i].used < ASSET[k].used)) k = i;
+			if (!ASSET[i].appid) break;
+		}
+		if (k < 0) return NULL;
+		memset(&ASSET[k], 0, sizeof ASSET[k]);
+		ASSET[k].appid = appid;
+	}
+	ASSET[k].used = frame_no;
+	if (ASSET[k].state != 2) return NULL;   // aún no se sabe: se espera (con la ruedita)
+	const char *u = header ? ASSET[k].header : ASSET[k].capsule;
+	if (u[0]) snprintf(out, n, "%s", u);
+	else snprintf(out, n, "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/%lu/%s", (unsigned long)appid,
+	              header ? "header.jpg" : "capsule_184x69.jpg");
+	return out;
+}
+
+static void asset_poll(void)
+{
+	if (asset_req && asset_req->state >= REQ_DONE) {
+		static AppAssets got[50];
+		int n = asset_req->state == REQ_DONE ? steam_parse_assets(asset_req->data, got, 50) : -1;
+		net_release(asset_req);
+		asset_req = NULL;
+		for (int i = 0; i < NASSET; i++) {
+			if (ASSET[i].state != 1) continue;
+			ASSET[i].state = n < 0 ? 0 : 2;   // si falló, se vuelve a pedir
+			for (int j = 0; j < n; j++)
+				if (got[j].appid == ASSET[i].appid) {
+					memcpy(ASSET[i].capsule, got[j].capsule, sizeof ASSET[i].capsule);
+					memcpy(ASSET[i].header, got[j].header, sizeof ASSET[i].header);
+				}
+		}
+		if (n < 0) return;
+	}
+	if (asset_req || !S.ctx_ready) return;
+	u32 ids[50];
+	int n = 0;
+	for (int i = 0; i < NASSET && n < 50; i++)
+		if (ASSET[i].appid && ASSET[i].state == 0) {
+			ASSET[i].state = 1;
+			ids[n++] = ASSET[i].appid;
+		}
+	if (n) asset_req = steam_req_assets(ids, n);
 }
 
 // Una vitrina; devuelve lo que ocupa (si draw es false solo mide)
@@ -7243,8 +7299,7 @@ static float draw_showcase(const Showcase *s, float y, bool draw)
 		if (draw) {
 			fx_glass(x, y, w, 22 + ih + 10, 10, 1, 0);
 			ui_text(x + 10, y + 6, show_title(s->type), SZ_TINY, COL_ACC, AL_LEFT, 0);
-			app_img(s->appid[0], "header.jpg", url, sizeof url);
-			draw_img_slot(url, x + 10, y + 22, iw, ih, true);
+			draw_img_slot(app_img(s->appid[0], true, url, sizeof url), x + 10, y + 22, iw, ih, true);
 			const char *nm = user_app_name(s->appid[0]);
 			if (nm) ui_text_wrap(x + 20 + iw, y + 24, w - iw - 30, nm, SZ_BODY, COL_WHITE, 3, 16);
 		}
@@ -7291,8 +7346,7 @@ static float draw_showcase(const Showcase *s, float y, bool draw)
 			fx_glass(x, y, w, h, 10, 1, 0);
 			ui_text(x + 10, y + 6, show_title(s->type), SZ_TINY, COL_ACC, AL_LEFT, 0);
 			for (int i = 0; i < s->n; i++) {
-				app_img(s->appid[i], "capsule_184x69.jpg", url, sizeof url);
-				draw_img_slot(url, x + 10 + (i % cols) * (gw + 6), y + 22 + (i / cols) * (gh + 6), gw, gh, true);
+				draw_img_slot(app_img(s->appid[i], false, url, sizeof url), x + 10 + (i % cols) * (gw + 6), y + 22 + (i / cols) * (gh + 6), gw, gh, true);
 			}
 		}
 		return h;
@@ -7371,8 +7425,7 @@ static float draw_user_games(float y)
 		for (int k = 0; k < nrec; k++) {
 			const StoreRow *r = &UP.games.rows[UP.recent[k]];
 			char url[200], when[40], hrs[32];
-			app_img(r->appid, "capsule_184x69.jpg", url, sizeof url);
-			draw_img_slot(url, x + 10, cy + 2, 100, 37, true);
+			draw_img_slot(app_img(r->appid, false, url, sizeof url), x + 10, cy + 2, 100, 37, true);
 			ui_text(x + 118, cy + 1, r->name, SZ_SMALL, COL_WHITE, AL_LEFT, w - 128);
 			notif_when(r->last_played, when, sizeof when);
 			snprintf(hrs, sizeof hrs, _("%d h en total"), (r->minutes + 30) / 60);
@@ -10491,6 +10544,7 @@ int main(int argc, char **argv)
 			lib_leave(in);
 		}
 		lib_cache_poll();
+		asset_poll();
 		notif_poll();
 		flist_poll();
 		info_poll();

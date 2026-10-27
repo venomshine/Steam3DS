@@ -6,6 +6,9 @@
 #include <string.h>
 #include <stddef.h>
 #include <strings.h>
+#include <time.h>
+#include <sys/stat.h>
+#include <mbedtls/sha256.h>
 
 #include "app.h"
 #include "fx.h"
@@ -25,7 +28,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS, SC_USER, SC_ACCSET, SC_PCDL, SC_POINTS, SC_MYREV, SC_HIST } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS, SC_USER, SC_ACCSET, SC_PCDL, SC_POINTS, SC_MYREV, SC_HIST, SC_TERMS } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
@@ -9181,6 +9184,273 @@ static void splash_sound(float t0, float t1)
 	sfx_volume(CH_STEAM, 0.28f * g * clampf((t1 - SPLASH_STEAM) / 0.02f, 0, 1), 0.1f);
 }
 
+// ============================================================================
+// Condiciones de uso y aviso legal: hay que leerlas hasta el final y aceptarlas antes de usar la
+// app. La aceptación se guarda en la SD (aceptacion.txt) con la versión, la fecha, la huella del
+// texto aceptado y una copia; si las condiciones cambian, se sube TERMS_VERSION y se vuelven a pedir
+
+#define TERMS_VERSION 1
+#define TERMS_FILE APP_DIR "/aceptacion.txt"
+
+static const char *const terms_txt[][2] = {
+	{"1. Qué es Steam3DS", "Steam3DS es una aplicación casera (homebrew) independiente y gratuita. No es un producto oficial: no está afiliada, patrocinada, aprobada ni respaldada por Valve Corporation ni por Nintendo. Steam y el logotipo de Steam son marcas de Valve Corporation, y Nintendo 3DS es una marca de Nintendo; aquí solo se usan para identificar el servicio con el que se conecta la aplicación."},
+	{"2. Tu cuenta de Steam", "Steam3DS se conecta a tu cuenta con los servicios web de Steam, del mismo modo que un navegador. Aun así, Valve puede cambiar sus servicios o sus normas en cualquier momento y decidir por su cuenta sobre cualquier cuenta, incluida su restricción, suspensión o cierre. Eres el único responsable de tu cuenta y de lo que hagas con ella desde esta aplicación. Al usar Steam desde la consola sigues sujeto al Acuerdo de Suscriptor de Steam y a las demás normas de Steam (los tienes en Acerca de → Políticas y normas de Steam)."},
+	{"3. Compras, regalos y pagos", "Las compras, los regalos, los canjes y los pagos los procesa Steam, no Steam3DS. Antes de cada operación se te pide que la confirmes en la consola. Revisa siempre lo que compras: los reembolsos, los cargos y cualquier incidencia se gestionan únicamente con el soporte de Steam, según sus condiciones."},
+	{"4. Tus datos", "La sesión y los ajustes se guardan solo en la tarjeta SD de tu consola (en /3ds/Steam3DS/). La aplicación solo se comunica con los servidores de Steam y no envía tus datos a ningún otro sitio. Cuida tu tarjeta SD: quien tenga acceso a ella podría usar tu sesión. Si la pierdes, cierra la sesión desde la web de Steam (Ajustes de la cuenta → Gestionar dispositivos)."},
+	{"5. Tu consola y el software casero", "Para usar Steam3DS hace falta una consola con firmware personalizado. Instalar y usar software casero es decisión tuya y puede afectar a la garantía de la consola o a los servicios de Nintendo. Steam3DS no modifica la consola ni su firmware."},
+	{"6. Sin garantía", "Steam3DS se ofrece «tal cual», sin garantías de ningún tipo, ni expresas ni implícitas. Puede contener errores, dejar de funcionar si Steam cambia sus servicios o no estar disponible en algún momento."},
+	{"7. Limitación de responsabilidad", "En la medida máxima que permita la ley aplicable, el autor de Steam3DS (VENOMSHiNE) no será responsable de ningún daño o perjuicio derivado del uso de la aplicación o de la imposibilidad de usarla, entre otros: restricciones, suspensiones o cierres de cuentas de Steam o de otros servicios, pérdida de datos, de objetos o de saldo, compras no deseadas o daños en la consola o en la tarjeta SD. Usas la aplicación bajo tu propia responsabilidad."},
+	{"8. Uso adecuado", "No uses Steam3DS para incumplir las normas de Steam ni la ley: nada de automatizar acciones de forma abusiva, enviar spam, suplantar a otras personas ni entrar en cuentas que no sean tuyas."},
+	{"9. Cambios en estas condiciones", "Estas condiciones pueden actualizarse con nuevas versiones de la aplicación. Si cambian, se te pedirá que vuelvas a leerlas y aceptarlas."},
+	{"10. Aceptación", "Al marcar la casilla y pulsar «Aceptar y continuar» declaras que tienes la edad mínima para usar Steam en tu país (o el permiso de tu madre, padre o tutor), que has leído estas condiciones completas y que las aceptas. Se guarda un registro de la aceptación en la tarjeta SD (/3ds/Steam3DS/aceptacion.txt) con la versión de las condiciones, la fecha y la hora, una copia del texto aceptado y las cuentas de Steam con las que inicies sesión después."},
+};
+#define NTERMS ((int)(sizeof terms_txt / sizeof *terms_txt))
+#define TERMS_TOP 54        // donde empieza el texto (arriba)
+#define TERMS_BOT 232       // y donde acaba
+
+static struct {
+	int ok;              // -1 sin mirar, 0 sin aceptar, 1 aceptadas (esta versión)
+	float scroll, total, read;
+	float ph[NTERMS][2]; // alto del título y del texto de cada apartado
+	bool measured, checked;
+	int lang;            // en qué idioma se midió
+	int pressed;         // 1 casilla, 2 salir, 3 aceptar (al tocar)
+	float drag_y;
+	bool dragging;
+	Scene next;
+} TM = {.ok = -1};
+
+static const Box B_TCHECK = {14, 116, BOT_W - 28, 40};
+static const Box B_TEXIT = {14, 176, 112, 34};
+static const Box B_TACCEPT = {134, 176, BOT_W - 148, 34};
+
+static bool terms_ok(void)
+{
+	if (TM.ok < 0) {
+		TM.ok = 0;
+		FILE *f = fopen(TERMS_FILE, "r");
+		if (f) {
+			char line[160];
+			while (fgets(line, sizeof line, f))
+				if (!strncmp(line, "Versión de las condiciones: ", 29) && atoi(line + 29) == TERMS_VERSION) TM.ok = 1;
+			fclose(f);
+		}
+	}
+	return TM.ok == 1;
+}
+
+static void terms_measure(void)
+{
+	if (TM.measured && TM.lang == (int)i18n_get()) return;
+	const float w = TOP_W - 40;
+	TM.total = 0;
+	for (int i = 0; i < NTERMS; i++) {
+		TM.ph[i][0] = ui_text_lines(_(terms_txt[i][0]), SZ_BODY, w) * 17;
+		TM.ph[i][1] = ui_text_lines(_(terms_txt[i][1]), SZ_SMALL, w) * 15;
+		TM.total += TM.ph[i][0] + 4 + TM.ph[i][1] + 14;
+	}
+	TM.total += ui_text_lines(_("Lee estas condiciones hasta el final. Para usar Steam3DS tienes que aceptarlas."), SZ_SMALL, w) * 15 + 12;
+	TM.lang = (int)i18n_get();
+	TM.measured = true;
+}
+
+static float terms_max(void)
+{
+	float m = TM.total - (TERMS_BOT - TERMS_TOP);
+	return m > 0 ? m : 0;
+}
+
+// El registro: versión, fecha, huella SHA-256 del texto aceptado (tal como se vio) y una copia
+static bool terms_save(void)
+{
+	mkdir(APP_DIR, 0777);
+	FILE *f = fopen(TERMS_FILE, "w");
+	if (!f) return false;
+	time_t now = time(NULL);
+	struct tm *tmv = gmtime(&now);   // el reloj de la consola ya es la hora local
+	char when[32];
+	strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", tmv);
+	mbedtls_sha256_context sc;
+	unsigned char dig[32];
+	mbedtls_sha256_init(&sc);
+	mbedtls_sha256_starts(&sc, 0);
+	for (int i = 0; i < NTERMS; i++)
+		for (int k = 0; k < 2; k++) {
+			const char *t = _(terms_txt[i][k]);
+			mbedtls_sha256_update(&sc, (const unsigned char *)t, strlen(t));
+			mbedtls_sha256_update(&sc, (const unsigned char *)"\n", 1);
+		}
+	mbedtls_sha256_finish(&sc, dig);
+	mbedtls_sha256_free(&sc);
+	char hex[65];
+	for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", dig[i]);
+	fprintf(f, "Steam3DS: registro de aceptación de las condiciones de uso y el aviso legal\n\n");
+	fprintf(f, "Versión de las condiciones: %d\n", TERMS_VERSION);
+	fprintf(f, "Versión de la aplicación: %s\n", APP_VERSION);
+	fprintf(f, "Fecha y hora (reloj de la consola): %s\n", when);
+	static const char *const lname[LANG_COUNT] = {"español", "English", "日本語"};
+	fprintf(f, "Idioma en que se leyeron: %s\n", lname[i18n_get() < LANG_COUNT ? i18n_get() : 0]);
+	fprintf(f, "Huella del texto aceptado (SHA-256): %s\n", hex);
+	fprintf(f, "Leídas hasta el final: sí\nCasilla «%s» marcada: sí\n\n", _("He leído y acepto las condiciones de uso y el aviso legal"));
+	fprintf(f, "Texto aceptado:\n\n%s\n\n", _("Condiciones de uso y aviso legal"));
+	for (int i = 0; i < NTERMS; i++) fprintf(f, "%s\n%s\n\n", _(terms_txt[i][0]), _(terms_txt[i][1]));
+	fprintf(f, "Cuentas de Steam con las que se ha iniciado sesión después de aceptar:\n");
+	bool ok = !ferror(f);
+	fclose(f);
+	return ok;
+}
+
+// Cada cuenta con la que se entra después de aceptar se apunta una vez en el registro
+static void terms_note_account(void)
+{
+	static u64 noted;
+	if (TM.ok != 1 || !auth_logged() || auth_info()->steamid == noted) return;
+	noted = auth_info()->steamid;
+	char id[24];
+	snprintf(id, sizeof id, "%llu", (unsigned long long)noted);
+	FILE *f = fopen(TERMS_FILE, "r");
+	if (!f) return;
+	char line[200];
+	bool seen = false;
+	while (!seen && fgets(line, sizeof line, f)) seen = strstr(line, id) != NULL;
+	fclose(f);
+	if (seen) return;
+	f = fopen(TERMS_FILE, "a");
+	if (!f) return;
+	time_t now = time(NULL);
+	char when[32];
+	strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", gmtime(&now));
+	fprintf(f, "- %s (%s), desde el %s\n", id, auth_info()->account[0] ? auth_info()->account : auth_info()->persona, when);
+	fclose(f);
+}
+
+static void terms_open(Scene next)
+{
+	TM.next = next;
+	TM.scroll = TM.read = 0;
+	TM.checked = false;
+	TM.pressed = 0;
+	go_scene(SC_TERMS, 0);
+}
+
+static void terms_accept(void)
+{
+	if (!terms_save()) {
+		toast(_("No se pudo guardar en la tarjeta SD"));
+		return;
+	}
+	TM.ok = 1;
+	netlog("condiciones: aceptadas (versión %d)", TERMS_VERSION);
+	go_scene(TM.next, 1);
+}
+
+static void draw_terms_top(void)
+{
+	terms_measure();
+	const float X = 20, W = TOP_W - 40;
+	ui_text(X, 26, _("Condiciones de uso y aviso legal"), SZ_LARGE, COL_WHITE, AL_LEFT, W);
+	ui_rrect(X, 45, ui_text_w(_("Condiciones de uso y aviso legal"), SZ_LARGE), 2, 1, col_alpha(COL_ACC, 0.8f));
+	ui_scissor(GFX_TOP, 0, TERMS_TOP, TOP_W, TERMS_BOT - TERMS_TOP);
+	float y = TERMS_TOP + 4 - TM.scroll;
+	const char *intro = _("Lee estas condiciones hasta el final. Para usar Steam3DS tienes que aceptarlas.");
+	int nl = ui_text_lines(intro, SZ_SMALL, W);
+	ui_text_wrap(X, y, W, intro, SZ_SMALL, COL_ACC, nl, 15);
+	y += nl * 15 + 12;
+	for (int i = 0; i < NTERMS; i++) {
+		float h = TM.ph[i][0] + 4 + TM.ph[i][1] + 14;
+		if (y + h > TERMS_TOP && y < TERMS_BOT) {
+			ui_text_wrap(X, y, W, _(terms_txt[i][0]), SZ_BODY, COL_WHITE, 4, 17);
+			ui_text_wrap(X, y + TM.ph[i][0] + 4, W, _(terms_txt[i][1]), SZ_SMALL, COL_TXT, 40, 15);
+		}
+		y += h;
+	}
+	ui_scissor_off();
+	// Difuminado arriba y abajo, y la barra de desplazamiento
+	ui_vgrad(0, TERMS_TOP, TOP_W, 8, col_alpha(COL_BG, 0.9f), col_alpha(COL_BG, 0));
+	if (TM.scroll < terms_max() - 1) ui_vgrad(0, TERMS_BOT - 16, TOP_W, 16, col_alpha(COL_BG, 0), col_alpha(COL_BG, 0.95f));
+	float track = TERMS_BOT - TERMS_TOP - 8, vis = (TERMS_BOT - TERMS_TOP) / (TM.total > 1 ? TM.total : 1);
+	float th = clampf(track * vis, 16, track), max = terms_max();
+	float ty = TERMS_TOP + 4 + (max > 0 ? (track - th) * TM.scroll / max : 0);
+	ui_rrect(TOP_W - 9, TERMS_TOP + 4, 3, track, 1.5f, col_alpha(COL_WHITE, 0.08f));
+	ui_rrect(TOP_W - 9, ty, 3, th, 1.5f, col_alpha(COL_ACC, 0.85f));
+}
+
+static void draw_terms_bottom(void)
+{
+	bool read = TM.read >= 1;
+	ui_text(BOT_W / 2, 12, _("Antes de empezar"), SZ_LARGE, COL_WHITE, AL_CENTER, BOT_W - 20);
+	// Lo leído: hasta el final para poder aceptar
+	fx_glass(14, 42, BOT_W - 28, 62, 12, 1, 0);
+	if (read) {
+		ui_icon(IC_CHECK, 26, 52, 12, COL_LIME);
+		ui_text(44, 50, _("Has leído las condiciones hasta el final"), SZ_SMALL, COL_LIME, AL_LEFT, BOT_W - 66);
+	} else {
+		ui_icon(IC_DOC, 26, 52, 12, COL_ACC);
+		ui_text(44, 50, _("Desliza hasta el final para continuar"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 66);
+	}
+	ui_text_wrap(26, 66, BOT_W - 52, _("Usa ↑↓ o el Circle Pad, o arrastra el dedo por esta pantalla."), SZ_TINY, COL_DIM, 2, 12);
+	ui_rrect(26, 92, BOT_W - 52, 4, 2, col_alpha(COL_WHITE, 0.10f));
+	ui_rrect(26, 92, (BOT_W - 52) * clampf(TM.read, 0, 1), 4, 2, read ? COL_LIME : COL_ACC);
+	// La casilla
+	float ca = read ? 1 : 0.4f;
+	const Box *c = &B_TCHECK;
+	if (TM.pressed == 1) ui_rrect(c->x, c->y, c->w, c->h, 10, col_alpha(COL_WHITE, 0.06f));
+	float bx = c->x + 8, by = c->y + (c->h - 20) / 2;
+	ui_rrect(bx, by, 20, 20, 5, col_alpha(TM.checked ? COL_ACC : COL_WHITE, TM.checked ? 1 : 0.12f * ca));
+	if (!TM.checked) ui_rrect(bx + 2, by + 2, 16, 16, 4, col_alpha(COL_BG, 0.9f));
+	if (TM.checked) ui_icon(IC_CHECK, bx + 4, by + 4, 12, COL_WHITE);
+	ui_text_wrap(bx + 30, c->y + (c->h - 28) / 2, c->w - 46, _("He leído y acepto las condiciones de uso y el aviso legal"), SZ_SMALL,
+		col_alpha(COL_WHITE, ca), 2, 14);
+	// Los botones
+	draw_button_k(&B_TEXIT, "B", false, IC_POWER, _("Salir"), COL_BTN2, COL_BTN2, COL_WHITE, 1, TM.pressed == 2);
+	draw_button_k(&B_TACCEPT, "X", false, IC_CHECK, _("Aceptar y continuar"), COL_ACC, C2D_Color32(0x1a, 0x9f, 0xff, 0xff), COL_WHITE,
+		TM.checked ? 1 : 0.45f, TM.pressed == 3);
+	static const char *h[] = {"↑↓", "Leer", "A", "Marcar", "X", "Aceptar"};
+	draw_hints(h, 3);
+}
+
+static void input_terms(u32 kd, u32 kh, u32 ku, touchPosition *tp, float dt)
+{
+	terms_measure();
+	float max = terms_max();
+	// Leer: cruceta o Circle Pad (mantenidos) y arrastrar por la pantalla de abajo
+	float v = 0;
+	if (kh & (KEY_DDOWN | KEY_CPAD_DOWN)) v += 1;
+	if (kh & (KEY_DUP | KEY_CPAD_UP)) v -= 1;
+	TM.scroll += v * 240 * dt;
+	bool on_ui = hit(&B_TCHECK, tp->px, tp->py) || hit(&B_TEXIT, tp->px, tp->py) || hit(&B_TACCEPT, tp->px, tp->py);
+	if (kd & KEY_TOUCH) {
+		TM.dragging = !on_ui;
+		TM.drag_y = tp->py;
+		TM.pressed = hit(&B_TCHECK, tp->px, tp->py) ? 1 : hit(&B_TEXIT, tp->px, tp->py) ? 2 : hit(&B_TACCEPT, tp->px, tp->py) ? 3 : 0;
+	}
+	if ((kh & KEY_TOUCH) && TM.dragging) {
+		TM.scroll -= (tp->py - TM.drag_y) * 1.6f;
+		TM.drag_y = tp->py;
+	}
+	int act = 0;
+	if (ku & KEY_TOUCH) {
+		act = TM.pressed;
+		TM.pressed = 0;
+		TM.dragging = false;
+	}
+	TM.scroll = clampf(TM.scroll, 0, max);
+	float r = max > 0 ? TM.scroll / max : 1;
+	if (r > TM.read) TM.read = r >= 0.995f ? 1 : r;
+	if ((kd & KEY_A) || act == 1) {
+		if (TM.read >= 1) TM.checked = !TM.checked;
+		else toast(_("Primero lee las condiciones hasta el final"));
+	}
+	if ((kd & KEY_X) || act == 3) {
+		if (TM.checked) terms_accept();
+		else toast(TM.read >= 1 ? _("Marca la casilla para aceptar") : _("Primero lee las condiciones hasta el final"));
+	}
+	if ((kd & KEY_B) || act == 2) {
+		S.ask_exit = true;
+		S.exit_anim = 0;
+	}
+}
+
 static void splash_update(float dt, u32 kd)
 {
 	// Los primeros fotogramas tardan (se está cargando todo): sin este tope la entrada se saltaba
@@ -9193,8 +9463,11 @@ static void splash_update(float dt, u32 kd)
 	} else {
 		splash_out += dt;
 		if (splash_out > 0.35f) {
-			// Con varias cuentas guardadas, primero se elige con cuál entrar
-			go_scene(auth_choosing() ? SC_ACCOUNTS : SC_STORE, 0);
+			// Con varias cuentas guardadas, primero se elige con cuál entrar; antes de nada, las
+			// condiciones de uso si aún no se han aceptado (o han cambiado)
+			Scene next = auth_choosing() ? SC_ACCOUNTS : SC_STORE;
+			if (terms_ok()) go_scene(next, 0);
+			else terms_open(next);
 			// El resto de la app no usa estos sprites: se liberan en cuanto la GPU acabe con ellos
 			sprites_free_in = 2;
 		}
@@ -10585,8 +10858,10 @@ int main(int argc, char **argv)
 			if ((ku & KEY_START) && S.start_armed) {
 				// Pulsación corta (al soltar): abre o cierra el menú
 				S.start_armed = false;
-				S.menu_open = !S.menu_open;
-				S.menu_sel = 0;
+				if (S.scene != SC_TERMS) {
+					S.menu_open = !S.menu_open;
+					S.menu_sel = 0;
+				}
 			}
 			if (!(kh & KEY_START)) S.start_hold = 0;
 			kd &= ~KEY_START;
@@ -10635,6 +10910,7 @@ int main(int argc, char **argv)
 		case SC_LOGIN: input_login(kd, dt); break;
 		case SC_PROFILE: input_profile(kd, kh, ku, &tp); break;
 		case SC_ABOUT: input_about(kd, kh); break;
+		case SC_TERMS: input_terms(kd, kh, ku, &tp, dt); break;
 		case SC_NOTIF: input_notifs(kd, kh, &tp); break;
 		case SC_FRIENDS: input_friends(kd, kh, &tp); break;
 		case SC_ACCOUNTS: input_accounts(kd, kh, &tp); break;
@@ -10650,7 +10926,8 @@ int main(int argc, char **argv)
 		auth_update();
 		// Con sesión, la biblioteca y los deseados se cargan en segundo plano (para «ya es tuyo» y
 		// «en deseados» en las fichas); se espera a que la tienda sepa el país y el idioma
-		if (auth_logged() && S.ctx_ready) {
+		terms_note_account();
+		if (auth_logged() && S.ctx_ready && TM.ok == 1) {
 			if (!tabs[TAB_LIBRARY].started) lib_start();
 			if (!tabs[TAB_WISHLIST].started) tab_more(TAB_WISHLIST);
 			if (!tabs[TAB_CART].started) {
@@ -10789,6 +11066,7 @@ int main(int argc, char **argv)
 		case SC_LOGIN: draw_login_top(); break;
 		case SC_PROFILE: draw_profile_top(); break;
 		case SC_ABOUT: draw_about_top(); break;
+		case SC_TERMS: draw_terms_top(); break;
 		case SC_NOTIF: draw_notifs_top(); break;
 		case SC_FRIENDS: draw_friends_top(); break;
 		case SC_ACCOUNTS: draw_accounts_top(); break;
@@ -10804,7 +11082,7 @@ int main(int argc, char **argv)
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS || S.scene == SC_USER || S.scene == SC_ACCSET || S.scene == SC_PCDL || S.scene == SC_POINTS || S.scene == SC_MYREV || S.scene == SC_HIST)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS || S.scene == SC_USER || S.scene == SC_ACCSET || S.scene == SC_PCDL || S.scene == SC_POINTS || S.scene == SC_MYREV || S.scene == SC_HIST || S.scene == SC_TERMS)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -10823,6 +11101,7 @@ int main(int argc, char **argv)
 		case SC_LOGIN: draw_login_bottom(); break;
 		case SC_PROFILE: draw_profile_bottom(); break;
 		case SC_ABOUT: draw_about_bottom(); break;
+		case SC_TERMS: draw_terms_bottom(); break;
 		case SC_NOTIF: draw_notifs_bottom(); break;
 		case SC_FRIENDS: draw_friends_bottom(); break;
 		case SC_ACCOUNTS: draw_accounts_bottom(); break;

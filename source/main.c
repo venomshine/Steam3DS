@@ -24,7 +24,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS, SC_USER, SC_ACCSET, SC_PCDL, SC_POINTS, SC_INV } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS, SC_USER, SC_ACCSET, SC_PCDL, SC_POINTS, SC_INV, SC_HIST } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
@@ -4097,6 +4097,102 @@ static void input_inv(u32 kd, u32 kh, touchPosition *tp)
 	}
 }
 
+// ---------------------------------------------------------------------------- Historial de compras
+
+#define HIST_MAX 60
+static struct {
+	Req *req;
+	Purchase p[HIST_MAX];
+	int n, sel;
+	bool done, failed;
+} HI;
+
+static void open_hist(void)
+{
+	if (HI.req) net_release(HI.req);
+	memset(&HI, 0, sizeof HI);
+	char ck[1200];
+	if (auth_web_cookies("store.steampowered.com", ck, sizeof ck)) HI.req = steam_req_history(ck);
+	else HI.failed = HI.done = true;
+	memset(ck, 0, sizeof ck);
+	go_scene(SC_HIST, 1);
+}
+
+static void hist_poll(void)
+{
+	if (!HI.req || HI.req->state < REQ_DONE) return;
+	int n = HI.req->state == REQ_DONE ? steam_parse_history(HI.req->data, HI.p, HIST_MAX) : -1;
+	netlog("historial de compras: %d (HTTP %ld)", n, HI.req->http);
+	HI.n = n < 0 ? 0 : n;
+	HI.failed = n < 0;
+	HI.done = true;
+	net_release(HI.req);
+	HI.req = NULL;
+}
+
+static void draw_hist_top(void)
+{
+	const float X = 16, W = TOP_W - 32;
+	ui_icon(IC_DOC, X, 26, 13, COL_ACC);
+	ui_text(X + 18, 24, _("Historial de compras"), SZ_LARGE, COL_WHITE, AL_LEFT, W - 18);
+	if (!HI.done) {
+		draw_net_wait(TOP_W / 2, 120, NULL);
+		return;
+	}
+	if (HI.failed || !HI.n) {
+		ui_text(TOP_W / 2, 116, HI.failed ? _("No se pudo cargar tu historial de compras") : _("Todavía no hay compras en tu cuenta"), SZ_BODY, COL_DIM, AL_CENTER, 380);
+		return;
+	}
+	const Purchase *p = &HI.p[HI.sel < HI.n ? HI.sel : 0];
+	fx_glass(X - 4, 50, W + 8, 120, 12, 1, 0);
+	ui_text(X + 6, 58, p->date, SZ_SMALL, COL_DIM, AL_LEFT, 200);
+	ui_text(TOP_W - X - 6, 56, p->total, SZ_LARGE, COL_LIME, AL_RIGHT, 160);
+	ui_text_wrap(X + 6, 82, W - 12, p->items, SZ_BODY, COL_WHITE, 3, 17);
+	ui_text(X + 6, 146, p->type, SZ_SMALL, COL_ACC, AL_LEFT, W - 12);
+	char t[64];
+	snprintf(t, sizeof t, _("Se muestran tus últimas %d operaciones"), HI.n);
+	ui_text(X, 206, t, SZ_TINY, COL_DIM, AL_LEFT, W);
+}
+
+static void draw_hist_bottom(void)
+{
+	fx_bar(0, 0, BOT_W, LIST_Y, true);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_icon(IC_DOC, 28, 6, 12, COL_ACC);
+	ui_text(46, 5, _("Historial de compras"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 60);
+	const float RH = 30, top = LIST_Y + 2;
+	const int vis = (int)((SCR_H - 18 - top) / RH);
+	int first = HI.sel - (vis - 2);
+	if (first < 0) first = 0;
+	for (int i = first; i < HI.n && i < first + vis; i++) {
+		const Purchase *p = &HI.p[i];
+		float y = top + (i - first) * RH;
+		bool on = i == HI.sel;
+		if (on) {
+			float br = 0.075f + 0.035f * sinf(g_time * 2.4f);
+			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
+			ui_rrect(3, y + 4, 2, RH - 8, 1, col_alpha(COL_ACC, 0.8f));
+		}
+		ui_text(12, y + 3, p->items, SZ_SMALL, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 100);
+		ui_text(BOT_W - 12, y + 3, p->total, SZ_SMALL, COL_TXT, AL_RIGHT, 80);
+		char t[96];
+		snprintf(t, sizeof t, "%s · %s", p->date, p->type);
+		ui_text(12, y + 16, t, SZ_TINY, COL_DIM, AL_LEFT, BOT_W - 24);
+	}
+	static const char *h[] = {"↑↓", "Elegir", "B", "Volver"};
+	draw_hints(h, 2);
+}
+
+static void input_hist(u32 kd, u32 kh, touchPosition *tp)
+{
+	if ((kd & KEY_B) || ((kd & KEY_TOUCH) && tp->py < LIST_Y && tp->px < 120)) {
+		go_scene(SC_SETTINGS, -1);
+		return;
+	}
+	if (key_repeat(kd, kh, KEY_DOWN) && HI.sel + 1 < HI.n) HI.sel++;
+	if (key_repeat(kd, kh, KEY_UP) && HI.sel > 0) HI.sel--;
+}
+
 // ---------------------------------------------------------------------------- Editor de tu reseña
 
 static const Box B_RUP = {12, 64, 145, 30};
@@ -4657,6 +4753,22 @@ static const Box B_PLOGOUT = {163, 186, 145, 26};
 
 static bool draw_user_bg(float dim);
 static void draw_user_avatar(float x, float y, float sz);
+
+// Tus puntos de experiencia (para el siguiente nivel) y cuántas insignias tienes
+static struct {
+	SteamXp xp;
+	bool ok;
+	Req *req;
+} XP;
+
+static void xp_poll(void)
+{
+	if (!XP.req || XP.req->state < REQ_DONE) return;
+	XP.ok = XP.req->state == REQ_DONE && steam_parse_badges(XP.req->data, &XP.xp);
+	netlog("insignias: %s (nivel %d, %d XP, %d insignias)", XP.ok ? "ok" : "fallo", XP.xp.level, XP.xp.xp, XP.xp.nbadges);
+	net_release(XP.req);
+	XP.req = NULL;
+}
 static bool user_loaded_is(u64 id);
 
 static void draw_profile_top(void)
@@ -4681,7 +4793,18 @@ static void draw_profile_top(void)
 		ui_text(122, 76, lv, SZ_SMALL, COL_WHITE, AL_CENTER, 0);
 		ui_text(140, 76, _("Nivel de Steam"), SZ_SMALL, COL_DIM, AL_LEFT, 0);
 	}
-	ui_text(108, 96, ai->account, SZ_TINY, COL_DIM, AL_LEFT, TOP_W - 120);
+	if (XP.ok && XP.xp.xp_next > 0) {
+		// Lo que falta para el siguiente nivel, como en la página de insignias
+		char xt[96];
+		snprintf(xt, sizeof xt, _("%d XP · faltan %d para el nivel %d · %d insignias"), XP.xp.xp, XP.xp.xp_next, XP.xp.level + 1, XP.xp.nbadges);
+		ui_text(108, 96, xt, SZ_TINY, COL_DIM, AL_LEFT, TOP_W - 120);
+		int span = XP.xp.xp + XP.xp.xp_next - XP.xp.xp_cur;
+		float f = span > 0 ? (float)(XP.xp.xp - XP.xp.xp_cur) / span : 0;
+		ui_rrect(108, 110, TOP_W - 124, 3, 1.5f, col_alpha(COL_WHITE, 0.12f));
+		ui_rrect(108, 110, (TOP_W - 124) * clampf(f, 0, 1), 3, 1.5f, COL_ACC);
+	} else {
+		ui_text(108, 96, ai->account, SZ_TINY, COL_DIM, AL_LEFT, TOP_W - 120);
+	}
 
 	Tab *lib = &tabs[TAB_LIBRARY];
 	if (!lib->list.count) {
@@ -6654,7 +6777,7 @@ static void input_accounts(u32 kd, u32 kh, touchPosition *tp)
 
 // ---------------------------------------------------------------------------- Configuración
 
-enum { ST_LANG, ST_REQS, ST_SOUND, ST_CACHE, ST_ACCOUNT, ST_ABOUT, ST_COUNT };
+enum { ST_LANG, ST_REQS, ST_SOUND, ST_CACHE, ST_ACCOUNT, ST_HISTORY, ST_ABOUT, ST_COUNT };
 static int set_sel;
 static Scene set_back;
 
@@ -6706,13 +6829,14 @@ static void settings_value(int i, char *out, size_t n)
 
 static void draw_settings_top(void)
 {
-	static const char *title[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Privacidad y perfil", "Acerca de Steam3DS"};
+	static const char *title[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Privacidad y perfil", "Historial de compras", "Acerca de Steam3DS"};
 	static const char *desc[ST_COUNT] = {
 		"El idioma de la app y de la tienda. Con «Idioma de la consola» se usa el que tenga configurado tu Nintendo 3DS.",
 		"Qué requisitos se muestran en la ficha de cada juego. También puedes cambiarlo en el apartado Requisitos de la ficha.",
 		"El golpe de la válvula, el bombillo, el óxido y el vapor al abrir la app. Se aplica la próxima vez que la abras.",
 		"Las imágenes de la tienda se guardan en la tarjeta SD para que aparezcan al momento la próxima vez. Ocupa como mucho 64 MB y lo más antiguo se borra solo. Vaciarla no borra nada de tu cuenta.",
 		"Quién puede ver tu perfil, tus juegos, tu lista de amigos y tu inventario, quién puede comentar, y el tema de tu perfil. Los cambios se guardan en tu cuenta de Steam.",
+		"Tus compras, regalos y fondos añadidos al monedero en Steam, con la fecha y el importe.",
 		"La versión de Steam3DS, los enlaces del proyecto, las políticas de Steam, los créditos y el aviso legal.",
 	};
 	const float X = 16, W = TOP_W - 32;
@@ -6733,9 +6857,9 @@ static void draw_settings_bottom(void)
 	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
 	ui_icon(IC_WRENCH, 28, 6, 12, COL_ACC);
 	ui_text(46, 5, _("Configuración"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
-	static const Icon ic[ST_COUNT] = {IC_CHAT, IC_PC, IC_BELL, IC_IMAGE, IC_LOCK, IC_INFO};
-	static const char *label[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Privacidad y perfil", "Acerca de Steam3DS"};
-	const float RH = 32;
+	static const Icon ic[ST_COUNT] = {IC_CHAT, IC_PC, IC_BELL, IC_IMAGE, IC_LOCK, IC_DOC, IC_INFO};
+	static const char *label[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Privacidad y perfil", "Historial de compras", "Acerca de Steam3DS"};
+	const float RH = 27;
 	for (int i = 0; i < ST_COUNT; i++) {
 		float y = LIST_Y + 4 + i * RH;
 		bool on = i == set_sel;
@@ -6744,21 +6868,22 @@ static void draw_settings_bottom(void)
 			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
 			ui_rrect(3, y + 6, 2, RH - 12, 1, col_alpha(COL_ACC, 0.8f));
 		}
-		ui_icon(ic[i], 14, y + 10, 12, on ? COL_ACC : COL_DIM);
-		ui_text(36, y + 8, _(label[i]), SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, 170);
+		ui_icon(ic[i], 14, y + 8, 12, on ? COL_ACC : COL_DIM);
+		ui_text(36, y + 6, _(label[i]), SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, 170);
 		char v[64];
 		settings_value(i, v, sizeof v);
-		if (i == ST_ABOUT || i == ST_ACCOUNT) ui_text(BOT_W - 20, y + 6, "›", SZ_LARGE, COL_ACC, AL_LEFT, 0);
-		else ui_text(BOT_W - 14, y + 9, v, SZ_SMALL, COL_ACC, AL_RIGHT, 110);
+		if (i == ST_ABOUT || i == ST_ACCOUNT || i == ST_HISTORY) ui_text(BOT_W - 20, y + 4, "›", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+		else ui_text(BOT_W - 14, y + 7, v, SZ_SMALL, COL_ACC, AL_RIGHT, 110);
 		if (i < ST_COUNT - 1) ui_hline(36, y + RH - 1, BOT_W - 44, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
 	}
 	static const char *hv[] = {"← →", "Cambiar", "↑↓", "Elegir", "B", "Volver"};
 	static const char *hc[] = {"A", "Vaciar", "↑↓", "Elegir", "B", "Volver"};
 	static const char *ha[] = {"A", "Abrir", "↑↓", "Elegir", "B", "Volver"};
-	draw_hints(set_sel == ST_CACHE ? hc : set_sel == ST_ABOUT || set_sel == ST_ACCOUNT ? ha : hv, 3);
+	draw_hints(set_sel == ST_CACHE ? hc : set_sel == ST_ABOUT || set_sel == ST_ACCOUNT || set_sel == ST_HISTORY ? ha : hv, 3);
 }
 
 static void open_accset(void);
+static void open_hist(void);
 
 static void input_settings(u32 kd, u32 kh, touchPosition *tp)
 {
@@ -6769,7 +6894,7 @@ static void input_settings(u32 kd, u32 kh, touchPosition *tp)
 	if (key_repeat(kd, kh, KEY_DOWN)) set_sel = (set_sel + 1) % ST_COUNT;
 	if (key_repeat(kd, kh, KEY_UP)) set_sel = (set_sel + ST_COUNT - 1) % ST_COUNT;
 	if ((kd & KEY_TOUCH) && tp->py >= LIST_Y + 4) {
-		int i = (int)((tp->py - LIST_Y - 4) / 32);
+		int i = (int)((tp->py - LIST_Y - 4) / 27);
 		if (i >= 0 && i < ST_COUNT) {
 			if (i == set_sel) kd |= KEY_A;
 			set_sel = i;
@@ -6801,6 +6926,11 @@ static void input_settings(u32 kd, u32 kh, touchPosition *tp)
 	case ST_ACCOUNT:
 		if (!(kd & KEY_A)) break;
 		if (auth_logged()) open_accset();
+		else toast(_("Disponible al iniciar sesión"));
+		break;
+	case ST_HISTORY:
+		if (!(kd & KEY_A)) break;
+		if (auth_logged()) open_hist();
 		else toast(_("Disponible al iniciar sesión"));
 		break;
 	}
@@ -7094,6 +7224,7 @@ static void menu_choose(int item)
 	case MI_PROFILE:
 		S.pfocus = 0;
 		user_load(auth_info()->steamid);   // tu fondo y tu marco
+		if (!XP.req) XP.req = steam_req_badges(auth_info()->steamid, auth_token());
 		go_scene(SC_PROFILE, 1);
 		if (!tabs[TAB_LIBRARY].started) tab_more(TAB_LIBRARY);
 		if (!tabs[TAB_WISHLIST].started) tab_more(TAB_WISHLIST);
@@ -9160,6 +9291,7 @@ int main(int argc, char **argv)
 		case SC_PCDL: input_pcdl(kd, kh, &tp); break;
 		case SC_POINTS: input_points(kd, kh, &tp); break;
 		case SC_INV: input_inv(kd, kh, &tp); break;
+		case SC_HIST: input_hist(kd, kh, &tp); break;
 		case SC_PAY: input_pay(kd, kh, ku, &tp, dt); break;
 		}
 		auth_update();
@@ -9229,6 +9361,8 @@ int main(int argc, char **argv)
 		pcdl_poll();
 		points_poll();
 		inv_poll();
+		hist_poll();
+		xp_poll();
 
 		// Desplazamientos suaves
 		if (!CUR->finger) CUR->scroll = approach(CUR->scroll, CUR->scroll_target, 18);
@@ -9306,12 +9440,13 @@ int main(int argc, char **argv)
 		case SC_PCDL: draw_pcdl_top(); break;
 		case SC_POINTS: draw_points_top(); break;
 		case SC_INV: draw_inv_top(); break;
+		case SC_HIST: draw_hist_top(); break;
 		case SC_PAY: draw_pay_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS || S.scene == SC_USER || S.scene == SC_ACCSET || S.scene == SC_PCDL || S.scene == SC_POINTS || S.scene == SC_INV)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS || S.scene == SC_USER || S.scene == SC_ACCSET || S.scene == SC_PCDL || S.scene == SC_POINTS || S.scene == SC_INV || S.scene == SC_HIST)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -9339,6 +9474,7 @@ int main(int argc, char **argv)
 		case SC_PCDL: draw_pcdl_bottom(); break;
 		case SC_POINTS: draw_points_bottom(); break;
 		case SC_INV: draw_inv_bottom(); break;
+		case SC_HIST: draw_hist_bottom(); break;
 		case SC_PAY: draw_pay_bottom(); break;
 		}
 		C2D_ViewReset();

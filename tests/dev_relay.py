@@ -466,6 +466,9 @@ def fake_get(path, q):
         return {"response": {"total": len(ugc), "publishedfiledetails": [
             {"publishedfileid": str(1000 + i), "consumer_appid": app, "file_type": 5, "time_created": now - (i + 1) * 5 * 86400,
              "file_url": "https://images.steamusercontent.com/ugc/%s/" % u, "short_description": notes[i]} for i, u in enumerate(ugc)]}}
+    if path.endswith("GetBadges/v1/"):
+        return {"response": {"badges": [{"badgeid": i, "level": 1, "xp": 100} for i in range(17)], "player_xp": 2366,
+                             "player_level": 23, "player_xp_needed_to_level_up": 134, "player_xp_needed_current_level": 2300}}
     if path.endswith("GetSteamLevel/v1/"):
         return {"response": {"player_level": 23}}
     if path.endswith("GetOwnedGames/v1/"):
@@ -641,6 +644,22 @@ class Relay(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             sys.stderr.write("FAKE GET userdata\n")
+            return
+        if FAKE and host == "store.steampowered.com" and path == "account/history/":
+            rows = [("18 OCT 2026", ["Hades II", "Hades II - Banda sonora"], "Compra", "Mastercard", "31,98&euro;"),
+                    ("2 OCT 2026", ["Fondos del monedero de Steam"], "Compra", "PayPal", "20,00&euro;"),
+                    ("14 SEP 2026", ["Stardew Valley"], "Regalo enviado", "Cartera", "13,99&euro;"),
+                    ("30 AGO 2026", ["Cyberpunk 2077"], "Compra", "Cartera", "17,99&euro;")]
+            trs = "".join('<tr class="wallet_table_row wallet_table_row_amt_change "><td class="wht_date">%s</td><td class="wht_items">%s'
+                          '<div class="wth_payment"></div></td><td class="wht_type "><div>%s</div><div class="wth_payment">%s</div></td>'
+                          '<td class="wht_total ">%s</td></tr>' % (d, "".join("<div>%s</div>" % i for i in it), t, pm, tot)
+                          for d, it, t, pm, tot in rows)
+            body = ('<html><table class="wallet_history_table"><tbody>%s</tbody></table></html>' % trs).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=UTF-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if FAKE and host == "checkout.steampowered.com" and path.startswith("checkout/"):
             r = fake_checkout(method, path, q, self.body, self.headers)

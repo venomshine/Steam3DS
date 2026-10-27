@@ -330,6 +330,17 @@ int main(void) {
 	CHECK(nsinv == 5 && itot > 1000 && sinv[0].amount >= 1 && sinv[0].icon[0]);
 	free(sinv);
 	CHECK(steam_parse_inventory("null", &sinv, &itot) == -1);
+	// Historial de compras
+	Purchase hp[3];
+	const char *hist = "<table class=\"wallet_history_table\"><tbody>"
+		"<tr class=\"wallet_table_row wallet_table_row_amt_change \"><td class=\"wht_date\">18 OCT 2024</td>"
+		"<td class=\"wht_items\"><div>Hades II</div>\n<div>Hades II - Banda sonora</div><div class=\"wth_payment\"></div></td>"
+		"<td class=\"wht_type \"><div>Compra</div><div class=\"wth_payment\">Mastercard</div></td>"
+		"<td class=\"wht_total \">21,99&euro;</td><td class=\"wht_wallet_change wallet_column\"></td></tr></tbody></table>";
+	CHECK(steam_parse_history(hist, hp, 3) == 1);
+	printf("historial: [%s] [%s] [%s] [%s]\n", hp[0].date, hp[0].items, hp[0].type, hp[0].total);
+	CHECK(!strcmp(hp[0].date, "18 OCT 2024") && strstr(hp[0].items, "Hades II") && strstr(hp[0].type, "Compra"));
+	CHECK(steam_parse_history("<html>login</html>", hp, 3) == -1);
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

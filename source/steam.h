@@ -470,3 +470,18 @@ typedef struct {
 } InvItem;
 Req *steam_req_inventory(u64 steamid, const char *cookies);
 int steam_parse_inventory(const char *json, InvItem **out, int *total);   // malloc; -1 si falla (privado)
+
+// Historial de compras (la página de tu cuenta en la tienda: account/history)
+typedef struct {
+	char date[24];
+	char items[160];
+	char type[48];
+	char total[24];
+} Purchase;
+Req *steam_req_history(const char *cookies);
+int steam_parse_history(const char *html, Purchase *out, int max);   // -1 si no es la página del historial
+
+// Tus puntos de experiencia y tus insignias (IPlayerService/GetBadges)
+typedef struct { int level, xp, xp_next, xp_cur, nbadges; } SteamXp;
+Req *steam_req_badges(u64 steamid, const char *token);
+bool steam_parse_badges(const char *json, SteamXp *out);

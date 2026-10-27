@@ -451,7 +451,7 @@ static void html_to_lines(const char *in, char *out, size_t n)
 		} else if (*in == '&') {
 			static const struct { const char *e; const char *r; } ents[] = {
 				{"&amp;", "&"}, {"&quot;", "\""}, {"&lt;", "<"}, {"&gt;", ">"}, {"&nbsp;", " "},
-				{"&#39;", "'"}, {"&reg;", "®"}, {"&trade;", "™"}, {"&copy;", "©"},
+				{"&#39;", "'"}, {"&reg;", "®"}, {"&trade;", "™"}, {"&copy;", "©"}, {"&euro;", "€"}, {"&pound;", "£"},
 			};
 			bool done = false;
 			for (size_t i = 0; i < sizeof ents / sizeof *ents; i++) {
@@ -2913,4 +2913,94 @@ int steam_parse_inventory(const char *json, InvItem **out, int *total)
 	free(keys);
 	cJSON_Delete(root);
 	return n;
+}
+
+// ----------------------------------------------------------------------------
+// Historial de compras
+
+Req *steam_req_history(const char *cookies)
+{
+	return net_request("https://store.steampowered.com/account/history/", NULL, cookies);
+}
+
+// El texto de la celda <td class="wht_…"> (sin etiquetas), dentro de la fila
+static void history_cell(const char *row, const char *row_end, const char *cls, char *out, size_t n)
+{
+	out[0] = 0;
+	char key[48];
+	snprintf(key, sizeof key, "class=\"%s", cls);
+	const char *c = strstr(row, key);
+	if (!c || c > row_end) return;
+	c = strchr(c, '>');
+	const char *e = c ? strstr(c, "</td>") : NULL;
+	if (!e) return;
+	// Cada <div> de la celda en su línea (el método de pago va en otro <div>)
+	size_t l = (size_t)(e - c - 1);
+	char *raw = malloc(l * 2 + 16);
+	if (!raw) return;
+	size_t o = 0;
+	for (const char *q = c + 1; q < e; q++) {
+		if (!strncmp(q, "</div>", 6)) raw[o++] = '\n';
+		raw[o++] = *q;
+	}
+	memcpy(raw + o, "</td>", 6);
+	html_between(raw, "</td>", out, n);
+	free(raw);
+}
+
+int steam_parse_history(const char *html, Purchase *out, int max)
+{
+	if (!html || !strstr(html, "wallet_history_table")) return -1;
+	int n = 0;
+	for (const char *r = strstr(html, "wallet_table_row"); r && n < max; r = strstr(r + 16, "wallet_table_row")) {
+		const char *re = strstr(r, "</tr>");
+		if (!re) break;
+		Purchase *p = &out[n];
+		history_cell(r, re, "wht_date", p->date, sizeof p->date);
+		if (!p->date[0]) continue;
+		// Varios juegos en la misma compra: uno por línea → separados por comas
+		char items[400], joined[400];
+		history_cell(r, re, "wht_items", items, sizeof items);
+		size_t o = 0;
+		for (char *line = strtok(items, "\n"); line && o < sizeof joined - 4; line = strtok(NULL, "\n")) {
+			if (!*line) continue;
+			o += snprintf(joined + o, sizeof joined - o, "%s%s", o ? ", " : "", line);
+		}
+		joined[o < sizeof joined ? o : sizeof joined - 1] = 0;
+		copy_utf8(p->items, sizeof p->items, joined);
+		char type[120];
+		history_cell(r, re, "wht_type", type, sizeof type);
+		char *nl = strchr(type, '\n');
+		if (nl) *nl = 0;
+		copy_utf8(p->type, sizeof p->type, type);
+		history_cell(r, re, "wht_total", p->total, sizeof p->total);
+		nl = strchr(p->total, '\n');
+		if (nl) *nl = 0;
+		n++;
+		r = re;
+	}
+	return n;
+}
+
+Req *steam_req_badges(u64 steamid, const char *token)
+{
+	char url[1300];
+	snprintf(url, sizeof url, "https://api.steampowered.com/IPlayerService/GetBadges/v1/?access_token=%s&steamid=%llu", token, (unsigned long long)steamid);
+	return net_get(url, LANE_API);
+}
+
+bool steam_parse_badges(const char *json, SteamXp *out)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	bool ok = resp && cJSON_GetObjectItemCaseSensitive(resp, "player_xp");
+	if (ok) {
+		out->level = (int)jnum(resp, "player_level", 0);
+		out->xp = (int)jnum(resp, "player_xp", 0);
+		out->xp_next = (int)jnum(resp, "player_xp_needed_to_level_up", 0);
+		out->xp_cur = (int)jnum(resp, "player_xp_needed_current_level", 0);
+		out->nbadges = cJSON_GetArraySize(cJSON_GetObjectItemCaseSensitive(resp, "badges"));
+	}
+	cJSON_Delete(root);
+	return ok;
 }

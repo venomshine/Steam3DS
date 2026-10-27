@@ -44,6 +44,7 @@ static unsigned long long now_ms(void) { return osGetTime(); }
 #define EMSG_SERVICE_RESPONSE 147
 #define EMSG_SERVICE_CALL 151
 #define EMSG_LOGOFF 706
+#define EMSG_LICENSE_LIST 780
 #define EMSG_LOGON_RESPONSE 751
 #define EMSG_LOGON 5514
 #define EMSG_PICS_INFO 8903
@@ -394,6 +395,11 @@ typedef struct {
 	int resp_eresult;
 	uint8_t *resp;
 	size_t resp_n;
+	// tus licencias (las manda Steam solo al iniciar sesión): paquete y su token
+	bool got_licenses;
+	uint32_t *pkgs;
+	uint64_t *pkg_tok;
+	int npkgs;
 } Cm;
 
 static bool cm_send(Ws *w, Cm *c, uint32_t emsg, Pb *hdr_extra, Pb *body)
@@ -515,6 +521,34 @@ static void cm_packet(Cm *c, const uint8_t *d, size_t n, int depth)
 		c->logged_on = true;
 		if (sid) c->steamid = sid;
 		c->session = (int32_t)session;
+	} else if (emsg == EMSG_LICENSE_LIST && !c->got_licenses) {
+		// Las caducadas, canceladas o prestadas por otro (familia) no cuentan
+		PbR b = {body, body + bn};
+		int cap = 0;
+		while (pbr_next(&b, &f)) {
+			if (f.field != 2 || f.wire != 2) continue;
+			uint64_t pkg = 0, flags = 0, tok = 0, owner = 0;
+			PbR l = {f.d, f.d + f.len};
+			PbF g;
+			while (pbr_next(&l, &g)) {
+				if (g.field == 1) pkg = g.v;
+				else if (g.field == 7) flags = g.v;
+				else if (g.field == 12) owner = g.v;
+				else if (g.field == 17) tok = g.v;
+			}
+			if (!pkg || (flags & (8 | 16 | 32 | 1024)) || (owner && owner != (uint32_t)c->steamid)) continue;
+			if (c->npkgs == cap) {
+				cap = cap ? cap * 2 : 128;
+				uint32_t *np = realloc(c->pkgs, cap * sizeof(uint32_t));
+				uint64_t *nt = realloc(c->pkg_tok, cap * sizeof(uint64_t));
+				if (np) c->pkgs = np;
+				if (nt) c->pkg_tok = nt;
+				if (!np || !nt) break;
+			}
+			c->pkgs[c->npkgs] = (uint32_t)pkg;
+			c->pkg_tok[c->npkgs++] = tok;
+		}
+		c->got_licenses = true;
 	} else if (job_target && job_target == c->want_job) {
 		c->got_response = true;
 		c->resp_eresult = (int)eresult;
@@ -750,13 +784,126 @@ static int pics_closed(Ws *w, Cm *c, const uint32_t *apps, int n, uint32_t **out
 	return closed;
 }
 
+// ---------------------------------------------------------------------------- tus licencias
+
+// Como cm_wait, pero como mucho ms (lo que llega a medias se queda para después)
+static bool cm_wait_ms(Ws *w, Cm *c, bool *flag, int ms)
+{
+	unsigned long long keep = w->deadline, until = now_ms() + ms;
+	if (until < w->deadline) w->deadline = until;
+	char *err = w->err, tmp[64] = "";
+	size_t errsz = w->errsz;
+	w->err = tmp;   // que no tarde no es un error de la sesión
+	w->errsz = sizeof tmp;
+	bool ok = cm_wait(w, c, flag);
+	w->err = err;
+	w->errsz = errsz;
+	w->deadline = keep;
+	return ok;
+}
+
+typedef struct { uint32_t *ids; int n, cap; } Ids;
+
+static void ids_add(Ids *a, uint32_t id)
+{
+	for (int i = 0; i < a->n; i++)
+		if (a->ids[i] == id) return;
+	if (a->n == a->cap) {
+		int cap = a->cap ? a->cap * 2 : 256;
+		uint32_t *n = realloc(a->ids, cap * sizeof(uint32_t));
+		if (!n) return;
+		a->ids = n;
+		a->cap = cap;
+	}
+	a->ids[a->n++] = id;
+}
+
+// La ficha de un paquete viene en KeyValues binario: se recogen los números de «appids»
+static const uint8_t *kv_walk(const uint8_t *p, const uint8_t *end, bool in_apps, Ids *out, int depth)
+{
+	while (p && p < end) {
+		uint8_t type = *p++;
+		if (type == 8 || type == 11) return p;
+		const uint8_t *name = p;
+		while (p < end && *p) p++;
+		if (p >= end) return NULL;
+		size_t nl = (size_t)(p - name);
+		p++;
+		switch (type) {
+		case 0:
+			if (depth > 8) return NULL;
+			p = kv_walk(p, end, nl == 6 && !memcmp(name, "appids", 6), out, depth + 1);
+			break;
+		case 1:
+			while (p < end && *p) p++;
+			p++;
+			break;
+		case 2: case 3: case 4: case 6:
+			if (p + 4 > end) return NULL;
+			if (in_apps && type == 2) ids_add(out, p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24);
+			p += 4;
+			break;
+		case 7: case 10:
+			p += 8;
+			break;
+		default:
+			return NULL;   // (5: texto ancho, no se usa en los paquetes)
+		}
+	}
+	return p;
+}
+
+// Las apps de tus licencias: lo que el cliente de Steam enseña en la biblioteca (también las demos
+// que ni GetOwnedGames ni la tienda dan). -1 si Steam no mandó las licencias
+static int licensed_apps(Ws *w, Cm *c, uint32_t **out)
+{
+	if (!c->got_licenses) cm_wait_ms(w, c, &c->got_licenses, 4000);
+	if (!c->got_licenses) {
+		netlog("cm: Steam no mandó tus licencias");
+		return -1;
+	}
+	Ids apps = {0};
+	for (int at = 0; at < c->npkgs; at += 250) {
+		int k = c->npkgs - at < 250 ? c->npkgs - at : 250;
+		Pb hdr = {0}, req = {0};
+		c->want_job = 10 + at;
+		c->got_response = false;
+		pb_fixed64(&hdr, 10, c->want_job);
+		for (int i = at; i < at + k; i++) {
+			Pb a = {0};
+			pb_u64(&a, 1, c->pkgs[i]);
+			if (c->pkg_tok[i]) pb_u64(&a, 2, c->pkg_tok[i]);
+			pb_bytes(&req, 1, a.b, a.n);
+			free(a.b);
+		}
+		pb_u64(&req, 7, 1);
+		bool sent = cm_send(w, c, EMSG_PICS_INFO, &hdr, &req);
+		free(hdr.b);
+		free(req.b);
+		if (!sent || !cm_wait(w, c, &c->got_response)) break;
+		PbR r = {c->resp, c->resp + c->resp_n};
+		PbF f, g;
+		while (pbr_next(&r, &f)) {
+			if (f.field != 3 || f.wire != 2) continue;   // packages
+			PbR a = {f.d, f.d + f.len};
+			while (pbr_next(&a, &g))
+				if (g.field == 5 && g.wire == 2 && g.len > 4) kv_walk(g.d + 4, g.d + g.len, false, &apps, 0);
+		}
+	}
+	netlog("cm: %d licencias, %d apps", c->npkgs, apps.n);
+	*out = apps.ids;
+	return apps.n;
+}
+
 // ---------------------------------------------------------------------------- la sesión
 
 // Lo que se pide en la sesión: tus ocultos, o qué playtests de la lista ya están cerrados
 typedef struct {
-	int kind;   // 0 ocultos, 1 playtests
+	int kind;   // 0 ocultos (y las apps de tus licencias), 1 playtests
 	const uint32_t *apps;
 	int napps;
+	uint32_t *lic;   // salida (kind 0)
+	int nlic;
 } Job;
 
 static int hidden_call(Ws *w, Cm *c, uint32_t **ids, char *err, size_t errsz)
@@ -784,7 +931,7 @@ static int hidden_call(Ws *w, Cm *c, uint32_t **ids, char *err, size_t errsz)
 
 // La sesión con el servidor: con token del chat web (o anónima, solo para las pruebas sin cuenta)
 static int cm_session(const char *endpoint, const char *account, const char *token, uint64_t steamid,
-                      const Job *job, uint32_t **ids, char *err, size_t errsz)
+                      Job *job, uint32_t **ids, char *err, size_t errsz)
 {
 	Ws w = {0};
 	w.err = err;
@@ -818,10 +965,15 @@ static int cm_session(const char *endpoint, const char *account, const char *tok
 		goto out;
 	}
 	if (job->kind == 1) result = pics_closed(&w, &c, job->apps, job->napps, ids, err, errsz);
-	else result = hidden_call(&w, &c, ids, err, errsz);
+	else {
+		result = hidden_call(&w, &c, ids, err, errsz);
+		job->nlic = licensed_apps(&w, &c, &job->lic);
+	}
 	cm_send(&w, &c, EMSG_LOGOFF, NULL, NULL);
 out:
 	free(c.resp);
+	free(c.pkgs);
+	free(c.pkg_tok);
 	ws_close(&w);
 	return result;
 }
@@ -842,7 +994,7 @@ static int pick_endpoint(char *out, size_t n)
 }
 
 // Con tu sesión web: el token del chat web, un servidor de Steam y la sesión con el trabajo
-static int cm_run(const char *jar, const Job *job, uint32_t **ids, char *err, size_t errsz)
+static int cm_run(const char *jar, Job *job, uint32_t **ids, char *err, size_t errsz)
 {
 	*ids = NULL;
 	err[0] = 0;
@@ -872,7 +1024,9 @@ static int cm_run(const char *jar, const Job *job, uint32_t **ids, char *err, si
 int cm_fetch_hidden(const char *jar, uint32_t **ids, char *err, size_t errsz)
 {
 	Job job = {0};
-	return cm_run(jar, &job, ids, err, errsz);
+	int n = cm_run(jar, &job, ids, err, errsz);
+	free(job.lic);
+	return n;
 }
 
 int cm_fetch_closed(const char *jar, const uint32_t *apps, int n, uint32_t **ids, char *err, size_t errsz)
@@ -891,6 +1045,8 @@ static struct {
 	uint32_t *ids;
 	int n;
 	char err[128];
+	uint32_t *lic;
+	int nlic;
 } T;
 
 static void cm_thread(void *arg)
@@ -918,7 +1074,11 @@ static Thread th;
 static bool cm_start(const char *jar, int kind, const uint32_t *apps, int n)
 {
 	if (T.running) return false;
+	uint32_t *lic = T.lic;   // lo de las licencias se guarda hasta que se recoja
+	int nlic = T.nlic;
 	memset(&T, 0, sizeof T);
+	T.lic = lic;
+	T.nlic = nlic;
 	T.jar = strdup(jar ? jar : "");
 	if (n > 0) T.apps = malloc(n * sizeof(uint32_t));
 	if (!T.jar || (n > 0 && !T.apps)) {
@@ -960,6 +1120,10 @@ static bool cm_poll(int kind, uint32_t **ids, int *n, char *err, size_t errsz)
 	if (!T.running || !T.done || T.job.kind != kind) return false;
 	*ids = T.ids;
 	*n = T.n;
+	free(T.lic);
+	T.lic = T.job.lic;   // se recoge con cm_licensed
+	T.nlic = T.job.nlic;
+	T.job.lic = NULL;
 	snprintf(err, errsz, "%s", T.err);
 	T.ids = NULL;
 	T.running = false;
@@ -968,6 +1132,15 @@ static bool cm_poll(int kind, uint32_t **ids, int *n, char *err, size_t errsz)
 
 bool cm_hidden_start(const char *jar) { return cm_start(jar, 0, NULL, 0); }
 bool cm_hidden_poll(uint32_t **ids, int *n, char *err, size_t errsz) { return cm_poll(0, ids, n, err, errsz); }
+int cm_licensed(uint32_t **apps)
+{
+	*apps = T.lic;
+	int n = T.nlic;
+	T.lic = NULL;
+	T.nlic = 0;
+	return *apps ? n : -1;
+}
+
 bool cm_closed_start(const char *jar, const uint32_t *apps, int n) { return n > 0 && cm_start(jar, 1, apps, n); }
 bool cm_closed_poll(uint32_t **ids, int *n, char *err, size_t errsz) { return cm_poll(1, ids, n, err, errsz); }
 
@@ -990,7 +1163,10 @@ int main(int argc, char **argv)
 	uint32_t *ids = NULL;
 	int n = cm_session(ep, NULL, NULL, 0, &job, &ids, err, sizeof err);
 	printf("resultado %d, %s\n", n, err);
-	for (int i = 0; i < n; i++) printf("cerrado %u\n", ids[i]);
+	for (int i = 0; na && i < n; i++) printf("cerrado %u\n", ids[i]);
+	printf("licencias: %d apps\n", job.nlic);
+	for (int i = 0; i < job.nlic && i < 20; i++) printf("app %u\n", job.lic[i]);
+	free(job.lic);
 	free(ids);
 	return 0;
 }

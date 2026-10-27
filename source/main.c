@@ -456,7 +456,8 @@ static void hidden_ask(void);
 
 // Los juegos que ocultaste en Steam (tu colección «Ocultos»). La web de Steam no los da: se piden
 // a un servidor de Steam como lo hace el chat web (cm.c) y se guarda una copia en la SD
-static struct { u32 *ids; int n, cap; bool loaded, asked; } HID;
+// En la misma conexión llegan las apps de tus licencias (lic): las demos que no da la web
+static struct { u32 *ids; int n, cap; bool loaded, asked, cm_done; u64 asked_at; u32 *lic; int nlic; } HID;
 
 static void tab_more(int ti)
 {
@@ -721,7 +722,10 @@ static void hidden_ask(void)
 	if (!auth_logged() || HID.asked) return;
 	static char jar[10240];
 	if (!auth_web_jar(jar, sizeof jar)) return;
-	if (cm_hidden_start(jar)) HID.asked = true;
+	if (cm_hidden_start(jar)) {
+		HID.asked = true;
+		HID.asked_at = osGetTime();
+	}
 	memset(jar, 0, sizeof jar);
 }
 
@@ -735,6 +739,16 @@ static void hidden_poll(void)
 	char err[128];
 	if (!cm_hidden_poll(&ids, &n, err, sizeof err)) return;
 	netlog("biblioteca: ocultos de Steam -> %d%s%s", n, err[0] ? " · " : "", err);
+	u32 *lic = NULL;
+	int nl = cm_licensed(&lic);
+	if (HID.asked) {
+		HID.cm_done = true;
+		free(HID.lic);
+		HID.lic = lic;
+		HID.nlic = nl > 0 ? nl : 0;
+		lic = NULL;
+	}
+	free(lic);
 	if (n < 0 || !HID.asked) {   // falló, o cambiaste de cuenta mientras tanto
 		free(ids);
 		return;
@@ -1083,6 +1097,8 @@ static void owned_poll(Tab *t)
 		}
 		return;
 	} else {
+		// Las licencias llegan por la conexión de los ocultos: se espera a que acabe (tiene su plazo)
+		if (HID.asked && !HID.cm_done && osGetTime() < HID.asked_at + 25000) return;
 		u32 *ids = NULL;
 		int n = r->state == REQ_DONE ? steam_parse_userdata_owned(r->data, &ids) : -1;
 		netlog("biblioteca: userdata de la tienda: %d juegos (HTTP %ld)", n, r->http);
@@ -1104,6 +1120,22 @@ static void owned_poll(Tab *t)
 			free(ids);
 			return;
 		}
+		// Y lo de tus licencias que la tienda no cuenta (demos que se añaden solas, por ejemplo)
+		int from_store = n, extra = 0;
+		if (HID.nlic && n >= 0) {
+			u32 *more = realloc(ids, (n + HID.nlic) * sizeof(u32));
+			if (more) {
+				ids = more;
+				for (int i = 0; i < HID.nlic; i++) {
+					bool dup = false;
+					for (int j = 0; j < from_store && !dup; j++) dup = ids[j] == HID.lic[i];
+					if (!dup) {
+						ids[n++] = HID.lic[i];
+						extra++;
+					}
+				}
+			}
+		}
 		// Solo los que GetOwnedGames no trajo
 		int m = 0;
 		for (int i = 0; i < n; i++) {
@@ -1111,7 +1143,7 @@ static void owned_poll(Tab *t)
 			for (int j = 0; j < t->lib_base && !dup; j++) dup = t->list.rows[j].appid == ids[i];
 			if (!dup) ids[m++] = ids[i];
 		}
-		if (t->lib_base) netlog("biblioteca: %d de GetOwnedGames y %d más de la tienda", t->lib_base, m);
+		if (t->lib_base) netlog("biblioteca: %d de GetOwnedGames y %d más de la tienda (%d de tus licencias)", t->lib_base, m, extra);
 		n = m;
 		free(t->wish);
 		t->wish = ids;
@@ -1311,6 +1343,7 @@ static void account_lists_clear(void)
 	notif_reset();
 	flist_reset();
 	free(HID.ids);
+	free(HID.lic);
 	memset(&HID, 0, sizeof HID);   // si hay una consulta en marcha, su resultado se descarta al llegar
 	lib_aside.count = 0;
 	if (MRG.req) net_release(MRG.req);

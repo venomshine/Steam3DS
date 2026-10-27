@@ -16,6 +16,9 @@ int cm_fetch_hidden(const char *jar, uint32_t **ids, char *err, size_t errsz);
 // true cuando terminó, con el resultado (n < 0 si falló)
 bool cm_hidden_start(const char *jar);
 bool cm_hidden_poll(uint32_t **ids, int *n, char *err, size_t errsz);
+// Y en la misma conexión, las apps de tus licencias (como las ve el cliente de Steam): tras
+// cm_hidden_poll, una vez (*apps se libera con free); -1 si Steam no las mandó
+int cm_licensed(uint32_t **apps);
 
 // Cuáles de estos playtests ya cerró su estudio (como los ve el cliente de Steam: la ficha de la app,
 // con el token de acceso de tu cuenta). En un hilo, como los ocultos; *ids, los cerrados

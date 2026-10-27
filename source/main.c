@@ -24,7 +24,7 @@
 // ============================================================================
 // Estado
 
-typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS, SC_USER, SC_ACCSET } Scene;
+typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_PAY, SC_ABOUT, SC_NOTIF, SC_FRIENDS, SC_ACCOUNTS, SC_SETTINGS, SC_USER, SC_ACCSET, SC_PCDL } Scene;
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
@@ -164,7 +164,7 @@ static struct {
 } S;
 
 enum { BT_NONE, BT_IGNORE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
-	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW, BT_RUP, BT_RDOWN, BT_RTEXT, BT_RVIS, BT_RCANCEL, BT_RSEND };
+	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW, BT_RUP, BT_RDOWN, BT_RTEXT, BT_RVIS, BT_RCANCEL, BT_RSEND, BT_PDL };
 
 // Pestañas de la tienda
 #define HOME_PARTS 4
@@ -3259,6 +3259,282 @@ static void input_remote(const AppInfo *a, u32 kd, u32 kh, touchPosition *tp)
 	RP.inst = steam_req_remote_install(RP.pc[pick].id, a->appid, auth_token());
 }
 
+// ---------------------------------------------------------------------------- Descargas de tu PC
+
+static struct {
+	Req *pcs, *apps, *act;
+	RemotePC pc[RP_MAX];
+	int npc, cur, sel;
+	PcApp *a;
+	int na;
+	long long freeb;
+	bool pcs_done, apps_done, failed;
+	u64 refresh_at, confirm_at;
+	u32 confirm_app;
+	int act_kind;              // 1 pausar/reanudar, 2 desinstalar
+	float scroll;
+} DL;
+
+static void pcdl_load_apps(void)
+{
+	if (DL.apps || DL.cur >= DL.npc) return;
+	DL.apps = steam_req_pc_apps(DL.pc[DL.cur].id, auth_token());
+}
+
+static void open_pcdl(void)
+{
+	if (DL.pcs) net_release(DL.pcs);
+	if (DL.apps) net_release(DL.apps);
+	free(DL.a);
+	Req *act = DL.act;
+	memset(&DL, 0, sizeof DL);
+	DL.act = act;
+	DL.pcs = steam_req_remote_pcs(auth_token());
+	go_scene(SC_PCDL, 1);
+}
+
+static bool pcdl_any_paused(void)
+{
+	for (int i = 0; i < DL.na; i++)
+		if (DL.a[i].changing && DL.a[i].paused) return true;
+	return false;
+}
+
+static bool pcdl_any_changing(void)
+{
+	for (int i = 0; i < DL.na; i++)
+		if (DL.a[i].changing) return true;
+	return false;
+}
+
+static void pcdl_poll(void)
+{
+	if (DL.pcs && DL.pcs->state >= REQ_DONE) {
+		int n = DL.pcs->state == REQ_DONE ? steam_parse_remote_pcs(DL.pcs->data, DL.pc, RP_MAX) : -1;
+		netlog("descargas del PC: %d equipos", n);
+		DL.npc = n < 0 ? 0 : n;
+		DL.failed = n < 0;
+		DL.pcs_done = true;
+		net_release(DL.pcs);
+		DL.pcs = NULL;
+		pcdl_load_apps();
+	}
+	if (DL.apps && DL.apps->state >= REQ_DONE) {
+		PcApp *a = NULL;
+		long long fb = 0;
+		int n = DL.apps->state == REQ_DONE ? steam_parse_pc_apps(DL.apps->data, &a, &fb) : -1;
+		if (n >= 0) {
+			u32 keep = DL.sel < DL.na ? DL.a[DL.sel].appid : 0;
+			free(DL.a);
+			DL.a = a;
+			DL.na = n;
+			DL.freeb = fb;
+			// La misma fila elegida aunque cambie el orden
+			DL.sel = 0;
+			for (int i = 0; i < n; i++)
+				if (a[i].appid == keep) DL.sel = i;
+		} else {
+			free(a);
+		}
+		if (!DL.apps_done) netlog("descargas del PC: %d juegos (HTTP %ld)", n, DL.apps->http);
+		DL.apps_done = true;
+		net_release(DL.apps);
+		DL.apps = NULL;
+		DL.refresh_at = osGetTime() + (pcdl_any_changing() ? 4000 : 15000);
+	}
+	// Se refresca solo mientras miras la pantalla (más a menudo si algo se está descargando)
+	if (S.scene == SC_PCDL && DL.apps_done && !DL.apps && osGetTime() > DL.refresh_at) pcdl_load_apps();
+	if (DL.act && DL.act->state >= REQ_DONE) {
+		bool ok = DL.act->state == REQ_DONE && DL.act->http == 200 && (DL.act->eresult == 1 || DL.act->eresult == 0);
+		netlog("descargas del PC: acción %d -> %s (HTTP %ld, eresult %d)", DL.act_kind, ok ? "ok" : "fallo", DL.act->http, DL.act->eresult);
+		const char *t = DL.act_kind == 2 ? (ok ? _("Se ha empezado a desinstalar en tu PC") : _("No se pudo desinstalar"))
+			: ok ? _("Hecho. Tu PC lo aplicará en unos segundos") : _("Tu PC no respondió. Comprueba que Steam sigue abierto");
+		toast_icon(t, IC_PC);
+		net_release(DL.act);
+		DL.act = NULL;
+		DL.refresh_at = osGetTime() + 1500;
+	}
+}
+
+static void fmt_bytes(long long b, char *out, size_t n)
+{
+	if (b >= (1LL << 30)) snprintf(out, n, "%.1f GB", b / 1073741824.0);
+	else if (b >= (1 << 20)) snprintf(out, n, "%.0f MB", b / 1048576.0);
+	else snprintf(out, n, "%lld KB", b >> 10);
+}
+
+static void pcdl_status(const PcApp *a, char *out, size_t n, u32 *col)
+{
+	*col = COL_DIM;
+	if (a->changing && a->total > 0) {
+		char d[24], t[24];
+		fmt_bytes(a->done, d, sizeof d);
+		fmt_bytes(a->total, t, sizeof t);
+		int pct = (int)(a->done * 100 / a->total);
+		if (a->paused) snprintf(out, n, _("En pausa · %d %% · %s de %s"), pct, d, t);
+		else if (a->queue > 0) snprintf(out, n, _("En cola (%d) · %d %%"), a->queue, pct);
+		else snprintf(out, n, _("Descargando · %d %% · %s de %s"), pct, d, t);
+		*col = a->paused ? COL_DIM : COL_ACC;
+	} else if (a->changing) {
+		snprintf(out, n, "%s", a->paused ? _("En pausa") : _("Actualización pendiente"));
+		*col = COL_ACC;
+	} else if (a->running) {
+		snprintf(out, n, "%s", _("Jugando ahora"));
+		*col = COL_LIME;
+	} else {
+		snprintf(out, n, "%s", _("Instalado"));
+	}
+}
+
+static void draw_pcdl_top(void)
+{
+	const float X = 16, W = TOP_W - 32;
+	if (!DL.pcs_done || (DL.npc && !DL.apps_done)) {
+		draw_net_wait(TOP_W / 2, 120, _("Consultando tu PC…"));
+		return;
+	}
+	if (!DL.npc) {
+		ui_icon(IC_PC, TOP_W / 2 - 14, 70, 28, COL_DIM);
+		ui_text(TOP_W / 2, 110, DL.failed ? _("No se pudo consultar tus equipos") : _("No hay ningún PC con Steam abierto"), SZ_LARGE, COL_TXT, AL_CENTER, 380);
+		ui_text_wrap(X, 136, W, _("Abre Steam en tu PC con esta cuenta y vuelve a entrar. Desde aquí podrás ver lo que se descarga, pausarlo o desinstalar juegos."), SZ_SMALL, COL_DIM, 4, 15);
+		return;
+	}
+	const RemotePC *pc = &DL.pc[DL.cur];
+	char t[96], fb[24];
+	ui_icon(IC_PC, X, 27, 14, COL_ACC);
+	ui_text(X + 20, 24, pc->name, SZ_LARGE, COL_WHITE, AL_LEFT, W - 140);
+	fmt_bytes(DL.freeb, fb, sizeof fb);
+	snprintf(t, sizeof t, _("%s · %s libres"), pc->os, fb);
+	ui_text(TOP_W - X, 28, DL.freeb ? t : pc->os, SZ_SMALL, COL_DIM, AL_RIGHT, 200);
+	if (!DL.na) {
+		ui_text(TOP_W / 2, 120, _("No hay juegos instalados en este PC"), SZ_BODY, COL_DIM, AL_CENTER, 380);
+		return;
+	}
+	const PcApp *a = &DL.a[DL.sel < DL.na ? DL.sel : 0];
+	char url[160];
+	snprintf(url, sizeof url, "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/%lu/header.jpg", (unsigned long)a->appid);
+	const float iw = 230, ih = floorf(iw * 215 / 460), iy = 54;
+	const Pic *p = img_get(url, 460);
+	ui_rect(X - 1, iy - 1, iw + 2, ih + 2, C2D_Color32(0xff, 0xff, 0xff, 0x30));
+	if (p) img_draw_cover(p, X, iy, iw, ih, 0.5f);
+	else ui_rect(X, iy, iw, ih, COL_PANEL);
+	ui_text_wrap(X + iw + 12, iy, W - iw - 12, a->name, SZ_BODY, COL_WHITE, 3, 16);
+	u32 col;
+	pcdl_status(a, t, sizeof t, &col);
+	ui_text_wrap(X + iw + 12, iy + 52, W - iw - 12, t, SZ_SMALL, col, 3, 14);
+	if (a->changing && a->total > 0) {
+		float by = iy + ih + 14;
+		ui_rrect(X, by, W, 8, 4, col_alpha(COL_WHITE, 0.10f));
+		ui_rrect(X, by, W * (float)a->done / (float)a->total, 8, 4, a->paused ? COL_DIM : COL_ACC);
+	}
+	const char *hint = DL.confirm_app == a->appid && osGetTime() < DL.confirm_at ? _("Pulsa X otra vez para desinstalarlo de tu PC") : NULL;
+	if (hint) ui_text(TOP_W / 2, 208, hint, SZ_SMALL, COL_NEG, AL_CENTER, 380);
+}
+
+static void draw_pcdl_bottom(void)
+{
+	fx_bar(0, 0, BOT_W, LIST_Y, true);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_icon(IC_PC, 28, 6, 12, COL_ACC);
+	char t[96];
+	if (DL.npc > 1) snprintf(t, sizeof t, "%s (%d/%d)", DL.pc[DL.cur].name, DL.cur + 1, DL.npc);
+	else snprintf(t, sizeof t, "%s", _("Descargas del PC"));
+	ui_text(46, 5, t, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 60);
+	if (DL.apps) ui_spinner(BOT_W - 14, 12, 4, COL_DIM);
+	const float RH = 26, top = LIST_Y + 2;
+	const int vis = (int)((SCR_H - 18 - top) / RH);
+	int first = DL.sel - (vis - 2);
+	if (first < 0) first = 0;
+	bool header_dl = false, header_in = false;
+	(void)header_dl;
+	(void)header_in;
+	for (int i = first; i < DL.na && i < first + vis; i++) {
+		const PcApp *a = &DL.a[i];
+		float y = top + (i - first) * RH;
+		bool on = i == DL.sel;
+		if (on) {
+			float br = 0.075f + 0.035f * sinf(g_time * 2.4f);
+			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
+			ui_rrect(3, y + 4, 2, RH - 8, 1, col_alpha(COL_ACC, 0.8f));
+		}
+		u32 col;
+		pcdl_status(a, t, sizeof t, &col);
+		ui_text(12, y + 2, a->name, SZ_SMALL, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 24);
+		ui_text(12, y + 14, t, SZ_TINY, col, AL_LEFT, BOT_W - 24);
+		if (a->changing && a->total > 0) {
+			ui_rrect(BOT_W - 70, y + 17, 56, 3, 1.5f, col_alpha(COL_WHITE, 0.10f));
+			ui_rrect(BOT_W - 70, y + 17, 56 * (float)a->done / (float)a->total, 3, 1.5f, a->paused ? COL_DIM : COL_ACC);
+		}
+	}
+	bool ch = pcdl_any_changing(), pa = pcdl_any_paused();
+	if (DL.npc > 1) {
+		static const char *h1[] = {"A", "Ficha", "Y", "Pausar", "X", "Desinstalar", "L R", "PC"};
+		static const char *h2[] = {"A", "Ficha", "Y", "Reanudar", "X", "Desinstalar", "L R", "PC"};
+		static const char *h3[] = {"A", "Ficha", "X", "Desinstalar", "L R", "PC", "B", "Volver"};
+		draw_hints(ch ? (pa ? h2 : h1) : h3, 4);
+	} else {
+		static const char *h1[] = {"A", "Ficha", "Y", "Pausar", "X", "Desinstalar", "B", "Volver"};
+		static const char *h2[] = {"A", "Ficha", "Y", "Reanudar", "X", "Desinstalar", "B", "Volver"};
+		static const char *h3[] = {"A", "Ficha", "X", "Desinstalar", "B", "Volver"};
+		if (ch) draw_hints(pa ? h2 : h1, 4);
+		else draw_hints(h3, DL.na ? 3 : 0);
+	}
+}
+
+static void input_pcdl(u32 kd, u32 kh, touchPosition *tp)
+{
+	if ((kd & KEY_B) || ((kd & KEY_TOUCH) && tp->py < LIST_Y && tp->px < 120)) {
+		go_scene(SC_PROFILE, -1);
+		return;
+	}
+	if (DL.npc > 1 && (kd & (KEY_L | KEY_R))) {
+		DL.cur = (DL.cur + ((kd & KEY_R) ? 1 : DL.npc - 1)) % DL.npc;
+		free(DL.a);
+		DL.a = NULL;
+		DL.na = DL.sel = 0;
+		DL.apps_done = false;
+		if (DL.apps) net_release(DL.apps);
+		DL.apps = NULL;
+		pcdl_load_apps();
+		return;
+	}
+	if (!DL.na) return;
+	if (key_repeat(kd, kh, KEY_DOWN) && DL.sel + 1 < DL.na) DL.sel++;
+	if (key_repeat(kd, kh, KEY_UP) && DL.sel > 0) DL.sel--;
+	if ((kd & KEY_TOUCH) && tp->py >= LIST_Y + 2) {
+		const float RH = 26;
+		const int vis = (int)((SCR_H - 18 - LIST_Y - 2) / RH);
+		int first = DL.sel - (vis - 2);
+		if (first < 0) first = 0;
+		int i = first + (int)((tp->py - LIST_Y - 2) / RH);
+		if (i >= 0 && i < DL.na) {
+			if (i == DL.sel) kd |= KEY_A;
+			DL.sel = i;
+		}
+	}
+	const PcApp *a = &DL.a[DL.sel];
+	if (kd & KEY_A) {
+		open_game(a->appid, true);
+		return;
+	}
+	if (DL.act) return;
+	if ((kd & KEY_Y) && pcdl_any_changing()) {
+		DL.act_kind = 1;
+		DL.act = steam_req_pc_downloads(DL.pc[DL.cur].id, pcdl_any_paused(), auth_token());
+	}
+	if (kd & KEY_X) {
+		// Dos veces seguidas para desinstalar (no tiene vuelta atrás)
+		if (DL.confirm_app == a->appid && osGetTime() < DL.confirm_at) {
+			DL.confirm_app = 0;
+			DL.act_kind = 2;
+			DL.act = steam_req_pc_uninstall(DL.pc[DL.cur].id, a->appid, auth_token());
+		} else {
+			DL.confirm_app = a->appid;
+			DL.confirm_at = osGetTime() + 3000;
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------- Editor de tu reseña
 
 static const Box B_RUP = {12, 64, 145, 30};
@@ -3771,7 +4047,8 @@ static void open_account_list(int ti)
 
 // ---------------------------------------------------------------------------- Perfil
 
-static const Box B_PLIB = {12, 78, 296, 30};
+static const Box B_PLIB = {12, 78, 145, 30};
+static const Box B_PDL = {163, 78, 145, 30};
 static const Box B_PWISH = {12, 112, 145, 30};
 static const Box B_PVIEW = {163, 112, 145, 30};
 static const Box B_PFRIENDS = {12, 146, 145, 30};
@@ -3859,14 +4136,15 @@ static void draw_profile_bottom(void)
 	if (w->wish_loaded) snprintf(wish, sizeof wish, _("Lista de deseos (%d)"), w->nwish);
 	else snprintf(wish, sizeof wish, "%s", _("Lista de deseos"));
 	draw_button_k(&B_PLIB, NULL, S.pfocus == 0, IC_PAD, lib, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PLIB);
-	draw_button_k(&B_PWISH, NULL, S.pfocus == 1, IC_HEART, wish, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PWISH);
-	draw_button_k(&B_PVIEW, NULL, S.pfocus == 2, IC_USER, _("Ver tu perfil"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PVIEW);
+	draw_button_k(&B_PDL, NULL, S.pfocus == 1, IC_PC, _("Descargas del PC"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PDL);
+	draw_button_k(&B_PWISH, NULL, S.pfocus == 2, IC_HEART, wish, COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PWISH);
+	draw_button_k(&B_PVIEW, NULL, S.pfocus == 3, IC_USER, _("Ver tu perfil"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PVIEW);
 	bool act_busy = shop_busy_with(SH_ACTIVATE, 0) || shop_busy_with(SH_WALLET, 0);
-	draw_button_k(&B_PFRIENDS, NULL, S.pfocus == 3, IC_USERS, _("Amigos"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PFRIENDS);
-	draw_button_k(&B_PACT, NULL, S.pfocus == 4, IC_CODE, act_busy ? _("Activando…") : _("Activar un producto"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PACT);
+	draw_button_k(&B_PFRIENDS, NULL, S.pfocus == 4, IC_USERS, _("Amigos"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PFRIENDS);
+	draw_button_k(&B_PACT, NULL, S.pfocus == 5, IC_CODE, act_busy ? _("Activando…") : _("Activar un producto"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PACT);
 	u32 red = C2D_Color32(0x6a, 0x26, 0x22, 0xff);
-	draw_button_k(&B_PSWITCH, NULL, S.pfocus == 5, IC_USERS, _("Cambiar de cuenta"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PSWITCH);
-	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 6, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
+	draw_button_k(&B_PSWITCH, NULL, S.pfocus == 6, IC_USERS, _("Cambiar de cuenta"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_PSWITCH);
+	draw_button_k(&B_PLOGOUT, NULL, S.pfocus == 7, IC_LOCK, _("Cerrar sesión"), red, red, C2D_Color32(0xff, 0x9a, 0x8c, 0xff), 1, S.pressed == BT_PLOGOUT);
 	static const char *hh[] = {"↑↓", "Elegir", "A", "Abrir", "B", "Volver", "START", "Menú"};
 	draw_hints(hh, 4);
 }
@@ -3902,6 +4180,7 @@ static void do_switch_cleanup(void)
 static void open_friends(void);
 static void open_accounts(void);
 static void open_user(u64 id, const SteamPerson *person);
+static void open_pcdl(void);
 
 static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 {
@@ -3909,15 +4188,15 @@ static void input_profile(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		go_scene(SC_STORE, -1);
 		return;
 	}
-	static const int ids[] = {BT_PLIB, BT_PWISH, BT_PVIEW, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PLOGOUT};
-	int b = press_update(kd, kh, ku, tp, ids, 7);
-	// Con la cruceta se elige un botón (debajo de Biblioteca van de dos en dos) y A lo pulsa
-	static const int down[] = {1, 3, 4, 5, 6, 0, 0}, up[] = {5, 0, 0, 1, 2, 3, 4};
-	if (S.pfocus > 6) S.pfocus = 0;
-	if (key_repeat(kd, kh, KEY_DOWN)) S.pfocus = down[S.pfocus];
-	if (key_repeat(kd, kh, KEY_UP)) S.pfocus = up[S.pfocus];
-	if ((kd & (KEY_LEFT | KEY_RIGHT)) && S.pfocus >= 1) S.pfocus += S.pfocus % 2 ? 1 : -1;
+	static const int ids[] = {BT_PLIB, BT_PDL, BT_PWISH, BT_PVIEW, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PLOGOUT};
+	int b = press_update(kd, kh, ku, tp, ids, 8);
+	// Con la cruceta se elige un botón (cuatro filas de dos) y A lo pulsa
+	if (S.pfocus > 7) S.pfocus = 0;
+	if (key_repeat(kd, kh, KEY_DOWN)) S.pfocus = (S.pfocus + 2) % 8;
+	if (key_repeat(kd, kh, KEY_UP)) S.pfocus = (S.pfocus + 6) % 8;
+	if (kd & (KEY_LEFT | KEY_RIGHT)) S.pfocus ^= 1;
 	if (kd & KEY_A) b = ids[S.pfocus];
+	if (b == BT_PDL) open_pcdl();
 	if (b == BT_PVIEW) open_user(auth_info()->steamid, NULL);
 	if (b == BT_PLIB) open_account_list(TAB_LIBRARY);
 	if (b == BT_PWISH) open_account_list(TAB_WISHLIST);
@@ -7413,6 +7692,7 @@ static const Box *button_box(int id)
 	case BT_UGAME: return &B_UGAME;
 	case BT_UQR: return &B_UQR;
 	case BT_PVIEW: return &B_PVIEW;
+	case BT_PDL: return &B_PDL;
 	case BT_RUP: return &B_RUP;
 	case BT_RDOWN: return &B_RDOWN;
 	case BT_RTEXT: return &B_RTEXT;
@@ -8031,6 +8311,7 @@ int main(int argc, char **argv)
 		case SC_SETTINGS: input_settings(kd, kh, &tp); break;
 		case SC_USER: input_user(kd, kh, ku, &tp); break;
 		case SC_ACCSET: input_accset(kd, kh, &tp); break;
+		case SC_PCDL: input_pcdl(kd, kh, &tp); break;
 		case SC_PAY: input_pay(kd, kh, ku, &tp, dt); break;
 		}
 		auth_update();
@@ -8074,6 +8355,7 @@ int main(int argc, char **argv)
 		if (S.scene == SC_PROFILE && auth_logged() && UP.id != auth_info()->steamid) user_load(auth_info()->steamid);
 		user_poll();
 		accset_poll();
+		pcdl_poll();
 
 		// Desplazamientos suaves
 		if (!CUR->finger) CUR->scroll = approach(CUR->scroll, CUR->scroll_target, 18);
@@ -8148,12 +8430,13 @@ int main(int argc, char **argv)
 		case SC_SETTINGS: draw_settings_top(); break;
 		case SC_USER: draw_user_top(); break;
 		case SC_ACCSET: draw_accset_top(); break;
+		case SC_PCDL: draw_pcdl_top(); break;
 		case SC_PAY: draw_pay_top(); break;
 		}
 		C2D_ViewReset();
 		u32 fade_col = S.scene == SC_SHOTS ? C2D_Color32(0, 0, 0, 0xff) : COL_BG;
 		if (ce < 1) ui_rect(0, 0, TOP_W, SCR_H, col_alpha(fade_col, (1 - ce) * 0.9f));
-		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS || S.scene == SC_USER || S.scene == SC_ACCSET)
+		if (S.scene == SC_STORE || S.scene == SC_GAME || S.scene == SC_LOGIN || S.scene == SC_PROFILE || S.scene == SC_PAY || S.scene == SC_ABOUT || S.scene == SC_NOTIF || S.scene == SC_FRIENDS || S.scene == SC_ACCOUNTS || S.scene == SC_SETTINGS || S.scene == SC_USER || S.scene == SC_ACCSET || S.scene == SC_PCDL)
 			draw_status(auth_logged() && auth_info()->persona[0] ? auth_info()->persona : NULL);
 		if (S.scene == SC_SPLASH && splash_out > 0) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(255 * clampf(splash_out / 0.35f, 0, 1))));
 		if (S.exit_anim > 0.01f) ui_rect(0, 0, TOP_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x80 * ease_out_cubic(S.exit_anim))));
@@ -8178,6 +8461,7 @@ int main(int argc, char **argv)
 		case SC_SETTINGS: draw_settings_bottom(); break;
 		case SC_USER: draw_user_bottom(); break;
 		case SC_ACCSET: draw_accset_bottom(); break;
+		case SC_PCDL: draw_pcdl_bottom(); break;
 		case SC_PAY: draw_pay_bottom(); break;
 		}
 		C2D_ViewReset();

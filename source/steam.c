@@ -2426,3 +2426,81 @@ int steam_parse_top_achievements(const char *json, TopAch *out, int max)
 	cJSON_Delete(root);
 	return n;
 }
+
+// ----------------------------------------------------------------------------
+// Descargas de tu PC (IClientCommService)
+
+Req *steam_req_pc_apps(u64 client, const char *token)
+{
+	cJSON *in = client_input(client, 0);
+	cJSON_DeleteItemFromObject(in, "appid");
+	cJSON_AddStringToObject(in, "fields", "games");
+	cJSON_AddStringToObject(in, "filters", "installed");
+	cJSON_AddStringToObject(in, "language", g_lang);
+	cJSON_AddBoolToObject(in, "include_client_info", true);
+	return steam_get_service("IClientCommService/GetClientAppList", in, token);
+}
+
+static long long jbig(const cJSON *o, const char *k)
+{
+	const char *s = jstr(o, k);
+	return s ? strtoll(s, NULL, 10) : (long long)jnum(o, k, 0);
+}
+
+// Primero lo que se está descargando (por su puesto en la cola), luego lo demás por nombre
+static int cmp_pcapp(const void *x, const void *y)
+{
+	const PcApp *a = x, *b = y;
+	bool da = a->changing || a->queue >= 0, db = b->changing || b->queue >= 0;
+	if (da != db) return da ? -1 : 1;
+	if (da && a->queue != b->queue) return (a->queue < 0 ? 999 : a->queue) - (b->queue < 0 ? 999 : b->queue);
+	return strcasecmp(a->name, b->name);
+}
+
+int steam_parse_pc_apps(const char *json, PcApp **out, long long *free_bytes)
+{
+	*out = NULL;
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	*free_bytes = jbig(resp, "bytes_available");
+	const cJSON *apps = cJSON_GetObjectItemCaseSensitive(resp, "apps"), *it;
+	int cap = cJSON_GetArraySize(apps), n = 0;
+	*out = calloc(cap ? cap : 1, sizeof **out);
+	cJSON_ArrayForEach(it, apps) {
+		if (!*out || n >= cap) break;
+		PcApp *a = &(*out)[n];
+		a->appid = (u32)jnum(it, "appid", 0);
+		if (!a->appid) continue;
+		copy_utf8(a->name, sizeof a->name, jstr(it, "app"));
+		a->installed = jbool(it, "installed");
+		a->changing = jbool(it, "changing");
+		a->paused = jbool(it, "download_paused");
+		a->running = jbool(it, "running");
+		a->done = jbig(it, "bytes_downloaded");
+		a->total = jbig(it, "bytes_to_download");
+		const cJSON *q = cJSON_GetObjectItemCaseSensitive(it, "queue_position");
+		a->queue = cJSON_IsNumber(q) ? q->valueint : -1;
+		if (a->total > 0 && a->done < a->total) a->changing = true;
+		n++;
+	}
+	if (*out) qsort(*out, n, sizeof **out, cmp_pcapp);
+	cJSON_Delete(root);
+	return n;
+}
+
+Req *steam_req_pc_downloads(u64 client, bool enable, const char *token)
+{
+	cJSON *in = client_input(client, 0);
+	cJSON_DeleteItemFromObject(in, "appid");
+	cJSON_AddBoolToObject(in, "enable", enable);
+	return steam_post_service("IClientCommService/EnableOrDisableDownloads", in, token);
+}
+
+Req *steam_req_pc_uninstall(u64 client, u32 appid, const char *token)
+{
+	return steam_post_service("IClientCommService/UninstallClientApp", client_input(client, appid), token);
+}

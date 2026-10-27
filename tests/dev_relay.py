@@ -114,6 +114,7 @@ IGNORED = {}   # juegos ignorados (appid -> motivo), como rgIgnoredApps
 PRIVACY = {"PrivacySettings": {"PrivacyProfile": 3, "PrivacyInventory": 3, "PrivacyInventoryGifts": 3, "PrivacyOwnedGames": 3,
                                "PrivacyPlaytime": 3, "PrivacyFriendsList": 2}, "eCommentPermission": 1}
 THEME = [""]
+PC_STATE = {}   # descargas del PC simulado: lo desinstalado y si las descargas están en pausa
 # Tus reseñas (appid -> datos), como las da IUserReviewsService; Cyberpunk ya tiene una
 REVIEWS = {1091500: {"review": "Después de las actualizaciones es otro juego. Night City es increíble y la historia de V engancha muchísimo.",
                      "voted_up": True, "created": int(time.time()) - 40 * 86400, "votes_up": 12}}
@@ -327,6 +328,14 @@ def fake_post_api(path, body):
         form = dict(urllib.parse.parse_qsl(body.decode() if isinstance(body, bytes) else (body or "")))
         THEME[0] = json.loads(form.get("input_json", "{}")).get("theme_id", "")
         return {"response": {}}, 1
+    if path.endswith("EnableOrDisableDownloads/v1/") or path.endswith("UninstallClientApp/v1/"):
+        inp = json.loads(form.get("input_json", "{}"))
+        st = PC_STATE.setdefault(str(inp.get("client_instanceid", "")), {"gone": set(), "paused": False, "t0": time.time()})
+        if path.endswith("UninstallClientApp/v1/"):
+            st["gone"].add(int(inp.get("appid", 0)))
+        else:
+            st["paused"] = not inp.get("enable", True)
+        return {"response": {}}, 1
     if path.endswith("InstallClientApp/v1/"):
         return {"response": {}}, 1
     if path.endswith("MarkNotificationsRead/v1/"):
@@ -378,8 +387,27 @@ def fake_get(path, q):
             "refresh_interval": 60}}
     if path.endswith("GetClientAppList/v1/"):
         cid = str(inp.get("client_instanceid", ""))
-        apps = [{"appid": 1091500, "app": "Cyberpunk 2077", "installed": True}] if cid == "7002" else []
-        return {"response": {"apps": apps, "bytes_available": "512000000000"}}
+        if inp.get("filter_appids"):   # la instalación remota pregunta por un juego
+            apps = [{"appid": 1091500, "app": "Cyberpunk 2077", "installed": True}] if cid == "7002" else []
+            return {"response": {"apps": apps, "bytes_available": "512000000000"}}
+        # Descargas del PC: lo instalado en el escritorio, con Counter-Strike 2 actualizándose
+        st = PC_STATE.setdefault(cid, {"gone": set(), "paused": False, "t0": time.time()})
+        names = {a: n for a, n, *_ in OWNED}
+        apps = []
+        for a in [730, 1091500, 292030, 413150, 570] if cid == "7001" else [1091500]:
+            if a in st["gone"]:
+                continue
+            e = {"appid": a, "app": names.get(a, str(a)), "installed": True, "queue_position": -1}
+            if a == 730 and cid == "7001":
+                tot = 6_400_000_000
+                done = min(tot, int(1_100_000_000 + (0 if st["paused"] else (time.time() - st["t0"]) * 60_000_000)))
+                e.update({"changing": done < tot, "bytes_downloaded": str(done), "bytes_to_download": str(tot), "download_paused": st["paused"], "queue_position": 0})
+            if a == 292030 and cid == "7001":
+                e.update({"changing": True, "bytes_downloaded": "0", "bytes_to_download": "2300000000", "queue_position": 1})
+            if a == 413150:
+                e["running"] = True
+            apps.append(e)
+        return {"response": {"apps": apps, "bytes_available": "187000000000", "client_info": {"machine_name": "PC"}}}
     if path.endswith("GetIndividualRecommendations/v1/"):
         out = []
         for r in inp.get("requests", []):

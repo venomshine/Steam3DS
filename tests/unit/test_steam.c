@@ -291,6 +291,15 @@ int main(void) {
 	// La página de una ilustración: la imagen que enseña (ActualMedia) y nunca la genérica del Workshop
 	CHECK(steam_parse_file_page("<meta property=\"og:image\" content=\"https://x/og.jpg\"><img id=\"ActualMedia\" class=\"artPreviewImage\" src=\"https://images.steamusercontent.com/ugc/9/Z/?imw=1024\">", fu, sizeof fu) && strstr(fu, "/ugc/9/Z/?imw=400"));
 	CHECK(!steam_parse_file_page("<meta property=\"og:image\" content=\"https://community.fastly.steamstatic.com/public/shared/images/sharedfiles/steam_workshop_default_image.png\">", fu, sizeof fu));
+	// Descargas del PC: lo que se descarga va primero (por la cola), luego por nombre
+	PcApp *pa = NULL;
+	long long freeb = 0;
+	CHECK(steam_parse_pc_apps("{\"response\":{\"bytes_available\":\"5000000000\",\"apps\":["
+		"{\"appid\":570,\"app\":\"Dota 2\",\"installed\":true},"
+		"{\"appid\":730,\"app\":\"Counter-Strike 2\",\"installed\":true,\"changing\":true,\"bytes_downloaded\":\"100\",\"bytes_to_download\":\"400\",\"queue_position\":0},"
+		"{\"appid\":10,\"app\":\"Alan Wake\",\"installed\":true}]}}", &pa, &freeb) == 3);
+	CHECK(pa && pa[0].appid == 730 && pa[0].done == 100 && pa[0].total == 400 && pa[1].appid == 10 && freeb == 5000000000LL);
+	free(pa);
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

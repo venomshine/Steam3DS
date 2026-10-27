@@ -390,3 +390,17 @@ typedef struct {
 	float pct;
 } TopAch;
 int steam_parse_top_achievements(const char *json, TopAch *out, int max);   // -1 si falla
+
+// Lo que hay en tu PC (como la sección de descargas de la app de Steam del móvil): juegos instalados,
+// lo que se está descargando o actualizando, pausar o reanudar las descargas y desinstalar
+typedef struct {
+	u32 appid;
+	char name[96];
+	bool installed, changing, paused, running;
+	long long done, total;      // bytes descargados y por descargar
+	int queue;                  // puesto en la cola de descargas (-1 si no está en cola)
+} PcApp;
+Req *steam_req_pc_apps(u64 client, const char *token);
+int steam_parse_pc_apps(const char *json, PcApp **out, long long *free_bytes);   // malloc; -1 si falla
+Req *steam_req_pc_downloads(u64 client, bool enable, const char *token);
+Req *steam_req_pc_uninstall(u64 client, u32 appid, const char *token);

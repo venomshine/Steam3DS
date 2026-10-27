@@ -845,7 +845,8 @@ static void merge_poll(Tab *t)
 			const StoreRow *row = lib_find(t, m[i].appid);
 			bool alive = m[i].success == 1 && m[i].visible;
 			bool playtest = m[i].type == 12 || (row && name_has_playtest(row->name));
-			bool child = m[i].parent && m[i].parent != m[i].appid && m[i].type != 12 && lib_find(t, m[i].parent);
+			// Las demos y las betas van aparte aunque tengas el juego (como en el cliente de Steam)
+			bool child = m[i].parent && m[i].parent != m[i].appid && m[i].type != 1 && m[i].type != 12 && lib_find(t, m[i].parent);
 			if (!((playtest && !alive) || child) || lib_merged(m[i].appid)) continue;
 			if (MRG.ndrop == MRG.capdrop) {
 				int cap = MRG.capdrop ? MRG.capdrop * 2 : 32;
@@ -856,6 +857,7 @@ static void merge_poll(Tab *t)
 			}
 			MRG.drop[MRG.ndrop++] = m[i].appid;
 			dropped++;
+			netlog("biblioteca: aparte %lu (%s, tipo %d, padre %lu)", (unsigned long)m[i].appid, child ? "va dentro de otro" : "playtest terminado", m[i].type, (unsigned long)m[i].parent);
 		}
 		if (n >= 0) netlog("biblioteca: %d de %d agrupados o playtests terminados", dropped, n);
 		if (dropped) lib_drop_hidden(t);

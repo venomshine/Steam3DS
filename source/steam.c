@@ -1021,12 +1021,14 @@ int steam_parse_reviews(const char *json, Review *out, int max, char *cursor, si
 // ----------------------------------------------------------------------------
 // Con sesión
 
+// include_free_sub: muchas demos no dan licencia (van en el paquete gratuito de Steam) y sin él
+// no salen aunque las hayas jugado
 Req *steam_req_owned(u64 steamid, const char *token)
 {
 	char url[1400];
 	snprintf(url, sizeof url,
 		"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?access_token=%s&steamid=%llu"
-		"&include_appinfo=1&include_played_free_games=1&skip_unvetted_apps=0&language=%s",
+		"&include_appinfo=1&include_played_free_games=1&include_free_sub=1&skip_unvetted_apps=0&language=%s",
 		token, (unsigned long long)steamid, g_lang);
 	return net_get(url, LANE_API);
 }

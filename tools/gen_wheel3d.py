@@ -30,7 +30,7 @@ SWING = (22.0, 68.0)            # extremos del balanceo: ángulo de la luz sobre
 # Bombillo flojo y cálido, válvula muy sucia (mugre negra)
 # Pintada de rojo como la de la intro de Valve, pero de pintura vieja de válvula (oscura y apagada,
 # con poco brillo), sucia y con el cubo de hierro oscuro
-LOOK = dict(dirt=1.0, amb=0.24, kd=1.05, tint=(1.0, 0.92, 0.80), ks=0.45, paint=True)
+LOOK = dict(dirt=1.0, amb=0.24, kd=1.05, tint=(1.0, 0.92, 0.80), ks=0.45, paint=True, rust=1.0)
 
 
 def light_dir(th):
@@ -72,7 +72,28 @@ def grime_map(s, seed=7):
     return blot, fine, spots, scratches
 
 
-def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, ss=4, dirt=0.0, amb=0.42, kd=0.78, tint=(1, 1, 1), ks=0.75, split=False, paint=False):
+def polar_noise(s, x, y, angle, octaves, seed, period=72.0):
+    """Ruido pegado a la válvula que se repite cada `period` grados (como su forma): así puede ir
+    horneado en los fotogramas sin saltar al volver al primero. 0..1."""
+    rng = np.random.default_rng(seed)
+    u = ((np.degrees(np.arctan2(y, x)) - angle) % period) / period    # 0..1 a lo largo del giro
+    v = np.clip(np.hypot(x, y) / 1.0, 0, 0.999)                        # 0..1 del centro al aro
+    out = np.zeros_like(x); amp = 1.0; tot = 0
+    for ou, ov in octaves:
+        g = rng.random((ov + 1, ou))
+        gx = u * ou; gy = v * ov
+        x0 = np.floor(gx).astype(int); y0 = np.floor(gy).astype(int)
+        fx = gx - x0; fy = gy - y0
+        fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy)
+        x1 = (x0 + 1) % ou; x0 = x0 % ou; y1 = np.minimum(y0 + 1, ov)
+        a = g[y0, x0] * (1 - fx) + g[y0, x1] * fx
+        b = g[y1, x0] * (1 - fx) + g[y1, x1] * fx
+        out += amp * (a * (1 - fy) + b * fy)
+        tot += amp; amp *= 0.55
+    return out / tot
+
+
+def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, ss=4, dirt=0.0, amb=0.42, kd=0.78, tint=(1, 1, 1), ks=0.75, split=False, paint=False, rust=0.0):
     """Válvula con relieve: mapa de alturas (aro como tubo, radios cilíndricos, cubo abombado y
     agarres esféricos) iluminado desde arriba a la derecha. Devuelve RGBA size×size.
     split: la mugre que no se repite cada 72° (manchas, grano, salpicaduras y arañazos) no se
@@ -112,6 +133,17 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
     hz = np.where(r < hole, 0.02, hz)                      # el agujero, hundido
     z = np.maximum(z, hz)
     mask = z > -0.5
+    if rust > 0:
+        # Manchas de óxido (se repiten con la forma): ahí el hierro está picado y con costras
+        # (ya no es liso como goma); en el cubo, de hierro, poco
+        hubf = np.clip((np.hypot(x, y) - R * 0.24) / (R * 0.12), 0.6, 1)
+        rn = polar_noise(s, x, y, angle, ((6, 6), (14, 12), (34, 30)), seed=21)
+        patch = np.clip((rn - 0.44) * 3.5, 0, 1) * hubf
+        pits = polar_noise(s, x, y, angle, ((60, 50), (130, 110)), seed=3)
+        crust = polar_noise(s, x, y, angle, ((18, 16), (40, 34)), seed=5)
+        bump = (np.clip((0.45 - pits) * 3, 0, 1) * -0.010 + np.clip((crust - 0.5) * 3, 0, 1) * 0.010) * patch * rust
+        bump += np.clip((0.40 - pits) * 3, 0, 1) * -0.004 * rust            # algún poro también en la pintura
+        z = np.where(mask, z + bump, z)
     z = np.where(mask, z, 0) * relief
     # normales
     px = 2.0 / s
@@ -125,7 +157,7 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
     spec = np.clip(n @ H, 0, 1) ** 48
     if paint:
         # la pintura vieja: un brillo blando y un lustre ancho y suave
-        spec = np.clip(n @ H, 0, 1) ** 40 + 0.08 * np.clip(n @ H, 0, 1) ** 8
+        spec = np.clip(n @ H, 0, 1) ** 60 * 0.8
     # sombra propia: hacia la luz, ¿algo más alto tapa?
     shadow = np.ones_like(z)
     lx, ly = L[0], L[1]; lz = L[2] / math.hypot(lx, ly)
@@ -145,10 +177,28 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
     albedo = np.stack([0xdc + (0x5a - 0xdc) * t, 0xf0 + (0xb8 - 0xf0) * t, 0xff + (0xf6 - 0xff) * t], -1) / 255
     if paint:
         # pintura roja de válvula, más clara arriba; el cubo (y el vástago que asoma) de hierro oscuro
-        albedo = np.stack([0x86 + (0x42 - 0x86) * t, 0x24 + (0x0e - 0x24) * t, 0x1a + (0x0a - 0x1a) * t], -1) / 255
-        iron = np.array([0x30, 0x32, 0x36]) / 255
+        albedo = np.stack([0xc8 + (0x70 - 0xc8) * t, 0x18 + (0x08 - 0x18) * t, 0x1c + (0x0a - 0x1c) * t], -1) / 255
+        iron = np.array([0x58, 0x42, 0x1e]) / 255   # el cubo, de latón viejo
         hubm = np.clip((hub * 0.82 - r) / (hub * 0.12), 0, 1)
         albedo = albedo * (1 - hubm[..., None]) + iron * hubm[..., None]
+    wear = np.zeros_like(z)
+    rmask = np.zeros_like(z)
+    if rust > 0:
+        # La pintura saltada en lo más alto (donde se agarra y roza): hierro oscuro y algo brillante
+        top = np.clip((z / relief - 0.10) / 0.10, 0, 1) * mask
+        chip = polar_noise(s, x, y, angle, ((30, 26), (70, 60)), seed=9)
+        wear = np.clip((chip - 0.62) * 6, 0, 1) * top * rust * np.clip((np.hypot(x, y) - R * 0.3) / (R * 0.1), 0, 1)
+        steel = np.array([0x4a, 0x46, 0x44]) / 255
+        albedo = albedo * (1 - wear[..., None]) + steel * wear[..., None]
+        # Óxido (el que se repite con la forma): en las manchas, en los rincones y donde saltó la pintura
+        crev0 = np.clip((blur(z, ss * 2.5) - z) * 9, 0, 1)
+        rmask = np.clip(patch + crev0 * 0.7 * hubf + wear * 0.5, 0, 1) * mask * rust
+        rfine = polar_noise(s, x, y, angle, ((40, 34), (100, 90)), seed=33)
+        rc = (np.array([0x16, 0x12, 0x10]) / 255 * (1 - rfine[..., None]) + np.array([0x52, 0x26, 0x10]) / 255 * rfine[..., None])
+        albedo = albedo * (1 - rmask[..., None]) + rc * rmask[..., None]
+        # Grano de la pintura vieja: motas claras y oscuras por todas partes
+        grain = polar_noise(s, x, y, angle, ((220, 180),), seed=41)
+        albedo = albedo * (0.80 + 0.40 * grain[..., None])
     if dirt > 0:
         # Suciedad negra pegada a la válvula (gira con ella): manchas, mugre en lo hundido y en
         # las uniones, y salpicaduras; el azul sigue debajo
@@ -158,11 +208,11 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
         blot, fine, spots, scr = rot(blot), rot(fine), rot(spots), rot(scr)
         crev = np.clip((blur(z, ss * 2.5) - z) * 9, 0, 1)            # rincones y uniones
         low = np.clip(1 - z / (0.12 * relief + 1e-6), 0, 1) * mask    # lo más bajo, junto al canto
-        black = np.clip(0.55 * np.clip((blot - 0.35) * 1.8, 0, 1) + 0.25 * fine + 0.9 * crev + 0.35 * low + 0.25 * spots, 0, 0.72)
+        black = np.clip(0.75 * np.clip((blot - 0.30) * 1.8, 0, 1) + 0.30 * fine + 1.1 * crev + 0.45 * low + 0.35 * spots, 0, 0.85)
         if split:
             # En los fotogramas solo la mugre de la forma (rincones y canto), que gira con los radios;
             # el resto oscurece lo mismo desde la capa: (1 - 0.82·total) = (1 - 0.82·forma)·(1 - a)
-            shape = np.clip(0.9 * crev + 0.35 * low, 0, 0.72)
+            shape = np.clip(1.1 * crev + 0.45 * low, 0, 0.85)
             a = 1 - (1 - 0.82 * dirt * black) / (1 - 0.82 * dirt * shape)
             e = scr * 0.15 * dirt * (1 - black)                  # arañazos: un velo claro y cálido
             A = np.clip(a + e, 0, 1) * mask
@@ -170,6 +220,14 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
             layer = np.zeros((s, s, 4))
             layer[..., :3] = (g[..., None] * np.array(tint) * 0.85) * A[..., None]   # premultiplicado
             layer[..., 3] = A
+            if rust > 0:
+                # Óxido que no se repite (rompe la simetría de los cinco radios): costras pardas encima
+                rb, rf, _, _ = grime_map(s, seed=29)
+                rb, rf = rot(rb), rot(rf)
+                ra = np.clip((rb - 0.44) * 3.5, 0, 1) * (0.65 + 0.3 * rf) * mask * rust
+                rcol = (np.array([0x12, 0x10, 0x0e]) / 255 * (1 - rf[..., None]) + np.array([0x4a, 0x22, 0x0e]) / 255 * rf[..., None]) * np.array(tint)
+                layer[..., :3] = layer[..., :3] * (1 - ra[..., None]) + rcol * ra[..., None]
+                layer[..., 3] = layer[..., 3] * (1 - ra) + ra
             black = shape
         albedo = albedo * (1 - 0.82 * dirt * black)[..., None]
         if not split:
@@ -177,6 +235,9 @@ def wheel3d(size, angle=0.0, spokes=5, light=(0.62, -0.62, 0.48), relief=0.75, s
         spec_mask = 1 - 0.8 * dirt * black
     else:
         spec_mask = 1
+    if rust > 0:
+        # El óxido no brilla; el hierro pelado da un brillo pequeño y duro
+        spec = spec * (1 - 0.9 * rmask) * (1 - wear) + wear * np.clip(n @ H, 0, 1) ** 90 * 1.6
     lit = amb + kd * diff * shadow
     col = albedo * (lit * ao)[..., None] * np.array(tint) + (spec * shadow * ks * spec_mask)[..., None] * np.array(tint)
     # el agujero del cubo: oscuro

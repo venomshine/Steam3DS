@@ -2145,7 +2145,7 @@ static void draw_store_bottom(void)
 		draw_hints(ha, 4);
 	} else if (S.tab == TAB_SEARCH) {
 		if (S.search_focus) {
-			static const char *hs[] = {"A", "Escribir", "↓", "Precio", "L R", "Pestaña", "START", "Menú"};
+			static const char *hs[] = {"A", "Escribir", "X", "Ver todo", "↓", "Precio", "L R", "Pestaña", "START", "Menú"};
 			draw_hints(hs, 4);
 		} else if (S.price_focus) {
 			static const char *hp[] = {"← →", "Precio", "↓", "Resultados", "Y", "Escribir", "L R", "Pestaña"};
@@ -8395,7 +8395,12 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 			S.price_focus = true;
 		}
 		if (kd & (KEY_A | KEY_Y)) S.want_kb = true;
-		kd &= ~KEY_A;
+		if (kd & KEY_X) {
+			// Explorar la tienda sin escribir nada (con el precio elegido): se baja a la lista
+			search_show_browse();
+			S.search_focus = false;
+		}
+		kd &= ~(KEY_A | KEY_X);
 	} else if (S.tab == TAB_SEARCH && S.price_focus) {
 		// Foco en la barra de precio: izquierda y derecha la mueven; arriba, la búsqueda; abajo, la lista
 		if (key_repeat(kd, kh, KEY_LEFT)) price_set(S.price - 1);
@@ -8520,14 +8525,23 @@ static void open_keyboard(void)
 {
 	SwkbdState kb;
 	char buf[64] = "";
-	swkbdInit(&kb, SWKBD_TYPE_NORMAL, 2, 60);
+	// Tres botones: el teclado de la consola no deja confirmar en vacío, así que «Ver todo»
+	// (que no confirma texto) explora la tienda sin escribir nada
+	swkbdInit(&kb, SWKBD_TYPE_NORMAL, 3, 60);
 	swkbdSetHintText(&kb, _("Nombre del juego"));
 	swkbdSetInitialText(&kb, CUR->term);
 	swkbdSetButton(&kb, SWKBD_BUTTON_LEFT, _("Cancelar"), false);
+	swkbdSetButton(&kb, SWKBD_BUTTON_MIDDLE, _("Ver todo"), false);
 	swkbdSetButton(&kb, SWKBD_BUTTON_RIGHT, _("Buscar"), true);
 	swkbdSetFeatures(&kb, SWKBD_DARKEN_TOP_SCREEN | SWKBD_ALLOW_HOME | SWKBD_ALLOW_RESET | SWKBD_ALLOW_POWER);
-	swkbdSetValidation(&kb, SWKBD_ANYTHING, 0, 0);   // Buscar también sin escribir nada
-	if (swkbdInputText(&kb, buf, sizeof buf) != SWKBD_BUTTON_RIGHT) return;
+	swkbdSetValidation(&kb, SWKBD_ANYTHING, 0, 0);
+	SwkbdButton b = swkbdInputText(&kb, buf, sizeof buf);
+	if (b == SWKBD_BUTTON_MIDDLE) {
+		search_show_browse();
+		S.search_focus = S.price_focus = false;
+		return;
+	}
+	if (b != SWKBD_BUTTON_RIGHT) return;
 	char *s = buf;
 	while (*s == ' ') s++;
 	size_t n = strlen(s);

@@ -676,6 +676,7 @@ static const TrEntry tr_table[] = {
 	{"Ver los de Windows", "Show Windows", "Windows を表示"},
 	{"Ver los de macOS", "Show macOS", "macOS を表示"},
 	{"Ver perfil", "View profile", "プロフィールを表示"},
+	{"Ver todo", "Browse all", "すべて表示"},
 	{"Ver tu perfil", "View your profile", "プロフィールを表示"},
 	{"Verano", "Summer", "サマー"},
 	{"Verificación del banco", "Bank verification", "銀行による認証"},

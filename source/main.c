@@ -7387,13 +7387,14 @@ static float draw_user_recent(float y)
 static const char *user_rev_game(u32 appid);
 
 // Sus insignias, sus últimas capturas y sus reseñas (lo que su privacidad deje ver); devuelve el alto
-static float draw_user_extras(float y0)
+// part 0: solo las insignias; 1: lo demás
+static float draw_user_extras(float y0, int part)
 {
 	float y = y0;
 	char t[96];
 	const float x = 12, w = TOP_W - 24;
 	// Insignias: cuántas y las que enseña en su perfil
-	if (UP.pg.nbadges) {
+	if (part == 0 && UP.pg.nbadges) {
 		float h = 24 + 44 + 4;
 		if (y < SCR_H && y + h > 18) {
 			fx_glass(x, y, w, h, 10, 1, 0);
@@ -7408,6 +7409,7 @@ static float draw_user_extras(float y0)
 		}
 		y += h + 8;
 	}
+	if (part == 0) return y - y0;
 	// Juegos: cuántos (lo que dice su página; si no, lo que dio GetOwnedGames)
 	int ng = UP.pg.ok && UP.pg.games_total >= 0 ? UP.pg.games_total : UP.games_done && !UP.games_private ? UP.games.count : -1;
 	if (ng > 0) {
@@ -7513,9 +7515,18 @@ static void draw_user_top(void)
 		ui_text_wrap(20, y, TOP_W - 40, UP.p.summary, SZ_SMALL, COL_TXT, 14, 14);
 		y += nl * 14 + 10;
 	}
-	// En el orden de Steam (su página en una columna): insignias y contadores, grupos, vitrinas,
-	// actividad reciente y comentarios
-	if (!UP.p.is_private) y += draw_user_extras(y);
+	// Insignias, ilustraciones, actividad reciente y después lo demás (contadores, grupos, las
+	// otras vitrinas, familia y comentarios)
+	if (!UP.p.is_private) y += draw_user_extras(y, 0);
+	for (int i = 0; i < UP.p.nshow; i++) {
+		const Showcase *s = &UP.p.show[i];
+		if (s->type != SHOW_ARTWORK && s->type != SHOW_ONE_ARTWORK) continue;
+		float h = draw_showcase(s, y, false);
+		if (y < SCR_H && y + h > 18) draw_showcase(s, y, true);
+		y += h + 8;
+	}
+	if (!UP.p.is_private) y += draw_user_recent(y);
+	if (!UP.p.is_private) y += draw_user_extras(y, 1);
 	// Sus grupos
 	if (UP.p.ngroups && !UP.p.is_private) {
 		float gh = 24 + UP.p.ngroups * 34 + 4;
@@ -7543,11 +7554,11 @@ static void draw_user_top(void)
 	}
 	for (int i = 0; i < UP.p.nshow; i++) {
 		const Showcase *s = &UP.p.show[i];
+		if (s->type == SHOW_ARTWORK || s->type == SHOW_ONE_ARTWORK) continue;   // ya están arriba
 		float h = draw_showcase(s, y, false);
 		if (y < SCR_H && y + h > 18) draw_showcase(s, y, true);
 		y += h + 8;
 	}
-	if (!UP.p.is_private) y += draw_user_recent(y);
 	// Tu Familia de Steam
 	if (user_is_me() && UP.fam.n) {
 		float fh = 24 + UP.fam.n * 30 + 4;

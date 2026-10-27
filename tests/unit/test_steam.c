@@ -133,7 +133,8 @@ int main(void) {
 		"{\"notification_id\":\"123\",\"notification_type\":7,\"body_data\":\"{\\\"appid\\\":367520}\",\"read\":false,\"timestamp\":1790000000},"
 		"{\"notification_id\":\"124\",\"notification_type\":2,\"body_data\":\"{}\",\"read\":true,\"timestamp\":1790000100},"
 		"{\"notification_id\":\"125\",\"notification_type\":9,\"hidden\":true}]}}", nt, 4, &unread) == 2);
-	CHECK(unread == 1 && nt[0].id == 123 && nt[0].type == 7 && nt[0].appid == 367520 && !nt[0].read && nt[1].read);
+	// La más reciente, la primera
+	CHECK(unread == 1 && nt[1].id == 123 && nt[1].type == 7 && nt[1].appid == 367520 && !nt[1].read && nt[0].id == 124 && nt[0].read);
 	// Amigos: las dos formas de la lista y los datos de cada cuenta
 	u64 fids[8];
 	int pend;

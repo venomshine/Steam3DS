@@ -1252,6 +1252,13 @@ Req *steam_req_notifications(const char *token)
 }
 
 // body_data es un JSON dentro del JSON (una cadena): de ahí sale el juego y, a veces, un título
+static int cmp_notif(const void *a, const void *b)
+{
+	const SteamNotif *x = a, *y = b;
+	if (x->time != y->time) return x->time < y->time ? 1 : -1;
+	return x->id < y->id ? 1 : x->id > y->id ? -1 : 0;
+}
+
 int steam_parse_notifications(const char *json, SteamNotif *out, int max, int *unread)
 {
 	*unread = 0;
@@ -1285,6 +1292,8 @@ int steam_parse_notifications(const char *json, SteamNotif *out, int max, int *u
 		n++;
 	}
 	cJSON_Delete(root);
+	// Steam las manda de la más antigua a la más nueva: la más reciente, arriba
+	qsort(out, n, sizeof *out, cmp_notif);
 	return n;
 }
 

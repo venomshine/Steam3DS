@@ -17,10 +17,13 @@ intermedio.
 - **Comprar**: carrito, lista de deseos, regalar a un amigo y pagar con tu monedero de Steam o tu
   tarjeta guardada (con la verificación del banco por QR). Añadir juegos y demos gratis y activar
   códigos de producto o del monedero.
-- **Tu cuenta**: perfil con nivel, insignias, vitrinas, capturas y reseñas; biblioteca (con tus
-  juegos ocultos de Steam y tu Familia de Steam); amigos y solicitudes; notificaciones;
-  descargas de tu PC (pausar, reanudar, desinstalar) e instalación remota; tienda de puntos;
-  historial de compras; tus reseñas; privacidad y tema del perfil; varias cuentas.
+- **Tu cuenta**: perfil (el tuyo y el de tus amigos) con nivel, insignias, vitrinas, actividad
+  reciente, capturas y reseñas; biblioteca como la del cliente de Steam (sin tus juegos ocultos ni
+  los playtests cerrados, con los juegos que van dentro de otro agrupados, tus demos y tu Familia de
+  Steam; sale al momento y se actualiza por detrás); amigos y solicitudes; notificaciones; apareces
+  «En línea» mientras usas la app; descargas de tu PC (pausar, reanudar, desinstalar) e instalación
+  remota; tienda de puntos; historial de compras; tus reseñas; privacidad y tema del perfil; varias
+  cuentas.
 - **Idiomas**: español, inglés y japonés.
 
 ## Instalación
@@ -47,7 +50,10 @@ desde la web de Steam (Ajustes de la cuenta → Gestionar dispositivos).
 
 ## Privacidad y seguridad
 
-- Solo se conecta con Steam (tienda, comunidad, API web y sus servidores oficiales).
+- Solo se conecta con Steam (tienda, comunidad, API web y sus servidores oficiales, estos últimos
+  como lo hace el chat web de steamcommunity.com). No hay ningún servidor intermedio.
+- «Aparecer en línea» se puede desactivar en Configuración. El estado es de toda tu cuenta: si
+  estabas «Invisible» en otro dispositivo, con la opción activada pasas a «En línea».
 - Ninguna acción que cambie tu cuenta (comprar, regalar, canjear, desinstalar…) se hace sin que la
   confirmes en la consola.
 - El registro de diagnóstico (`/3ds/Steam3DS/net.log`) no guarda contraseñas, tokens ni cookies.
@@ -60,6 +66,10 @@ Con Docker y la imagen oficial de devkitPro:
 ./mk.sh                     # Steam3DS.3dsx
 TOOLS=/ruta/a/bin ./tools/build_cia.sh   # Steam3DS.cia (bannertool y makerom)
 ```
+
+Los registros de aceptación de las condiciones se firman con la clave de `secret/terms.key`, que no
+está en el repositorio. Sin ella, la compilación firma con una clave de pruebas y sus registros no
+pasan la comprobación de las versiones oficiales (`tools/verificar_aceptacion.py`).
 
 Pruebas de la lectura de datos en el PC: `tests/unit` (ver `tests/unit/test_steam.c`).
 

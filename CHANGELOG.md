@@ -19,9 +19,12 @@ Primera versión pública.
 
 ### Tu cuenta
 - Inicio de sesión por QR con la app de Steam y varias cuentas.
-- Perfil (el tuyo y el de tus amigos): nivel, insignia destacada, insignias, vitrinas,
-  ilustraciones (también GIF), capturas, reseñas, grupos, comentarios y Familia de Steam.
-- Biblioteca con horas y orden; sin tus juegos ocultos de Steam (y vista «Ocultos»).
+- Perfil (el tuyo y el de tus amigos), con el orden de Steam: nivel, insignia destacada,
+  insignias, ilustraciones (también GIF), actividad reciente, juegos, capturas, reseñas, vitrinas,
+  grupos, comentarios y Familia de Steam.
+- Biblioteca como la del cliente de Steam: sin tus juegos ocultos (y vista «Ocultos») ni los
+  playtests cerrados, los juegos que van dentro de otro agrupados (Call of Duty, Battlefield) y las
+  demos de tus licencias. Se guarda en la SD: sale al momento y se actualiza por detrás.
 - Amigos en tiempo real, solicitudes y código de amigo; notificaciones al momento.
 - Apareces «En línea» para tus amigos mientras usas la app (como con el chat web; se puede desactivar).
 - Descargas de tu PC e instalación remota, playtests, tienda de puntos, premios a reseñas,

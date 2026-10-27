@@ -1005,6 +1005,7 @@ static void account_lists_clear(void)
 static void open_pay(void);
 static void gift_open(int line);
 static bool gift_is_open(void);
+static void user_person_live(const SteamPerson *p);
 static void draw_gift_bottom(void);
 static void input_gift(u32 kd, u32 kh, touchPosition *tp);
 
@@ -5359,7 +5360,8 @@ static struct {
 	SteamNotif n[MAX_NOTIF];
 	int count, unread;
 	bool loaded, failed;
-	u64 at;                      // cuándo se pidieron (se vuelven a pedir cada 5 minutos)
+	u64 at;                      // cuándo se pidieron (se vuelven a pedir cada 30 segundos)
+	u64 seen[MAX_NOTIF];         // los que ya había la última vez (para avisar solo de los nuevos)
 	RowList names;               // nombres de los juegos de los que hablan
 	int sel;
 	bool unread_at_open[MAX_NOTIF];
@@ -5460,12 +5462,13 @@ static void notif_when(u32 t, char *out, size_t sz)
 	}
 }
 
-// Se piden al iniciar sesión y luego cada 5 minutos; los nombres de los juegos, aparte
+// Se piden al iniciar sesión y luego cada 30 segundos (para que la campana avise al momento);
+// los nombres de los juegos, aparte
 static void notif_poll(void)
 {
 	if (!auth_logged()) return;
 	u64 now = osGetTime();
-	if (!NT.req && S.ctx_ready && (!NT.at || now - NT.at > 5 * 60 * 1000)) {
+	if (!NT.req && S.ctx_ready && (!NT.at || now - NT.at > 30 * 1000)) {
 		NT.at = now;
 		NT.req = steam_req_notifications(auth_token());
 	}
@@ -5473,6 +5476,22 @@ static void notif_poll(void)
 		int unread = 0;
 		int n = NT.req->state == REQ_DONE ? steam_parse_notifications(NT.req->data, NT.n, MAX_NOTIF, &unread) : -1;
 		if (n >= 0) {
+			// Un aviso nuevo mientras usas la app: sale al momento, como en Steam
+			if (NT.loaded && S.scene != SC_NOTIF) {
+				for (int i = 0; i < n; i++) {
+					if (NT.n[i].read) continue;
+					bool known = false;
+					for (int j = 0; j < MAX_NOTIF && NT.seen[j] && !known; j++) known = NT.seen[j] == NT.n[i].id;
+					if (!known) {
+						char t[160];
+						notif_text(&NT.n[i], t, sizeof t);
+						toast_icon(t, notif_icon(NT.n[i].type));
+						break;
+					}
+				}
+			}
+			memset(NT.seen, 0, sizeof NT.seen);
+			for (int i = 0; i < n && i < MAX_NOTIF; i++) NT.seen[i] = NT.n[i].id;
 			NT.count = n;
 			NT.unread = S.scene == SC_NOTIF ? 0 : unread;
 			NT.loaded = true;
@@ -5661,6 +5680,9 @@ static struct {
 	int nrq;
 	Req *rq_people;
 	bool want_code;              // abrir el teclado del código de amigo
+	Req *live;                   // el estado de todos, pedido otra vez mientras miras la lista
+	int live_next;
+	u64 live_at;
 } FL;
 
 static void flist_reset(void)
@@ -5668,6 +5690,7 @@ static void flist_reset(void)
 	if (FL.req) net_release(FL.req);
 	if (FL.people) net_release(FL.people);
 	if (FL.rq_people) net_release(FL.rq_people);
+	if (FL.live) net_release(FL.live);
 	memset(&FL, 0, sizeof FL);
 }
 
@@ -5745,6 +5768,42 @@ static void flist_poll(void)
 			if (FL.nrq) FL.rq_people = steam_req_people(FL.rq, FL.nrq, auth_token());
 		}
 	}
+	// En tiempo real: con la lista de amigos (o un perfil) abierta, el estado de todos se vuelve
+	// a pedir cada 15 segundos y se actualiza en su sitio (sin vaciar la lista)
+	bool watching = S.scene == SC_FRIENDS || S.scene == SC_USER || gift_is_open();
+	if (watching && FL.loaded && !FL.req && !FL.people && !FL.live && FL.nids &&
+		osGetTime() - (FL.live_at > FL.at ? FL.live_at : FL.at) > 15000) {
+		if (FL.live_next >= FL.nids) FL.live_next = 0;
+		int k = FL.nids - FL.live_next;
+		if (k > 100) k = 100;
+		FL.live = steam_req_people(FL.ids + FL.live_next, k, auth_token());
+		FL.live_next += k;
+		if (FL.live_next >= FL.nids) FL.live_at = osGetTime();
+	}
+	if (FL.live && FL.live->state >= REQ_DONE) {
+		if (FL.live->state == REQ_DONE) {
+			static SteamPerson got[100];
+			int n = steam_parse_people(FL.live->data, got, 100);
+			u64 cur = FL.sel >= 0 && FL.sel < FL.nview && FL.view[FL.sel] >= 0 ? FL.p[FL.view[FL.sel]].id : 0;
+			bool changed = false;
+			for (int i = 0; i < n; i++) user_person_live(&got[i]);
+			for (int i = 0; i < n; i++)
+				for (int j = 0; j < FL.np; j++)
+					if (FL.p[j].id == got[i].id && !FL.p[j].request) {
+						if (memcmp(&FL.p[j], &got[i], sizeof got[i])) changed = true;
+						FL.p[j] = got[i];
+						break;
+					}
+			if (changed) {
+				flist_build();
+				// La selección sigue en la misma persona aunque cambie de grupo
+				for (int v = 0; cur && v < FL.nview; v++)
+					if (FL.view[v] >= 0 && FL.p[FL.view[v]].id == cur) FL.sel = v;
+			}
+		}
+		net_release(FL.live);
+		FL.live = NULL;
+	}
 	// Quienes te han mandado solicitud: con su nombre y su avatar, en su propio grupo
 	if (FL.rq_people && FL.rq_people->state >= REQ_DONE) {
 		if (FL.rq_people->state == REQ_DONE) {
@@ -5764,7 +5823,7 @@ static void open_friends(void)
 {
 	flist_back = S.scene == SC_FRIENDS ? SC_PROFILE : S.scene;
 	FL.qr = false;
-	// Se vuelven a pedir si ya tienen un minuto (cambian de estado a menudo)
+	// La lista se vuelve a pedir si ya tiene un minuto (el estado de cada uno se refresca aparte)
 	if (!FL.req && !FL.people && (!FL.at || osGetTime() - FL.at > 60000)) {
 		FL.at = osGetTime();
 		FL.fallback = false;
@@ -6983,6 +7042,13 @@ static void draw_user_bottom(void)
 	}
 	static const char *h[] = {"↑↓", "Desplazar", "Y", "Ver en Steam", "B", "Volver"};
 	draw_hints(h, 3);
+}
+
+// El estado del amigo cuyo perfil tienes abierto, al día (lo pide la lista de amigos)
+static void user_person_live(const SteamPerson *p)
+{
+	if (!UP.has_person || UP.person.id != p->id || UP.person.request) return;
+	UP.person = *p;
 }
 
 static void open_user(u64 id, const SteamPerson *person)

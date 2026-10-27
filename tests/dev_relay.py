@@ -392,21 +392,30 @@ def fake_post_api(path, body):
 
 # Notificaciones simuladas: una de cada tipo habitual
 NOTIFS = [
-    {"notification_id": "9001", "notification_type": 7, "body_data": json.dumps({"appid": 367520}), "read": False, "ago": 3600},
-    {"notification_id": "9002", "notification_type": 1, "body_data": json.dumps({"gifter": str(76561190000000101)}), "read": False, "ago": 7200},
-    {"notification_id": "9003", "notification_type": 4, "body_data": json.dumps({"requestor_id": str(76561190000000103)}), "read": False, "ago": 86400},
-    {"notification_id": "9004", "notification_type": 2, "body_data": json.dumps({}), "read": True, "ago": 3 * 86400},
-    {"notification_id": "9005", "notification_type": 26, "body_data": json.dumps({"appid": 1145360, "title": "Nueva actualización: El Olimpo"}), "read": True, "ago": 5 * 86400},
-    {"notification_id": "9006", "notification_type": 6, "body_data": json.dumps({"appid": 1091500}), "read": True, "ago": 9 * 86400},
+    {"notification_id": "9001", "notification_type": 8, "body_data": json.dumps({"appid": 367520}), "read": False, "ago": 3600},
+    {"notification_id": "9002", "notification_type": 2, "body_data": json.dumps({"gifter": str(76561190000000101)}), "read": False, "ago": 7200},
+    {"notification_id": "9003", "notification_type": 5, "body_data": json.dumps({"requestor_id": str(76561190000000103)}), "read": False, "ago": 86400},
+    {"notification_id": "9004", "notification_type": 3, "body_data": json.dumps({}), "read": True, "ago": 3 * 86400},
+    {"notification_id": "9005", "notification_type": 27, "body_data": json.dumps({"appid": 1145360, "title": "Nueva actualización: El Olimpo"}), "read": True, "ago": 5 * 86400},
+    {"notification_id": "9006", "notification_type": 7, "body_data": json.dumps({"appid": 1091500}), "read": True, "ago": 9 * 86400},
 ]
+
+
+# RELAY_LIVE=segundos: pasado ese tiempo llega un comentario nuevo y Marco se conecta (tiempo real)
+LIVE_AT = time.time() + float(os.environ.get("RELAY_LIVE", "0") or 0) if os.environ.get("RELAY_LIVE") else None
+
+
+def live():
+    return LIVE_AT is not None and time.time() > LIVE_AT
 
 
 def fake_get(path, q):
     inp = json.loads(q.get("input_json", "{}") or "{}")
     if path.endswith("GetSteamNotifications/v1/"):
         now = int(time.time())
-        out = [dict({k: v for k, v in n.items() if k != "ago"}, timestamp=now - n["ago"]) for n in NOTIFS]
-        return {"response": {"notifications": out, "unread_count": sum(1 for n in NOTIFS if not n["read"])}}
+        ns = ([{"notification_id": "9100", "notification_type": 3, "body_data": json.dumps({}), "read": False, "ago": 5}] if live() else []) + NOTIFS
+        out = [dict({k: v for k, v in n.items() if k != "ago"}, timestamp=now - n["ago"]) for n in ns]
+        return {"response": {"notifications": out, "unread_count": sum(1 for n in ns if not n["read"])}}
     if path.endswith("GetPlayerLinkDetails/v1/"):
         ids = [int(x) for x in inp.get("steamids", [])]
         # El avatar de «?» que Steam pone a las cuentas sin avatar
@@ -415,6 +424,8 @@ def fake_get(path, q):
         now = int(time.time())
         priv = {76561190000000101: {"persona_state": 1, "game_id": "1145360", "game_extra_info": "Hades"},
                 76561190000000102: {"persona_state": 1}, 76561190000000103: {"persona_state": 0, "last_logoff_time": now - 2 * 86400}}
+        if live():
+            priv[76561190000000103] = {"persona_state": 1}
         return {"response": {"accounts": [{"public_data": {"steamid": str(i), "persona_name": NAMES.get(i, "Amigo"),
                                                             "sha_digest_avatar": sha}, "private_data": priv.get(i, {"persona_state": 1})}
                                           for i in ids]}}

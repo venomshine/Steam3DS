@@ -1003,6 +1003,10 @@ static void account_lists_clear(void)
 }
 
 static void open_pay(void);
+static void gift_open(int line);
+static bool gift_is_open(void);
+static void draw_gift_bottom(void);
+static void input_gift(u32 kd, u32 kh, touchPosition *tp);
 
 // El carrito vive en shop.c; la pestaña lo copia como lista cuando cambia
 static void cart_sync(void)
@@ -1980,6 +1984,10 @@ static void draw_row_sel(float hy)
 static void draw_store_bottom(void)
 {
 	Tab *t = CUR;
+	if (S.tab == TAB_CART && gift_is_open()) {
+		draw_gift_bottom();
+		return;
+	}
 	if (S.tab >= TAB_COUNT) draw_account_bar();
 	else {
 		draw_subbar();
@@ -2045,6 +2053,17 @@ static void draw_store_bottom(void)
 			ui_text(nx + 4, y + 8.5f, tag, SZ_TINY, COL_DIM, AL_LEFT, 0);
 			nx += tw + 5;
 		}
+		if (S.tab == TAB_CART && i < shop_cart()->n && shop_cart()->line[i].giftee) {
+			// Lo regalas: para quién es, delante del nombre
+			const CartLine *cl = &shop_cart()->line[i];
+			char gt[64];
+			snprintf(gt, sizeof gt, _("REGALO · %s"), cl->giftee_name[0] ? cl->giftee_name : "…");
+			float tw = ui_text_w(gt, SZ_TINY) + 8;
+			if (tw > 110) tw = 110;
+			ui_rect(nx, y + 8, tw, 13, COL_TAG);
+			ui_text(nx + 4, y + 8.5f, gt, SZ_TINY, COL_ACC, AL_LEFT, tw - 8);
+			nx += tw + 5;
+		}
 		ui_text(nx, y + 7, r->name, SZ_BODY - 0.02f, ign ? COL_DIM : on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 10 - nx - pw);
 		if (S.tab == TAB_LIBRARY) {
 			char hrs[24];
@@ -2098,7 +2117,7 @@ static void draw_store_bottom(void)
 		ui_rrect(BOT_W - 4, y + 2, 3, hh - 4, 1.5f, C2D_Color32(0xff, 0xff, 0xff, 0x55));
 	}
 	if (S.tab == TAB_CART) {
-		static const char *hc[] = {"A", "Abrir", "↑↓", "Elegir", "Y", "Quitar", "X", "Pagar", "B", "Volver"};
+		static const char *hc[] = {"A", "Abrir", "Y", "Quitar", "SELECT", "Regalar", "X", "Pagar", "B", "Volver"};
 		static const char *hb[] = {"B", "Volver", "START", "Menú"};
 		if (t->list.count) draw_hints(hc, 5);
 		else draw_hints(hb, 2);
@@ -5759,6 +5778,138 @@ static void person_status(const SteamPerson *p, char *out, size_t n, u32 *col)
 	}
 }
 
+// ---------------------------------------------------------------------------- Regalar (carrito)
+
+// SELECT sobre un juego del carrito: eliges a qué amigo se lo regalas y escribes la dedicatoria
+static struct {
+	bool open, want_kb;
+	int line, sel;
+	int who[MAX_FRIENDS];        // los amigos que se pueden elegir (sin las solicitudes)
+	int n;
+	u64 id;
+	char name[40];
+} GF;
+
+static bool gift_is_open(void) { return GF.open; }
+
+static void gift_build(void)
+{
+	GF.n = 0;
+	for (int i = 0; i < FL.np; i++)
+		if (!FL.p[i].request) GF.who[GF.n++] = i;
+	if (GF.sel >= GF.n) GF.sel = GF.n ? GF.n - 1 : 0;
+}
+
+static void gift_open(int line)
+{
+	const CartInfo *c = shop_cart();
+	if (line < 0 || line >= c->n) return;
+	if (shop_busy()) {
+		toast(_("Espera a que termine la acción anterior"));
+		return;
+	}
+	// Ya es un regalo: SELECT otra vez lo vuelve a dejar para ti
+	if (c->line[line].giftee) {
+		shop_cart_gift(line, 0, NULL, NULL, NULL);
+		return;
+	}
+	GF.open = true;
+	GF.line = line;
+	GF.sel = 0;
+	if (!FL.req && !FL.people && (!FL.at || osGetTime() - FL.at > 60000)) {
+		FL.at = osGetTime();
+		FL.fallback = false;
+		FL.req = steam_req_friends(auth_info()->steamid, auth_token(), false);
+	}
+}
+
+static void open_gift_keyboard(void)
+{
+	SwkbdState kb;
+	static char buf[800];
+	buf[0] = 0;
+	swkbdInit(&kb, SWKBD_TYPE_NORMAL, 2, 250);
+	swkbdSetHintText(&kb, _("Escribe una dedicatoria (opcional)"));
+	swkbdSetButton(&kb, SWKBD_BUTTON_LEFT, _("Cancelar"), false);
+	swkbdSetButton(&kb, SWKBD_BUTTON_RIGHT, _("Regalar"), true);
+	swkbdSetFeatures(&kb, SWKBD_DARKEN_TOP_SCREEN | SWKBD_ALLOW_HOME | SWKBD_ALLOW_RESET | SWKBD_ALLOW_POWER | SWKBD_MULTILINE);
+	swkbdSetValidation(&kb, SWKBD_ANYTHING, 0, 0);
+	if (swkbdInputText(&kb, buf, sizeof buf) != SWKBD_BUTTON_RIGHT) return;
+	GF.open = false;
+	shop_cart_gift(GF.line, (u32)(GF.id - 76561197960265728ULL), GF.name, buf, auth_info()->persona);
+}
+
+static void draw_gift_bottom(void)
+{
+	gift_build();
+	fx_bar(0, 0, BOT_W, LIST_Y, true);
+	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+	ui_icon(IC_HEART, 28, 6, 12, COL_ACC);
+	const CartInfo *c = shop_cart();
+	char t[120];
+	snprintf(t, sizeof t, _("Regalar %s"), GF.line < c->n ? c->line[GF.line].name : "");
+	ui_text(46, 5, t, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
+	const float RH = 26, top = LIST_Y + 22;
+	ui_text(10, LIST_Y + 5, _("¿Para quién es?"), SZ_SMALL, COL_ACC, AL_LEFT, 0);
+	const int vis = (int)((SCR_H - 18 - top) / RH);
+	int first = GF.sel - (vis - 1);
+	if (first < 0) first = 0;
+	for (int v = first; v < GF.n && v < first + vis; v++) {
+		float y = top + (v - first) * RH;
+		const SteamPerson *p = &FL.p[GF.who[v]];
+		bool on = v == GF.sel;
+		if (on) {
+			float br = 0.075f + 0.035f * sinf(g_time * 2.4f);
+			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
+			ui_rrect(3, y + 4, 2, RH - 8, 1, col_alpha(COL_ACC, 0.8f));
+		}
+		char av[128];
+		const Pic *pic = auth_avatar_url(p->avatar_sha, av, sizeof av) ? img_get(av, 32) : NULL;
+		if (pic) img_draw_cover(pic, 10, y + 3, 19, 19, 0.5f);
+		else ui_rect(10, y + 3, 19, 19, col_alpha(COL_WHITE, 0.07f));
+		char st[96];
+		u32 col;
+		person_status(p, st, sizeof st, &col);
+		ui_text(36, y + 2, p->name, SZ_SMALL, on ? COL_WHITE : COL_TXT, AL_LEFT, BOT_W - 48);
+		ui_text(36, y + 14, st, SZ_TINY, col, AL_LEFT, BOT_W - 48);
+	}
+	if (FL.loaded && !GF.n) ui_text(BOT_W / 2, top + 30, _("Todavía no tienes amigos en Steam"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+	else if (!FL.loaded && !FL.failed) ui_spinner(BOT_W / 2, top + 30, 6, COL_DIM);
+	static const char *h[] = {"A", "Regalar", "↑↓", "Elegir", "B", "Cancelar"};
+	static const char *h0[] = {"B", "Cancelar"};
+	if (GF.n) draw_hints(h, 3);
+	else draw_hints(h0, 1);
+}
+
+static void input_gift(u32 kd, u32 kh, touchPosition *tp)
+{
+	if ((kd & (KEY_B | KEY_SELECT)) || ((kd & KEY_TOUCH) && tp->py < LIST_Y && tp->px < 120)) {
+		GF.open = false;
+		return;
+	}
+	if (!GF.n) return;
+	if (key_repeat(kd, kh, KEY_DOWN) && GF.sel < GF.n - 1) GF.sel++;
+	if (key_repeat(kd, kh, KEY_UP) && GF.sel > 0) GF.sel--;
+	bool pick = kd & KEY_A;
+	const float RH = 26, top = LIST_Y + 22;
+	if ((kd & KEY_TOUCH) && tp->py >= top) {
+		const int vis = (int)((SCR_H - 18 - top) / RH);
+		int first = GF.sel - (vis - 1);
+		if (first < 0) first = 0;
+		int v = first + (int)((tp->py - top) / RH);
+		if (v >= 0 && v < GF.n) {
+			pick = v == GF.sel;
+			GF.sel = v;
+		}
+	}
+	if (pick) {
+		const SteamPerson *p = &FL.p[GF.who[GF.sel]];
+		GF.id = p->id;
+		snprintf(GF.name, sizeof GF.name, "%s", p->name);
+		GF.want_kb = true;
+	}
+}
+
 static void draw_friends_top(void)
 {
 	const AuthInfo *ai = auth_info();
@@ -8184,8 +8335,13 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 			if (kd & (KEY_B | KEY_X)) S.cart_qr = false;
 			return;
 		}
+		if (gift_is_open()) {
+			input_gift(kd, kh, tp);
+			return;
+		}
 		const CartInfo *c = shop_cart();
 		int sel = CUR->sel;
+		if ((kd & KEY_SELECT) && sel >= 0 && sel < c->n) gift_open(sel);
 		if ((kd & KEY_Y) && sel >= 0 && sel < c->n) {
 			if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
 			else shop_cart_remove(sel);
@@ -9245,6 +9401,11 @@ static void shop_events(void)
 			else if (ev.ok) snprintf(t, sizeof t, _("Ya no sigues %s"), ev.what);
 			else snprintf(t, sizeof t, _("No se pudo cambiar: %s"), shop_err(ev.code));
 			break;
+		case SH_CART_GIFT:
+			if (ev.ok && ev.what[0]) snprintf(t, sizeof t, _("Regalo para %s: se le enviará cuando pagues"), ev.what);
+			else if (ev.ok) snprintf(t, sizeof t, "%s", _("Ya no es un regalo: el juego será para ti"));
+			else snprintf(t, sizeof t, _("No se pudo cambiar: %s"), shop_err(ev.code));
+			break;
 		case SH_IGNORE:
 		case SH_UNIGNORE:
 			if (ev.ok && ev.kind == SH_IGNORE) snprintf(t, sizeof t, _("Has ignorado %s: no saldrá en tus recomendaciones"), ev.what);
@@ -9254,7 +9415,7 @@ static void shop_events(void)
 		}
 		static const Icon ic[] = {[SH_CART_ADD] = IC_CART, [SH_CART_REMOVE] = IC_CART, [SH_WISH_ADD] = IC_HEART,
 			[SH_WISH_REMOVE] = IC_HEART, [SH_FREE] = IC_PAD, [SH_IGNORE] = IC_HIDE, [SH_UNIGNORE] = IC_HIDE,
-			[SH_ACTIVATE] = IC_CODE, [SH_WALLET] = IC_COIN, [SH_REVIEW] = IC_CHAT, [SH_PLAYTEST] = IC_PAD, [SH_FOLLOW] = IC_BELL, [SH_UNFOLLOW] = IC_BELL};
+			[SH_ACTIVATE] = IC_CODE, [SH_WALLET] = IC_COIN, [SH_REVIEW] = IC_CHAT, [SH_PLAYTEST] = IC_PAD, [SH_FOLLOW] = IC_BELL, [SH_UNFOLLOW] = IC_BELL, [SH_CART_GIFT] = IC_HEART};
 		toast_icon(t, ic[ev.kind]);
 	}
 }
@@ -9464,6 +9625,11 @@ int main(int argc, char **argv)
 		if (FL.want_code) {
 			FL.want_code = false;
 			open_fcode_keyboard();
+			kd = kh = ku = 0;
+		}
+		if (GF.want_kb) {
+			GF.want_kb = false;
+			open_gift_keyboard();
 			kd = kh = ku = 0;
 		}
 		if (RE.want_kb) {

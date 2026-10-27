@@ -199,6 +199,8 @@ typedef struct {
 	char price[20], orig[20];   // precio de ahora (o el de cuando se añadió)
 	int disc;
 	bool valid;
+	u32 giftee;                 // regalo para esta cuenta (accountid; 0 si es para ti)
+	char giftee_name[40];
 } CartLine;
 
 #define CART_MAX 40

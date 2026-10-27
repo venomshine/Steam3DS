@@ -1520,6 +1520,13 @@ bool steam_parse_cart(const char *json, CartInfo *c)
 		const cJSON *v = cJSON_GetObjectItemCaseSensitive(li, "is_valid");
 		l->valid = !v || cJSON_IsTrue(v);
 		amount(cJSON_GetObjectItemCaseSensitive(li, "price_when_added"), l->price, sizeof l->price);
+		// ¿Es un regalo? (flags.is_gift y gift_info con la cuenta y el nombre del amigo)
+		const cJSON *fl = cJSON_GetObjectItemCaseSensitive(li, "flags");
+		const cJSON *gi = cJSON_GetObjectItemCaseSensitive(li, "gift_info");
+		if (jbool(fl, "is_gift") && gi) {
+			l->giftee = (u32)jnum(gi, "accountid_giftee", 0);
+			copy_utf8(l->giftee_name, sizeof l->giftee_name, jstr(cJSON_GetObjectItemCaseSensitive(gi, "gift_message"), "gifteename"));
+		}
 		// Lo que ya se sabía de esta línea (nombre, juego) se conserva hasta que lleguen los datos nuevos
 		for (int i = 0; i < old.n; i++)
 			if (old.line[i].line_id == l->line_id) {

@@ -6,7 +6,7 @@
 // Acciones con tu cuenta: carrito, deseados y juegos gratis. Una a la vez; la interfaz
 // pregunta cada frame y enseña el resultado con shop_event().
 
-typedef enum { SH_CART_ADD, SH_CART_REMOVE, SH_WISH_ADD, SH_WISH_REMOVE, SH_FREE, SH_IGNORE, SH_UNIGNORE, SH_ACTIVATE, SH_WALLET, SH_REVIEW, SH_PLAYTEST, SH_FOLLOW, SH_UNFOLLOW } ShopKind;
+typedef enum { SH_CART_ADD, SH_CART_REMOVE, SH_WISH_ADD, SH_WISH_REMOVE, SH_FREE, SH_IGNORE, SH_UNIGNORE, SH_ACTIVATE, SH_WALLET, SH_REVIEW, SH_PLAYTEST, SH_FOLLOW, SH_UNFOLLOW, SH_CART_GIFT } ShopKind;
 
 typedef struct {
 	ShopKind kind;
@@ -65,3 +65,6 @@ void shop_playtest(u32 appid, const char *name);
 void shop_follow(u32 appid, const char *name, bool follow);
 bool shop_followed(u32 appid);
 void shop_set_followed(const u32 *ids, int n);
+
+// Marcar una línea del carrito como regalo para un amigo (accountid 0: quitar el regalo, es para ti)
+void shop_cart_gift(int line, u32 accountid, const char *name, const char *message, const char *signature);

@@ -195,6 +195,12 @@ int main(void) {
 	// Al volver a leer el carrito no se pierden los nombres ya conocidos
 	CHECK(steam_parse_cart(slurp("data/cart.json"), &cart) && !strcmp(cart.line[1].name, "Cyberpunk 2077: Ultimate Edition"));
 	CHECK(steam_parse_cart("{\"response\":{\"cart\":{}}}", &cart) && cart.n == 0);
+	// Una línea que es un regalo: para qué cuenta y con qué nombre
+	CHECK(steam_parse_cart("{\"response\":{\"cart\":{\"line_items\":[{\"line_item_id\":\"5\",\"packageid\":1,"
+		"\"flags\":{\"is_gift\":true},\"gift_info\":{\"accountid_giftee\":63149187,\"gift_message\":{\"gifteename\":\"Kenji\"}}}]}}}", &cart)
+		&& cart.n == 1 && cart.line[0].giftee == 63149187 && !strcmp(cart.line[0].giftee_name, "Kenji"));
+	CHECK(steam_parse_cart("{\"response\":{\"cart\":{\"line_items\":[{\"line_item_id\":\"5\",\"packageid\":1,\"flags\":{\"is_gift\":false}}]}}}", &cart)
+		&& cart.n == 1 && !cart.line[0].giftee);
 	// POST con sesión: el token va en la URL y la entrada en el cuerpo
 	cJSON *in = cJSON_CreateObject();
 	cJSON_AddNumberToObject(in, "appid", 570);

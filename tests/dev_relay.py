@@ -224,6 +224,10 @@ def fake_post(host, path, body):
 CART = []
 FREE_ADDED = set()
 next_line = [9000000000000001]
+# RELAY_CART=paquetes separados por comas: el carrito ya empieza con ellos (para probar sin añadir a mano)
+for _pk in filter(None, os.environ.get("RELAY_CART", "").split(",")):
+    CART.append({"line_item_id": str(next_line[0]), "type": 1, "packageid": int(_pk), "time_added": int(time.time())})
+    next_line[0] += 1
 
 
 def real_item(kind, ident):
@@ -268,6 +272,17 @@ def fake_shop(path, body):
     if path.endswith("IAccountCartService/RemoveItemFromCart/v1/"):
         CART[:] = [l for l in CART if l["line_item_id"] != str(inp.get("line_item_id"))]
         return {"response": {"cart": cart_json()}}
+    if path.endswith("IAccountCartService/ModifyLineItem/v1/"):
+        for l in CART:
+            if l["line_item_id"] == str(inp.get("line_item_id")):
+                fl = inp.get("flags", {})
+                l["flags"] = {"is_gift": bool(fl.get("is_gift")), "is_private": bool(fl.get("is_private"))}
+                if fl.get("is_gift") and inp.get("gift_info"):
+                    l["gift_info"] = inp["gift_info"]
+                else:
+                    l.pop("gift_info", None)
+                return {"response": {"cart": cart_json()}}
+        return {"response": {}}, 42
     if path.endswith("IWishlistService/AddToWishlist/v1/"):
         a = int(inp.get("appid", 0))
         if a in WISH:

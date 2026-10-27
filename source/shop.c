@@ -174,6 +174,32 @@ void shop_cart_remove(int line)
 	H.act = steam_post_service("IAccountCartService/RemoveItemFromCart", in, auth_token());
 }
 
+// Regalo: la línea del carrito pasa a ser para un amigo (con su dedicatoria); se paga como siempre
+void shop_cart_gift(int line, u32 accountid, const char *name, const char *message, const char *signature)
+{
+	if (line < 0 || line >= H.cart.n) return;
+	const CartLine *l = &H.cart.line[line];
+	if (!start_action(SH_CART_GIFT, l->appid, accountid && name ? name : "")) return;
+	cJSON *in = country_input();
+	char id[24];
+	snprintf(id, sizeof id, "%llu", (unsigned long long)l->line_id);
+	cJSON_AddStringToObject(in, "line_item_id", id);
+	cJSON *flags = cJSON_AddObjectToObject(in, "flags");
+	cJSON_AddBoolToObject(flags, "is_gift", accountid != 0);
+	cJSON_AddBoolToObject(flags, "is_private", false);
+	if (accountid) {
+		cJSON *gi = cJSON_AddObjectToObject(in, "gift_info");
+		cJSON_AddNumberToObject(gi, "accountid_giftee", accountid);
+		cJSON *gm = cJSON_AddObjectToObject(gi, "gift_message");
+		cJSON_AddStringToObject(gm, "gifteename", name ? name : "");
+		cJSON_AddStringToObject(gm, "message", message ? message : "");
+		cJSON_AddStringToObject(gm, "sentiment", "");
+		cJSON_AddStringToObject(gm, "signature", signature ? signature : "");
+		cJSON_AddNumberToObject(gi, "time_scheduled_send", 0);
+	}
+	H.act = steam_post_service("IAccountCartService/ModifyLineItem", in, auth_token());
+}
+
 // ---------------------------------------------------------------------------- Deseados y gratis
 
 void shop_wish(u32 appid, const char *name, bool add)
@@ -448,6 +474,13 @@ void shop_update(void)
 			// La tienda web contesta con un 200 (sin x-eresult)
 			ok = r->state == REQ_DONE && r->http == 200;
 			if (ok) ignored_mark(H.appid, H.kind == SH_IGNORE);
+		} else if (H.kind == SH_CART_GIFT) {
+			// La respuesta puede no traer el carrito: se vuelve a pedir entero
+			if (ok) {
+				H.act = NULL;
+				shop_cart_load();
+				H.act = r;
+			}
 		} else if (H.kind == SH_CART_ADD || H.kind == SH_CART_REMOVE) {
 			if (ok && steam_parse_cart(r->data, &H.cart)) cart_changed();
 		} else if (H.kind == SH_FREE && ok) {

@@ -780,10 +780,32 @@ static struct {
 	int pics;             // 0 sin mirar, 1 mirando, 2 hecho
 } MRG;
 
-static bool lib_merged(u32 appid)
+// La biblioteca de la última vez (en la SD): se enseña al momento y la nueva se carga por detrás,
+// en work, hasta que está entera (con sus ocultos, agrupados, playtests cerrados y familia) y
+// entonces se cambia de una vez. old_drop: lo que se agrupó la última vez
+static struct {
+	bool on;          // se está enseñando la copia y la nueva va en work
+	bool swapped;     // ahora mismo work está en la pestaña (mientras se carga)
+	bool saved;       // esta carga ya se guardó
+	RowList work, work_aside;
+	int work_base;
+	u32 *old_drop;
+	int nold;
+} LC;
+
+// Lo agrupado en esta carga
+static bool mrg_has(u32 appid)
 {
 	for (int i = 0; i < MRG.ndrop; i++)
 		if (MRG.drop[i] == appid) return true;
+	return false;
+}
+
+static bool lib_merged(u32 appid)
+{
+	if (mrg_has(appid)) return true;
+	for (int i = 0; LC.on && i < LC.nold; i++)
+		if (LC.old_drop[i] == appid) return true;
 	return false;
 }
 
@@ -798,7 +820,7 @@ static void aside_add(const StoreRow *r)
 static void lib_drop_hidden(Tab *t)
 {
 	bool show_hidden = lib_mode == LIB_HIDDEN_MODE;
-	if (!HID.n && !show_hidden && !MRG.ndrop) return;
+	if (!HID.n && !show_hidden && !MRG.ndrop && !(LC.on && LC.nold)) return;
 	int n = 0, base = t->lib_base;
 	for (int i = 0; i < t->list.count; i++) {
 		u32 id = t->list.rows[i].appid;
@@ -859,7 +881,7 @@ static bool name_has_beta(const char *s)
 
 static void merge_drop(u32 appid)
 {
-	if (lib_merged(appid)) return;
+	if (mrg_has(appid)) return;
 	if (MRG.ndrop == MRG.capdrop) {
 		int cap = MRG.capdrop ? MRG.capdrop * 2 : 32;
 		u32 *nd = realloc(MRG.drop, cap * sizeof(u32));
@@ -905,6 +927,109 @@ static void closed_poll(Tab *t)
 	if (n > 0) lib_drop_hidden(t);
 }
 
+// Mientras se enseña la copia, lo que carga la biblioteca trabaja con work (y lo que apartó)
+static void lib_swap(Tab *t)
+{
+	RowList l = t->list;
+	t->list = LC.work;
+	LC.work = l;
+	l = lib_aside;
+	lib_aside = LC.work_aside;
+	LC.work_aside = l;
+	int b = t->lib_base;
+	t->lib_base = LC.work_base;
+	LC.work_base = b;
+	LC.swapped = !LC.swapped;
+}
+
+typedef struct { bool did; int sel, sel_y; } LibIn;
+
+static LibIn lib_enter(void)
+{
+	Tab *t = &tabs[TAB_LIBRARY];
+	LibIn in = {LC.on && !LC.swapped, t->sel, t->sel_y};
+	if (in.did) lib_swap(t);
+	return in;
+}
+
+static void lib_leave(LibIn in)
+{
+	Tab *t = &tabs[TAB_LIBRARY];
+	if (!in.did || !LC.swapped) return;
+	lib_swap(t);
+	t->sel = in.sel;   // lo que mueve la carga no mueve lo que estás mirando
+	t->sel_y = in.sel_y;
+}
+
+static void lib_cache_path(char *p, size_t n)
+{
+	snprintf(p, n, APP_DIR "/biblioteca_%llu.bin", (unsigned long long)auth_info()->steamid);
+}
+
+#define LIB_CACHE_MAGIC 0x4C335331u   // «1S3L»
+
+// Se guarda todo (lo que se ve y lo apartado) y lo agrupado
+static void lib_cache_save(Tab *t)
+{
+	char p[96];
+	lib_cache_path(p, sizeof p);
+	FILE *f = fopen(p, "wb");
+	if (!f) return;
+	u32 hdr[4] = {LIB_CACHE_MAGIC, sizeof(StoreRow), (u32)(t->list.count + lib_aside.count), (u32)MRG.ndrop};
+	bool ok = fwrite(hdr, sizeof hdr, 1, f) == 1;
+	if (ok && t->list.count) ok = fwrite(t->list.rows, sizeof(StoreRow), t->list.count, f) == (size_t)t->list.count;
+	if (ok && lib_aside.count) ok = fwrite(lib_aside.rows, sizeof(StoreRow), lib_aside.count, f) == (size_t)lib_aside.count;
+	if (ok && MRG.ndrop) ok = fwrite(MRG.drop, sizeof(u32), MRG.ndrop, f) == (size_t)MRG.ndrop;
+	fclose(f);
+	if (!ok) remove(p);
+	else netlog("biblioteca: guardada (%d juegos)", (int)hdr[2]);
+}
+
+// Al empezar: la copia a la vista, ya ordenada y sin ocultos ni agrupados
+static bool lib_cache_load(Tab *t)
+{
+	if (LC.on || t->list.count) return false;
+	char p[96];
+	lib_cache_path(p, sizeof p);
+	FILE *f = fopen(p, "rb");
+	if (!f) return false;
+	u32 hdr[4];
+	bool ok = fread(hdr, sizeof hdr, 1, f) == 1 && hdr[0] == LIB_CACHE_MAGIC && hdr[1] == sizeof(StoreRow) &&
+	          hdr[2] > 0 && hdr[2] < 20000 && hdr[3] < 20000;
+	StoreRow *rows = ok ? malloc(hdr[2] * sizeof(StoreRow)) : NULL;
+	u32 *drop = ok && hdr[3] ? malloc(hdr[3] * sizeof(u32)) : NULL;
+	ok = rows && (!hdr[3] || drop) && fread(rows, sizeof(StoreRow), hdr[2], f) == hdr[2] &&
+	     (!hdr[3] || fread(drop, sizeof(u32), hdr[3], f) == hdr[3]);
+	fclose(f);
+	if (!ok) {
+		free(rows);
+		free(drop);
+		return false;
+	}
+	for (u32 i = 0; i < hdr[2]; i++) {
+		rows[i].name[sizeof rows[i].name - 1] = 0;
+		rows[i].icon[sizeof rows[i].icon - 1] = 0;
+	}
+	rowlist_free(&t->list);
+	t->list.rows = rows;
+	t->list.count = t->list.cap = t->list.total = (int)hdr[2];
+	t->list.end = true;
+	free(LC.old_drop);
+	LC.old_drop = drop;
+	LC.nold = (int)hdr[3];
+	LC.on = true;
+	LC.saved = false;
+	rowlist_free(&LC.work);
+	LC.work_aside.count = 0;
+	LC.work_base = 0;
+	lib_aside.count = 0;
+	t->sel = t->sel_y = 0;
+	hidden_load();
+	lib_apply(t);
+	netlog("biblioteca: la de la última vez (%d juegos) mientras se actualiza", (int)hdr[2]);
+	return true;
+}
+
 static void merge_poll(Tab *t)
 {
 	if (MRG.req && MRG.req->state >= REQ_DONE) {
@@ -930,7 +1055,7 @@ static void merge_poll(Tab *t)
 				}
 				if (MRG.ncand < MRG.capcand) MRG.cand[MRG.ncand++] = m[i].appid;
 			}
-			if (!((playtest && !alive) || child) || lib_merged(m[i].appid)) continue;
+			if (!((playtest && !alive) || child) || mrg_has(m[i].appid)) continue;
 			merge_drop(m[i].appid);
 			dropped++;
 			netlog("biblioteca: aparte %lu (%s, tipo %d, padre %lu)", (unsigned long)m[i].appid, child ? "va dentro de otro" : "playtest terminado", m[i].type, (unsigned long)m[i].parent);
@@ -1026,6 +1151,60 @@ static void family_poll(void)
 		t->list.total = t->list.count;
 		lib_sort(t);
 	}
+}
+
+// ¿Terminó la carga (con todo lo que la cambia)? Entonces la nueva sustituye a la copia de una vez
+// y se guarda para la próxima
+static void lib_cache_poll(void)
+{
+	Tab *t = &tabs[TAB_LIBRARY];
+	if (!auth_logged() || LC.saved) return;
+	LibIn in = lib_enter();
+	bool failed = t->list.err[0] && !t->list.req;
+	bool done = t->started && !t->list.req && t->list.end && !failed && FAM.stage == 3 && !FAM.req &&
+	            (!t->list.count || (MRG.started && !MRG.req && MRG.next >= MRG.nids && MRG.pics == 2));
+	lib_leave(in);
+	if (failed && LC.on) {
+		// Sin conexión o Steam falló: se queda la copia (la próxima vez se vuelve a intentar)
+		LC.saved = true;
+		return;
+	}
+	if (!done) return;
+	LC.saved = true;
+	if (LC.on) {
+		u32 sel = t->sel >= 0 && t->sel < t->list.count ? t->list.rows[t->sel].appid : 0;
+		rowlist_free(&t->list);
+		t->list = LC.work;
+		memset(&LC.work, 0, sizeof LC.work);
+		RowList a = lib_aside;
+		lib_aside = LC.work_aside;
+		LC.work_aside = a;
+		LC.work_aside.count = 0;
+		t->lib_base = LC.work_base;
+		LC.on = false;
+		free(LC.old_drop);
+		LC.old_drop = NULL;
+		LC.nold = 0;
+		t->sel = t->sel_y = 0;
+		lib_apply(t);
+		for (int i = 0; sel && i < t->list.count; i++)
+			if (t->list.rows[i].appid == sel) {
+				t->sel = t->sel_y = i;
+				break;
+			}
+		netlog("biblioteca: actualizada (%d juegos)", t->list.count);
+	}
+	lib_cache_save(t);
+}
+
+// La primera carga de la biblioteca (con la copia de la SD a la vista, si la hay)
+static void lib_start(void)
+{
+	Tab *t = &tabs[TAB_LIBRARY];
+	if (!LC.on && !t->list.count && !t->list.req && auth_logged()) lib_cache_load(t);
+	LibIn in = lib_enter();
+	tab_more(TAB_LIBRARY);
+	lib_leave(in);
 }
 
 // Lo que la tienda sabe que tienes también trae DLC, bandas sonoras, vídeos o hardware: en la
@@ -1351,6 +1530,10 @@ static void account_lists_clear(void)
 	free(MRG.drop);
 	free(MRG.cand);
 	memset(&MRG, 0, sizeof MRG);
+	rowlist_free(&LC.work);
+	free(LC.work_aside.rows);
+	free(LC.old_drop);
+	memset(&LC, 0, sizeof LC);
 	wish_stash.count = 0;
 	deals_checked = false;
 	for (int ti = TAB_LIBRARY; ti < TAB_H0; ti++) {
@@ -1425,15 +1608,24 @@ static void library_changed(void)
 {
 	Tab *t = &tabs[TAB_LIBRARY];
 	family_reset();   // lo de la familia se vuelve a sumar cuando esté la biblioteca nueva
-	rowlist_free(&t->list);   // suelta también su petición (soltarla antes era soltarla dos veces)
+	if (t->list.count || LC.on) {
+		// La que ves se queda hasta que la nueva esté entera
+		LC.on = true;
+		rowlist_free(&LC.work);
+		LC.work_aside.count = 0;
+		LC.work_base = 0;
+	} else {
+		rowlist_free(&t->list);   // suelta también su petición (soltarla antes era soltarla dos veces)
+		lib_aside.count = 0;
+		t->sel = 0;
+	}
+	LC.saved = false;
 	free(t->wish);
 	t->wish = NULL;
 	t->nwish = t->wish_next = 0;
 	t->wish_loaded = false;
 	t->lib_stage = t->lib_base = 0;
 	t->started = false;
-	t->sel = 0;
-	lib_aside.count = 0;
 	if (MRG.req) net_release(MRG.req);
 	MRG.req = NULL;
 	MRG.started = false;   // la biblioteca nueva se vuelve a mirar (lo ya agrupado se queda)
@@ -8282,7 +8474,7 @@ static void menu_choose(int item)
 		user_load(auth_info()->steamid);   // tu fondo y tu marco
 		if (!XP.req) XP.req = steam_req_badges(auth_info()->steamid, auth_token());
 		go_scene(SC_PROFILE, 1);
-		if (!tabs[TAB_LIBRARY].started) tab_more(TAB_LIBRARY);
+		if (!tabs[TAB_LIBRARY].started) lib_start();
 		if (!tabs[TAB_WISHLIST].started) tab_more(TAB_WISHLIST);
 		break;
 	case MI_LIBRARY: open_account_list(TAB_LIBRARY); break;
@@ -10244,9 +10436,11 @@ int main(int argc, char **argv)
 			Tab *t = &tabs[ti];
 			if (ti == TAB_HOME) continue;   // Inicio no tiene lista propia: son las de TAB_H0…
 			else if (ti == TAB_LIBRARY) {
+				LibIn in = lib_enter();
 				int before = t->list.count;
 				owned_poll(t);
 				if (lib_mode && t->list.count != before) lib_apply(t);
+				lib_leave(in);
 			} else if (ti == TAB_WISHLIST) {
 				int before = t->list.count;
 				wish_poll(t);
@@ -10291,7 +10485,12 @@ int main(int argc, char **argv)
 		}
 		seen_poll();
 		tags_poll();
-		family_poll();
+		{
+			LibIn in = lib_enter();
+			family_poll();
+			lib_leave(in);
+		}
+		lib_cache_poll();
 		notif_poll();
 		flist_poll();
 		info_poll();
@@ -10399,7 +10598,7 @@ int main(int argc, char **argv)
 		// Con sesión, la biblioteca y los deseados se cargan en segundo plano (para «ya es tuyo» y
 		// «en deseados» en las fichas); se espera a que la tienda sepa el país y el idioma
 		if (auth_logged() && S.ctx_ready) {
-			if (!tabs[TAB_LIBRARY].started) tab_more(TAB_LIBRARY);
+			if (!tabs[TAB_LIBRARY].started) lib_start();
 			if (!tabs[TAB_WISHLIST].started) tab_more(TAB_WISHLIST);
 			if (!tabs[TAB_CART].started) {
 				tabs[TAB_CART].started = true;

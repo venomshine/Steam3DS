@@ -1655,7 +1655,7 @@ static void draw_status(const char *user)
 		char c[8];
 		snprintf(c, sizeof c, "%d", nu);
 		r -= ui_text(r, ty, c, SZ_SMALL, COL_ACC, AL_RIGHT, 0) + 2;
-		ui_icon(IC_BELL, r - 11, 4, 11, COL_ACC);
+		ui_icon(IC_BELL, r - 11, 2, 11, COL_ACC);   // el badajo la hace parecer más baja: centrada con los demás
 		r -= 11 + 8;
 	}
 	if (user) snprintf(right, sizeof right, "%s · %s", user, clock);

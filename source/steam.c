@@ -2552,3 +2552,33 @@ bool steam_friend_action_ok(const Req *r)
 	cJSON_Delete(root);
 	return ok;
 }
+
+// ----------------------------------------------------------------------------
+// Cola de descubrimiento
+
+Req *steam_req_discovery(bool rebuild, const char *token)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON_AddNumberToObject(in, "queue_type", 0);
+	cJSON_AddStringToObject(in, "country_code", g_country);
+	cJSON_AddBoolToObject(in, "rebuild_queue", rebuild);
+	cJSON_AddBoolToObject(in, "rebuild_queue_if_stale", true);
+	cJSON_AddBoolToObject(in, "no_experimental_results", true);
+	return steam_get_service("IStoreService/GetDiscoveryQueue", in, token);
+}
+
+int steam_parse_discovery(const char *json, u32 *ids, int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *it;
+	cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(resp, "appids"))
+		if (n < max && cJSON_IsNumber(it)) ids[n++] = (u32)it->valuedouble;
+	cJSON_Delete(root);
+	return n;
+}

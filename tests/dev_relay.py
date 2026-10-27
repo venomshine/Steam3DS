@@ -114,6 +114,7 @@ IGNORED = {}   # juegos ignorados (appid -> motivo), como rgIgnoredApps
 PRIVACY = {"PrivacySettings": {"PrivacyProfile": 3, "PrivacyInventory": 3, "PrivacyInventoryGifts": 3, "PrivacyOwnedGames": 3,
                                "PrivacyPlaytime": 3, "PrivacyFriendsList": 2}, "eCommentPermission": 1}
 THEME = [""]
+DQ_PAGE = [0]   # cola de descubrimiento simulada: cuántas veces se ha pedido una nueva
 PC_STATE = {}   # descargas del PC simulado: lo desinstalado y si las descargas están en pausa
 # Tus reseñas (appid -> datos), como las da IUserReviewsService; Cyberpunk ya tiene una
 REVIEWS = {1091500: {"review": "Después de las actualizaciones es otro juego. Night City es increíble y la historia de V engancha muchísimo.",
@@ -383,6 +384,13 @@ def fake_get(path, q):
                 [{"ulfriendid": str(f), "efriendrelationship": 3} for f in FRIENDS] +
                 [{"ulfriendid": "76561190000000109", "efriendrelationship": 2}]}}}
     # Dos PCs con Steam abierto; en el del salón ya está instalado Cyberpunk
+    if path.endswith("GetDiscoveryQueue/v1/"):
+        # Tu cola: doce juegos de verdad; con rebuild_queue, los doce siguientes
+        pool = [1245620, 1086940, 2379780, 1145350, 367520, 1593500, 814380, 1174180, 548430, 1817070, 105600, 2050650,
+                242760, 646570, 1794680, 252490, 1966720, 2195250, 1888930, 990080, 1599340, 2215430, 1716740, 2138330]
+        DQ_PAGE[0] = DQ_PAGE[0] + 1 if inp.get("rebuild_queue") else 0
+        k = (DQ_PAGE[0] * 12) % len(pool)
+        return {"response": {"appids": (pool[k:] + pool[:k])[:12], "country_code": "ES", "skipped": 0, "exhausted": False}}
     if path.endswith("GetProfileThemesAvailable/v1/"):
         return {"response": {"profile_themes": [{"theme_id": t, "title": "#ProfileTheme_" + t} for t in ("Summer", "Midnight", "Cosmic")]}}
     if path.endswith("GetAllClientLogonInfo/v1/"):

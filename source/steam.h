@@ -412,3 +412,7 @@ int steam_parse_friend_requests(const char *json, u64 *ids, int max);
 enum { FRIEND_ADD, FRIEND_ACCEPT, FRIEND_IGNORE };
 Req *steam_req_friend_action(int action, u64 steamid, const char *sessionid, const char *cookies);
 bool steam_friend_action_ok(const Req *r);
+
+// Tu cola de descubrimiento (los juegos que Steam te recomienda; rebuild: una cola nueva)
+Req *steam_req_discovery(bool rebuild, const char *token);
+int steam_parse_discovery(const char *json, u32 *ids, int max);   // -1 si falla

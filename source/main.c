@@ -28,7 +28,7 @@ typedef enum { SC_SPLASH, SC_STORE, SC_GAME, SC_SHOTS, SC_LOGIN, SC_PROFILE, SC_
 enum { TAB_HOME, TAB_OFFERS, TAB_DEMOS, TAB_BETAS, TAB_SEARCH, TAB_COUNT };
 // Listas de tu cuenta: se ven como una pestaña más, pero sin barra de pestañas
 // Pseudopestañas (cuenta) y las cuatro listas de Inicio (una por subcategoría)
-enum { TAB_LIBRARY = TAB_COUNT, TAB_WISHLIST, TAB_CART, TAB_H0, TAB_ALL = TAB_H0 + 4 };
+enum { TAB_LIBRARY = TAB_COUNT, TAB_WISHLIST, TAB_CART, TAB_H0, TAB_ALL = TAB_H0 + 5 };
 enum { SEC_SUMMARY, SEC_REQS, SEC_REVIEWS, SEC_ACH, SEC_EXTRAS, SEC_SIMILAR, SEC_COUNT };
 
 #define ROW_H      29
@@ -167,7 +167,7 @@ enum { BT_NONE, BT_IGNORE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT
 	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW, BT_RUP, BT_RDOWN, BT_RTEXT, BT_RVIS, BT_RCANCEL, BT_RSEND, BT_PDL, BT_UADD, BT_UADDW, BT_UIGN };
 
 // Pestañas de la tienda
-#define HOME_PARTS 4
+#define HOME_PARTS 5
 typedef struct {
 	RowList list;
 	int sel;
@@ -337,8 +337,15 @@ static void list_poll(RowList *l, bool append)
 	l->req = NULL;
 }
 
-static const StoreQuery home_q[HOME_PARTS] = {Q_TOP, Q_NEW, Q_SOON, Q_F2P};
-static const char *home_title[HOME_PARTS] = {"Lo más vendido", "Novedades populares", "Próximamente", "Gratis para jugar"};
+static const StoreQuery home_q[HOME_PARTS] = {Q_TOP, Q_NEW, Q_SOON, Q_F2P, Q_TOP};   // el último («Para ti») es tu cola
+static const char *home_title[HOME_PARTS] = {"Lo más vendido", "Novedades populares", "Próximamente", "Gratis para jugar", "Recomendado para ti"};
+#define TAB_FORYOU (TAB_H0 + 4)
+
+// «Para ti»: tu cola de descubrimiento; cada página es una cola nueva (como «Siguiente cola» en la tienda)
+static struct {
+	Req *req;
+	int pages;
+} DQ;
 
 static bool tab_paged(int t)
 {
@@ -444,6 +451,14 @@ static void tab_more(int ti)
 	if (ti == TAB_HOME) {
 		tab_more(TAB_H0 + S.home_sub);
 		return;
+	} else if (ti == TAB_FORYOU) {
+		if (t->list.end || DQ.req) return;
+		if (!auth_logged()) {
+			snprintf(t->list.err, sizeof t->list.err, "%s", _("Inicia sesión (START) para ver los juegos que Steam te recomienda"));
+			t->list.end = true;
+			return;
+		}
+		DQ.req = steam_req_discovery(DQ.pages > 0, auth_token());
 	} else if (ti >= TAB_H0) {
 		if (t->list.end) return;
 		t->list.req = steam_req_query(home_q[ti - TAB_H0], t->list.count, PAGE);
@@ -1667,7 +1682,7 @@ static void draw_store_top(void)
 	}
 }
 
-static const char *home_sub_name[HOME_PARTS] = {"Más vendidos", "Novedades", "Próximamente", "Gratis"};
+static const char *home_sub_name[HOME_PARTS] = {"Más vendidos", "Novedades", "Próximamente", "Gratis", "Para ti"};
 
 // Subcategorías de Inicio: una barra que cuelga de la de pestañas (recta arriba, redonda abajo)
 // La barra de precio de Buscar (en el sitio de la de subcategorías de Inicio): el precio elegido a
@@ -1727,7 +1742,9 @@ static void draw_subbar(void)
 	ui_rrect(hx + 6, y + 4, sw - 12, h - 7, (h - 7) / 2, col_alpha(COL_WHITE, br * e));
 	for (int i = 0; i < HOME_PARTS; i++) {
 		float on = 1 - clampf(fabsf(S.sub_x - i), 0, 1);
-		ui_text(x + sw * i + sw / 2, ty, _(home_sub_name[i]), SZ_TINY, col_alpha(col_lerp(COL_DIM, COL_WHITE, on), e), AL_CENTER, sw - 8);
+		// Con cinco no caben todos: el nombre se encoge un poco en vez de cortarse
+		float tw = ui_text_w(_(home_sub_name[i]), SZ_TINY), tsz = tw > sw - 8 ? SZ_TINY * (sw - 8) / tw : SZ_TINY;
+		ui_text(x + sw * i + sw / 2, ty + (ui_line_h(SZ_TINY) - ui_line_h(tsz)) / 2, _(home_sub_name[i]), tsz, col_alpha(col_lerp(COL_DIM, COL_WHITE, on), e), AL_CENTER, 0);
 		if (i) ui_rect(x + sw * i, y + 6, 1, h - 11, col_alpha(COL_WHITE, 0.16f * e));   // la «|» entre ellas
 	}
 	ui_scissor_off();
@@ -8324,6 +8341,7 @@ int main(int argc, char **argv)
 				// Betas: si una página falla, se vuelve a pedir la misma
 				if (ti == TAB_BETAS && t->list.req && t->list.req->state == REQ_FAILED) t->raw_next -= PAGE;
 				list_poll(&t->list, tab_paged(ti));
+				if (ti == TAB_FORYOU && !t->list.err[0]) t->list.end = DQ.pages >= 6 && !DQ.req;   // cada cola es una página
 			}
 			if (ti == TAB_BETAS) {
 				// La etiqueta «Acceso anticipado» la ponen los usuarios y se queda en juegos que ya
@@ -8490,6 +8508,22 @@ int main(int argc, char **argv)
 		// Tu cuenta enseña siempre tu fondo y tu marco (aunque vengas del perfil de un amigo)
 		if (S.scene == SC_PROFILE && auth_logged() && UP.id != auth_info()->steamid) user_load(auth_info()->steamid);
 		user_poll();
+		if (DQ.req && DQ.req->state >= REQ_DONE) {
+			Tab *t = &tabs[TAB_FORYOU];
+			u32 ids[40];
+			int n = DQ.req->state == REQ_DONE ? steam_parse_discovery(DQ.req->data, ids, 40) : -1;
+			netlog("para ti: cola %d con %d juegos (HTTP %ld)", DQ.pages + 1, n, DQ.req->http);
+			if (n > 0 && !t->list.req) {
+				t->list.req = steam_req_items(ids, n, false);
+				DQ.pages++;
+				t->list.end = DQ.pages >= 6;   // hasta seis colas seguidas
+			} else if (n <= 0) {
+				snprintf(t->list.err, sizeof t->list.err, "%s", n == 0 ? _("Steam no tiene recomendaciones para ti ahora mismo") : _("No se pudo cargar tu cola de descubrimiento"));
+				t->list.end = true;
+			}
+			net_release(DQ.req);
+			DQ.req = NULL;
+		}
 		user_friend_poll();
 		accset_poll();
 		pcdl_poll();

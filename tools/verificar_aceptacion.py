@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Comprueba si un registro de aceptación de las condiciones (aceptacion.txt) es auténtico.
+"""Comprueba si un registro de aceptación de las condiciones (aceptacion_<cuenta>.txt) es auténtico.
 
 El registro va firmado por Steam3DS (HMAC-SHA256 con la clave de la compilación oficial y la consola
 donde se aceptó). Si alguien lo ha escrito a mano, lo ha cambiado o lo ha copiado de otra consola, la
 firma no cuadra.
 
 Uso:
-  python3 tools/verificar_aceptacion.py aceptacion.txt [--clave secret/terms.key]
+  python3 tools/verificar_aceptacion.py aceptacion_76561198000000000.txt [--clave secret/terms.key]
 
 La clave es la de secret/terms.key (no está en el repositorio: guárdala tú).
 """
@@ -42,13 +42,10 @@ def main():
         print("NO VÁLIDO: la firma no cuadra (cambiado a mano, de otra compilación o con otra clave)")
         return 1
     print("AUTÉNTICO: generado por Steam3DS y sin cambios\n")
-    for k in ("Versión de las condiciones", "Versión de la aplicación", "Fecha y hora (reloj de la consola)", "Consola",
-              "Idioma en que se leyeron", "Huella del texto aceptado (SHA-256)"):
+    for k in ("Cuenta de Steam", "Nombre en Steam", "Versión de las condiciones", "Versión de la aplicación",
+              "Fecha y hora (reloj de la consola)", "Consola", "Idioma en que se leyeron", "Huella del texto aceptado (SHA-256)"):
         mm = re.search(r"^%s: (.*)$" % re.escape(k), text, re.M)
         print("  %s: %s" % (k, mm.group(1) if mm else "?"))
-    acc = text.split("Cuentas de Steam con las que se ha iniciado sesión después de aceptar:\n", 1)
-    print("\n  Cuentas:")
-    print("".join("    " + l + "\n" for l in (acc[1].splitlines() if len(acc) > 1 else []) if l.strip()) or "    (ninguna)")
     return 0
 
 

@@ -9192,12 +9192,12 @@ static void splash_sound(float t0, float t1)
 }
 
 // ============================================================================
-// Condiciones de uso y aviso legal: hay que leerlas hasta el final y aceptarlas antes de usar la
-// app. La aceptación se guarda en la SD (aceptacion.txt) con la versión, la fecha, la huella del
-// texto aceptado y una copia; si las condiciones cambian, se sube TERMS_VERSION y se vuelven a pedir
+// Condiciones de uso y aviso legal: al iniciar sesión, cada cuenta tiene que leerlas hasta el final y
+// aceptarlas antes de usarse en la app. La aceptación se guarda en la SD (aceptacion_<cuenta>.txt),
+// firmada, con la versión, la fecha, la cuenta, la huella del texto aceptado y una copia; si las
+// condiciones cambian, se sube TERMS_VERSION y se vuelven a pedir
 
 #define TERMS_VERSION 1
-#define TERMS_FILE APP_DIR "/aceptacion.txt"
 
 static const char *const terms_txt[][2] = {
 	{"1. Qué es Steam3DS", "Steam3DS es una aplicación casera (homebrew) independiente y gratuita. No es un producto oficial: no está afiliada, patrocinada, aprobada ni respaldada por Valve Corporation ni por Nintendo. Steam y el logotipo de Steam son marcas de Valve Corporation, y Nintendo 3DS es una marca de Nintendo; aquí solo se usan para identificar el servicio con el que se conecta la aplicación."},
@@ -9209,14 +9209,15 @@ static const char *const terms_txt[][2] = {
 	{"7. Limitación de responsabilidad", "En la medida máxima que permita la ley aplicable, el autor de Steam3DS (VENOMSHiNE) no será responsable de ningún daño o perjuicio derivado del uso de la aplicación o de la imposibilidad de usarla, entre otros: restricciones, suspensiones o cierres de cuentas de Steam o de otros servicios, pérdida de datos, de objetos o de saldo, compras no deseadas o daños en la consola o en la tarjeta SD. Usas la aplicación bajo tu propia responsabilidad."},
 	{"8. Uso adecuado", "No uses Steam3DS para incumplir las normas de Steam ni la ley: nada de automatizar acciones de forma abusiva, enviar spam, suplantar a otras personas ni entrar en cuentas que no sean tuyas."},
 	{"9. Cambios en estas condiciones", "Estas condiciones pueden actualizarse con nuevas versiones de la aplicación. Si cambian, se te pedirá que vuelvas a leerlas y aceptarlas."},
-	{"10. Aceptación", "Al marcar la casilla y pulsar «Aceptar y continuar» declaras que tienes la edad mínima para usar Steam en tu país (o el permiso de tu madre, padre o tutor), que has leído estas condiciones completas y que las aceptas. Se guarda un registro de la aceptación en la tarjeta SD (/3ds/Steam3DS/aceptacion.txt) con la versión de las condiciones, la fecha y la hora, una copia del texto aceptado y las cuentas de Steam con las que inicies sesión después."},
+	{"10. Aceptación", "Al marcar la casilla y pulsar «Aceptar y continuar» declaras que eres el titular de esta cuenta de Steam, que tienes la edad mínima para usar Steam en tu país (o el permiso de tu madre, padre o tutor), que has leído estas condiciones completas y que las aceptas. Cada cuenta las acepta por separado al iniciar sesión. Se guarda un registro firmado en la tarjeta SD (/3ds/Steam3DS/aceptacion_ seguido del número de tu cuenta) con la versión de las condiciones, la fecha y la hora, tu cuenta de Steam y una copia del texto aceptado."},
 };
 #define NTERMS ((int)(sizeof terms_txt / sizeof *terms_txt))
 #define TERMS_TOP 54        // donde empieza el texto (arriba)
 #define TERMS_BOT 232       // y donde acaba
 
 static struct {
-	int ok;              // -1 sin mirar, 0 sin aceptar, 1 aceptadas (esta versión)
+	int ok;              // -1 sin mirar, 0 sin aceptar, 1 aceptadas (esta versión) por la cuenta «id»
+	u64 id;
 	float scroll, total, read;
 	float ph[NTERMS][2]; // alto del título y del texto de cada apartado
 	bool measured, checked;
@@ -9266,10 +9267,17 @@ static void terms_sign(const char *txt, size_t n, char hex[65])
 
 #define TERMS_SIG "Firma: "
 
-// El registro entero (o NULL); *body: cuánto ocupa lo firmado (todo menos la última línea)
-static char *terms_read(size_t *body)
+static void terms_path(u64 id, char *out, size_t n)
 {
-	FILE *f = fopen(TERMS_FILE, "rb");
+	snprintf(out, n, APP_DIR "/aceptacion_%llu.txt", (unsigned long long)id);
+}
+
+// El registro de la cuenta (o NULL); *body: cuánto ocupa lo firmado (todo menos la última línea)
+static char *terms_read(u64 id, size_t *body)
+{
+	char path[96];
+	terms_path(id, path, sizeof path);
+	FILE *f = fopen(path, "rb");
 	if (!f) return NULL;
 	fseek(f, 0, SEEK_END);
 	long n = ftell(f);
@@ -9288,43 +9296,53 @@ static char *terms_read(size_t *body)
 	return b;
 }
 
-// Firmado, de esta consola y de esta versión de las condiciones
-static bool terms_valid(const char *b, size_t body)
+// Firmado, de esta consola, de esta cuenta y de esta versión de las condiciones
+static bool terms_valid(const char *b, size_t body, u64 id)
 {
 	if (!body) return false;
 	char hex[65];
 	terms_sign(b, body, hex);
 	if (strncmp(b + body + strlen(TERMS_SIG), hex, 64)) return false;
-	char want[48];
+	char want[48], acc[48];
 	snprintf(want, sizeof want, "\nVersión de las condiciones: %d\n", TERMS_VERSION);
-	return strstr(b, want) != NULL;
+	snprintf(acc, sizeof acc, "\nCuenta de Steam: %llu ", (unsigned long long)id);
+	return strstr(b, want) && strstr(b, acc);
 }
 
-static bool terms_write(const char *txt, size_t n)
+static bool terms_write(u64 id, const char *txt, size_t n)
 {
-	char hex[65];
+	char hex[65], path[96], tmp[100];
 	terms_sign(txt, n, hex);
+	terms_path(id, path, sizeof path);
+	snprintf(tmp, sizeof tmp, "%s.tmp", path);
 	// Primero a un archivo aparte y después se cambia (si se corta, no se pierde el que había)
-	FILE *f = fopen(TERMS_FILE ".tmp", "wb");
+	FILE *f = fopen(tmp, "wb");
 	if (!f) return false;
 	bool ok = fwrite(txt, 1, n, f) == n && fprintf(f, TERMS_SIG "%s\n", hex) > 0;
 	ok = fclose(f) == 0 && ok;
 	if (ok) {
-		remove(TERMS_FILE);
-		ok = rename(TERMS_FILE ".tmp", TERMS_FILE) == 0;
+		remove(path);
+		ok = rename(tmp, path) == 0;
 	}
 	if (ok) netlog("condiciones: registro firmado %.16s…", hex);
 	return ok;
 }
 
+// ¿La cuenta con la que estás dentro ya las aceptó? (se mira una vez por cuenta)
 static bool terms_ok(void)
 {
+	if (!auth_logged()) return false;
+	u64 id = auth_info()->steamid;
+	if (TM.id != id) {
+		TM.id = id;
+		TM.ok = -1;
+	}
 	if (TM.ok < 0) {
 		TM.ok = 0;
 		size_t body = 0;
-		char *b = terms_read(&body);
+		char *b = terms_read(id, &body);
 		if (b) {
-			TM.ok = terms_valid(b, body);
+			TM.ok = terms_valid(b, body, id);
 			static const char fk[] = "Fecha y hora (reloj de la consola): ";
 			const char *w = strstr(b, fk);
 			if (TM.ok) netlog("condiciones: aceptadas el %.19s (registro válido)", w ? w + sizeof fk - 1 : "?");
@@ -9345,7 +9363,7 @@ static void terms_measure(void)
 		TM.ph[i][1] = ui_text_lines(_(terms_txt[i][1]), SZ_SMALL, w) * 15;
 		TM.total += TM.ph[i][0] + 4 + TM.ph[i][1] + 14;
 	}
-	TM.total += ui_text_lines(_("Lee estas condiciones hasta el final. Para usar Steam3DS tienes que aceptarlas."), SZ_SMALL, w) * 15 + 12;
+	TM.total += ui_text_lines(_("Lee estas condiciones hasta el final. Para usar tu cuenta de Steam en Steam3DS tienes que aceptarlas."), SZ_SMALL, w) * 15 + 12;
 	TM.lang = (int)i18n_get();
 	TM.measured = true;
 }
@@ -9388,46 +9406,20 @@ static bool terms_save(void)
 	ADD("Versión de las condiciones: %d\n", TERMS_VERSION);
 	ADD("Versión de la aplicación: %s\n", APP_VERSION);
 	ADD("Fecha y hora (reloj de la consola): %s\n", when);
+	ADD("Cuenta de Steam: %llu (%s)\n", (unsigned long long)auth_info()->steamid, auth_info()->account);
+	ADD("Nombre en Steam: %s\n", auth_info()->persona);
 	ADD("Consola: %s\n", terms_console());
 	ADD("Idioma en que se leyeron: %s\n", lname[i18n_get() < LANG_COUNT ? i18n_get() : 0]);
 	ADD("Huella del texto aceptado (SHA-256): %s\n", hex);
 	ADD("Leídas hasta el final: sí\nCasilla «%s» marcada: sí\n\n", _("He leído y acepto las condiciones de uso y el aviso legal"));
 	ADD("Texto aceptado:\n\n%s\n\n", _("Condiciones de uso y aviso legal"));
 	for (int i = 0; i < NTERMS; i++) ADD("%s\n%s\n\n", _(terms_txt[i][0]), _(terms_txt[i][1]));
-	ADD("Cuentas de Steam con las que se ha iniciado sesión después de aceptar:\n");
 #undef ADD
-	bool ok = n < cap && terms_write(t, n);
-	if (ok) netlog("condiciones: aceptadas (versión %d, texto %.16s…, consola %s)", TERMS_VERSION, hex, terms_console());
+	bool ok = n < cap && terms_write(auth_info()->steamid, t, n);
+	if (ok) netlog("condiciones: aceptadas por %llu (versión %d, texto %.16s…, consola %s)", (unsigned long long)auth_info()->steamid,
+		TERMS_VERSION, hex, terms_console());
 	free(t);
 	return ok;
-}
-
-// Cada cuenta con la que se entra después de aceptar se apunta una vez (y se vuelve a firmar)
-static void terms_note_account(void)
-{
-	static u64 noted;
-	if (TM.ok != 1 || !auth_logged() || auth_info()->steamid == noted) return;
-	noted = auth_info()->steamid;
-	char id[24];
-	snprintf(id, sizeof id, "%llu", (unsigned long long)noted);
-	size_t body = 0;
-	char *b = terms_read(&body);
-	if (!b || !terms_valid(b, body) || strstr(b, id)) {
-		free(b);
-		return;
-	}
-	time_t now = time(NULL);
-	char when[32], line[160];
-	strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", gmtime(&now));
-	int ln = snprintf(line, sizeof line, "- %s (%s), desde el %s\n", id, auth_info()->account[0] ? auth_info()->account : auth_info()->persona, when);
-	char *t = malloc(body + ln + 1);
-	if (t) {
-		memcpy(t, b, body);
-		memcpy(t + body, line, ln);
-		if (terms_write(t, body + ln)) netlog("condiciones: cuenta %s apuntada en el registro", id);
-		free(t);
-	}
-	free(b);
 }
 
 // «En línea» en Steam mientras usas la app (si no lo has desactivado y ya aceptaste las condiciones).
@@ -9436,7 +9428,7 @@ static void presence_tick(void)
 {
 	static u64 next, who;
 	static bool was;
-	bool want = auth_logged() && TM.ok == 1 && !g_cfg.hide_online;
+	bool want = terms_ok() && !g_cfg.hide_online;
 	u64 id = want ? auth_info()->steamid : 0, now = osGetTime();
 	if (want == was && id == who && now < next) return;
 	static char jar[10240];
@@ -9450,6 +9442,14 @@ static void presence_tick(void)
 	next = now + 60000;
 	cm_presence_set(want, want ? jar : NULL, id);
 	memset(jar, 0, sizeof jar);
+}
+
+// Con sesión en una cuenta que aún no las aceptó: a las condiciones (después, a donde estabas)
+static void terms_open(Scene next);
+static void terms_tick(void)
+{
+	if (!auth_logged() || S.scene == SC_SPLASH || S.scene == SC_TERMS || terms_ok()) return;
+	terms_open(S.scene == SC_LOGIN || S.scene == SC_ACCOUNTS ? SC_STORE : S.scene);
 }
 
 static void terms_open(Scene next)
@@ -9471,6 +9471,16 @@ static void terms_accept(void)
 	go_scene(TM.next, 1);
 }
 
+// Sin aceptarlas no se puede usar la cuenta: se cierra su sesión (la tienda sigue disponible)
+static void terms_decline(void)
+{
+	netlog("condiciones: no aceptadas por %llu, se cierra la sesión", (unsigned long long)auth_info()->steamid);
+	S.menu_open = false;
+	do_logout();
+	toast(_("Sin aceptar las condiciones no se puede usar tu cuenta"));
+	go_scene(SC_STORE, -1);
+}
+
 static void draw_terms_top(void)
 {
 	terms_measure();
@@ -9479,7 +9489,7 @@ static void draw_terms_top(void)
 	ui_rrect(X, 45, ui_text_w(_("Condiciones de uso y aviso legal"), SZ_LARGE), 2, 1, col_alpha(COL_ACC, 0.8f));
 	ui_scissor(GFX_TOP, 0, TERMS_TOP, TOP_W, TERMS_BOT - TERMS_TOP);
 	float y = TERMS_TOP + 4 - TM.scroll;
-	const char *intro = _("Lee estas condiciones hasta el final. Para usar Steam3DS tienes que aceptarlas.");
+	const char *intro = _("Lee estas condiciones hasta el final. Para usar tu cuenta de Steam en Steam3DS tienes que aceptarlas.");
 	int nl = ui_text_lines(intro, SZ_SMALL, W);
 	ui_text_wrap(X, y, W, intro, SZ_SMALL, COL_ACC, nl, 15);
 	y += nl * 15 + 12;
@@ -9505,7 +9515,10 @@ static void draw_terms_top(void)
 static void draw_terms_bottom(void)
 {
 	bool read = TM.read >= 1;
-	ui_text(BOT_W / 2, 12, _("Antes de empezar"), SZ_LARGE, COL_WHITE, AL_CENTER, BOT_W - 20);
+	ui_text(BOT_W / 2, 6, _("Antes de usar tu cuenta"), SZ_LARGE, COL_WHITE, AL_CENTER, BOT_W - 20);
+	char who[160];
+	snprintf(who, sizeof who, "%s · %s", auth_info()->persona, auth_info()->account);
+	ui_text(BOT_W / 2, 27, who, SZ_TINY, COL_DIM, AL_CENTER, BOT_W - 40);
 	// Lo leído: hasta el final para poder aceptar
 	fx_glass(14, 42, BOT_W - 28, 62, 12, 1, 0);
 	if (read) {
@@ -9529,7 +9542,7 @@ static void draw_terms_bottom(void)
 	ui_text_wrap(bx + 30, c->y + (c->h - 28) / 2, c->w - 46, _("He leído y acepto las condiciones de uso y el aviso legal"), SZ_SMALL,
 		col_alpha(COL_WHITE, ca), 2, 14);
 	// Los botones
-	draw_button_k(&B_TEXIT, "B", false, IC_POWER, _("Salir"), COL_BTN2, COL_BTN2, COL_WHITE, 1, TM.pressed == 2);
+	draw_button_k(&B_TEXIT, "B", false, IC_LOCK, _("No acepto"), COL_BTN2, COL_BTN2, COL_WHITE, 1, TM.pressed == 2);
 	draw_button_k(&B_TACCEPT, "X", false, IC_CHECK, _("Aceptar y continuar"), COL_ACC, C2D_Color32(0x1a, 0x9f, 0xff, 0xff), COL_WHITE,
 		TM.checked ? 1 : 0.45f, TM.pressed == 3);
 	static const char *h[] = {"↑↓", "Leer", "A", "Marcar", "X", "Aceptar"};
@@ -9572,10 +9585,7 @@ static void input_terms(u32 kd, u32 kh, u32 ku, touchPosition *tp, float dt)
 		if (TM.checked) terms_accept();
 		else toast(TM.read >= 1 ? _("Marca la casilla para aceptar") : _("Primero lee las condiciones hasta el final"));
 	}
-	if ((kd & KEY_B) || act == 2) {
-		S.ask_exit = true;
-		S.exit_anim = 0;
-	}
+	if ((kd & KEY_B) || act == 2) terms_decline();
 }
 
 static void splash_update(float dt, u32 kd)
@@ -9590,11 +9600,9 @@ static void splash_update(float dt, u32 kd)
 	} else {
 		splash_out += dt;
 		if (splash_out > 0.35f) {
-			// Con varias cuentas guardadas, primero se elige con cuál entrar; antes de nada, las
-			// condiciones de uso si aún no se han aceptado (o han cambiado)
-			Scene next = auth_choosing() ? SC_ACCOUNTS : SC_STORE;
-			if (terms_ok()) go_scene(next, 0);
-			else terms_open(next);
+			// Con varias cuentas guardadas, primero se elige con cuál entrar (las condiciones se
+			// piden al entrar con una cuenta que aún no las aceptó)
+			go_scene(auth_choosing() ? SC_ACCOUNTS : SC_STORE, 0);
 			// El resto de la app no usa estos sprites: se liberan en cuanto la GPU acabe con ellos
 			sprites_free_in = 2;
 		}
@@ -11053,9 +11061,9 @@ int main(int argc, char **argv)
 		auth_update();
 		// Con sesión, la biblioteca y los deseados se cargan en segundo plano (para «ya es tuyo» y
 		// «en deseados» en las fichas); se espera a que la tienda sepa el país y el idioma
-		terms_note_account();
+		terms_tick();
 		presence_tick();
-		if (auth_logged() && S.ctx_ready && TM.ok == 1) {
+		if (S.ctx_ready && terms_ok()) {
 			if (!tabs[TAB_LIBRARY].started) lib_start();
 			if (!tabs[TAB_WISHLIST].started) tab_more(TAB_WISHLIST);
 			if (!tabs[TAB_CART].started) {

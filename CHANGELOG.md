@@ -29,6 +29,6 @@ Primera versión pública.
 
 ### General
 - Español, inglés y japonés.
-- Condiciones de uso y aviso legal al empezar: hay que leerlas hasta el final y aceptarlas; la
-  aceptación queda registrada en la SD (`/3ds/Steam3DS/aceptacion.txt`).
+- Condiciones de uso y aviso legal al iniciar sesión: cada cuenta las lee hasta el final y las acepta;
+  queda un registro firmado por cuenta en la SD (`/3ds/Steam3DS/aceptacion_<cuenta>.txt`).
 - Imágenes en cola para no saturar la consola y sesión web que se renueva como en un navegador.

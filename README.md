@@ -33,11 +33,11 @@ También se publica `Steam3DS.3dsx` para abrirlo desde el Homebrew Launcher.
 
 ## Condiciones de uso
 
-La primera vez que abres Steam3DS (y cada vez que cambien) tienes que leer las condiciones de uso y
-el aviso legal hasta el final y aceptarlas. La aceptación queda registrada en la SD, en
-`/3ds/Steam3DS/aceptacion.txt`, con la versión, la fecha, una copia del texto aceptado y las cuentas
-con las que inicias sesión después. El registro va firmado para esa consola: si se cambia a mano o
-se copia de otra, deja de valer y Steam3DS vuelve a pedir las condiciones.
+Al iniciar sesión con una cuenta por primera vez (y cada vez que cambien) hay que leer las
+condiciones de uso y el aviso legal hasta el final y aceptarlas; sin sesión, la tienda se puede ver
+igual. Cada cuenta deja su registro firmado en la SD, en `/3ds/Steam3DS/aceptacion_<cuenta>.txt`,
+con la versión, la fecha, la cuenta y una copia del texto aceptado. Si se cambia a mano o se copia de
+otra consola deja de valer y Steam3DS vuelve a pedir las condiciones.
 
 ## Iniciar sesión
 

@@ -9,10 +9,17 @@
 #define ICON_SLOTS 40   // aparte: los iconos pequeños (biblioteca, avatares) no echan a las imágenes grandes
 #define ALL_SLOTS (SLOTS + ICON_SLOTS)
 
+// Las imágenes se piden en cola, por orden de llegada, unas pocas a la vez: así la consola no
+// descarga y decodifica muchas de golpe y no se echan unas a otras antes de llegar
+#define BIG_AT_ONCE 2
+#define ICON_AT_ONCE 4
+
 typedef struct {
 	char *url;
 	int max_w;          // la misma imagen puede pedirse grande (captura) y pequeña (miniatura)
 	Req *req;
+	bool queued;        // pedida, esperando su turno para descargarse
+	u64 asked;          // orden de la cola
 	bool ready, failed;
 	C3D_Tex tex;
 	Tex3DS_SubTexture sub;
@@ -21,7 +28,7 @@ typedef struct {
 } Slot;
 
 static Slot slots[ALL_SLOTS];
-static u64 frame;
+static u64 frame, asked_seq;
 
 void img_init(void) {}
 
@@ -67,9 +74,31 @@ void img_hold(bool hold)
 	holding = hold;
 }
 
+// Arranca las que esperan en cola (las más antiguas primero) si hay hueco en su grupo
+static void start_queued(int i0, int i1, int limit)
+{
+	int busy = 0;
+	for (int i = i0; i < i1; i++) busy += slots[i].req != NULL;
+	while (busy < limit) {
+		Slot *next = NULL;
+		for (int i = i0; i < i1; i++) {
+			Slot *c = &slots[i];
+			// Solo las que se siguen viendo (las demás esperan a que vuelvan a pedirse)
+			if (c->queued && frame - c->used <= 2 && (!next || c->asked < next->asked)) next = c;
+		}
+		if (!next) break;
+		next->queued = false;
+		next->req = net_get_jpeg(next->url, next->max_w);
+		if (!next->req) next->failed = true;
+		busy++;
+	}
+}
+
 void img_update(void)
 {
 	frame++;
+	start_queued(0, SLOTS, BIG_AT_ONCE);
+	start_queued(SLOTS, ALL_SLOTS, ICON_AT_ONCE);
 	if (holding) return;   // se suben al acabar la animación (siguen descargándose)
 	// Como mucho una subida por frame para no dar tirones
 	for (int i = 0; i < ALL_SLOTS; i++) {
@@ -102,20 +131,23 @@ const Pic *img_get(const char *url, int max_w)
 	if (!url || !*url) return NULL;
 	Slot *s = find(url, max_w);
 	if (!s) {
-		// Hueco libre o el que lleva más tiempo sin usarse (nunca uno de este frame)
+		// Hueco libre o el que lleva más tiempo sin usarse (nunca uno de este frame); una que se
+		// está descargando solo si no queda otra (si no, nunca llegaría a verse)
 		Slot *best = NULL;
 		int i0 = max_w <= 64 ? SLOTS : 0, i1 = max_w <= 64 ? ALL_SLOTS : SLOTS;
 		for (int i = i0; i < i1; i++) {
 			Slot *c = &slots[i];
 			if (!c->url) { best = c; break; }
 			if (c->used == frame) continue;
-			if (!best || c->used < best->used) best = c;
+			bool cb = c->req != NULL, bb = best && best->req != NULL;
+			if (!best || (bb && !cb) || (bb == cb && c->used < best->used)) best = c;
 		}
 		if (!best) return NULL;
 		slot_clear(best);
 		best->url = strdup(url);
 		best->max_w = max_w;
-		best->req = net_get_jpeg(url, max_w);
+		best->queued = true;
+		best->asked = ++asked_seq;
 		s = best;
 	}
 	s->used = frame;
@@ -125,7 +157,7 @@ const Pic *img_get(const char *url, int max_w)
 int img_pending(void)
 {
 	int n = 0;
-	for (int i = 0; i < ALL_SLOTS; i++) n += slots[i].req != NULL;
+	for (int i = 0; i < ALL_SLOTS; i++) n += slots[i].req != NULL || slots[i].queued;
 	return n;
 }
 

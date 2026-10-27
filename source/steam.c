@@ -860,7 +860,11 @@ bool steam_parse_review_summary(const char *json, AppInfo *a)
 // Reseñas
 
 static int rv_type;
-static bool rv_recent, rv_all;
+static bool rv_recent, rv_all, rv_other;
+static int rv_raw;
+
+void steam_reviews_other(bool on) { rv_other = on; }
+int steam_reviews_last_raw(void) { return rv_raw; }
 
 void steam_reviews_filter(int type, bool recent, bool all_langs)
 {
@@ -876,7 +880,7 @@ Req *steam_req_reviews(u32 appid, const char *cursor)
 	char url[320];
 	snprintf(url, sizeof url,
 		"https://store.steampowered.com/appreviews/%lu?json=1&language=%s&filter=%s&review_type=%s&purchase_type=all&num_per_page=8&cursor=%s",
-		(unsigned long)appid, rv_all ? "all" : g_lang, rv_recent ? "recent" : "all", types[rv_type % 3], cur);
+		(unsigned long)appid, rv_all || rv_other ? "all" : g_lang, rv_recent ? "recent" : "all", types[rv_type % 3], cur);
 	free(cur);
 	return net_get(url, LANE_API);
 }
@@ -929,10 +933,16 @@ int steam_parse_reviews(const char *json, Review *out, int max, char *cursor, si
 	if (!root) return -1;
 	int n = 0;
 	const cJSON *r;
+	rv_raw = 0;
 	cJSON_ArrayForEach(r, cJSON_GetObjectItemCaseSensitive(root, "reviews")) {
+		rv_raw++;
 		if (n >= max) break;
 		const char *t = jstr(r, "review");
 		if (!t) continue;
+		// Las de otros idiomas: las del tuyo ya salieron antes
+		const char *lang = jstr(r, "language");
+		bool other = lang && strcmp(lang, g_lang);
+		if (rv_other && !rv_all && !other) continue;
 		char *c = clean_review(t);
 		if (!c || !*c) { free(c); continue; }
 		// En pantalla caben tres líneas: no hace falta guardar reseñas de miles de caracteres
@@ -944,6 +954,7 @@ int steam_parse_reviews(const char *json, Review *out, int max, char *cursor, si
 		out[n].text = c;
 		out[n].voted_up = jbool(r, "voted_up");
 		out[n].id = jid(r, "recommendationid");
+		out[n].other_lang = !rv_all && other;
 		const cJSON *au = cJSON_GetObjectItemCaseSensitive(r, "author");
 		out[n].hours = au ? (int)(jnum(au, "playtime_forever", 0) / 60) : 0;
 		n++;

@@ -689,15 +689,25 @@ class Relay(BaseHTTPRequestHandler):
             return
         # Las reseñas de la tienda: desde la nube Steam las redirige a la portada, así que se simulan
         if FAKE and host == "store.steampowered.com" and path.startswith("appreviews/"):
+            # RELAY_REV_ES=n: cuántas reseñas hay en español (las demás, en inglés y portugués)
+            n_es = int(os.environ.get("RELAY_REV_ES", "3"))
+            es = [("Una obra maestra. La historia y la música son increíbles.", True, 120),
+                  ("Demasiado corto para lo que cuesta, pero bonito.", False, 8),
+                  ("Lo jugué en la Steam Deck y va perfecto.", True, 45)][:n_es]
+            other = [("english", "A masterpiece. Great story and amazing soundtrack.", True, 210),
+                     ("english", "Runs great on the Steam Deck.", True, 33),
+                     ("brazilian", "Muito bom, recomendo demais.", True, 12)]
+            lang = q.get("language", "english")
+            pool = [("spanish",) + r for r in es] + (other if lang == "all" else [])
+            if lang not in ("all", "spanish"):
+                pool = [r for r in other if r[0] == lang]
             if q.get("cursor", "*") != "*":
-                body = json.dumps({"success": 1, "reviews": [], "cursor": "fin"}).encode()
-            else:
-                pos = q.get("review_type") != "negative"
-                revs = [{"recommendationid": str(9000 + i), "review": t, "voted_up": up, "author": {"playtime_forever": 60 * h}}
-                        for i, (t, up, h) in enumerate([("Una obra maestra. La historia y la música son increíbles.", True, 120),
-                                                         ("Demasiado corto para lo que cuesta, pero bonito.", False, 8),
-                                                         ("Lo jugué en la Steam Deck y va perfecto.", True, 45)]) if q.get("review_type", "all") == "all" or up == pos]
-                body = json.dumps({"success": 1, "query_summary": {"num_reviews": len(revs)}, "reviews": revs, "cursor": "AoJ"}).encode()
+                pool = []
+            pos = q.get("review_type") != "negative"
+            revs = [{"recommendationid": str(9000 + i), "review": t, "voted_up": up, "language": lg, "author": {"playtime_forever": 60 * h}}
+                    for i, (lg, t, up, h) in enumerate(pool) if q.get("review_type", "all") == "all" or up == pos]
+            body = json.dumps({"success": 1, "query_summary": {"num_reviews": len(revs)}, "reviews": revs,
+                               "cursor": "fin" if not revs else "AoJ"}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

@@ -82,6 +82,10 @@ TR = {
     'Ver la lista': ('View list', 'リストを表示'),
     'Ver el juego': ('View game', 'ゲームを表示'),
     'Ver perfil': ('View profile', 'プロフィールを表示'),
+    'Este juego todavía no tiene reseñas': ('This game has no reviews yet', 'このゲームにはまだレビューがありません'),
+    'No hay reseñas en tu idioma para este juego.': ('There are no reviews in your language for this game.', 'このゲームにはあなたの言語のレビューがありません。'),
+    'Se muestran reseñas en otros idiomas.': ('Showing reviews in other languages.', '他の言語のレビューを表示しています。'),
+    'Reseñas en otros idiomas': ('Reviews in other languages', '他の言語のレビュー'),
     'Ver todo': ('Browse all', 'すべて表示'),
     'Escribe una dedicatoria (opcional)': ('Write a personal message (optional)', 'メッセージを入力（任意）'),
     'Regalar': ('Gift', 'ギフト'),
@@ -559,7 +563,6 @@ TR = {
     "Recomendado": ("Recommended", "おすすめ"),
     "No recomendado": ("Not recommended", "おすすめしません"),
     "%d h jugadas": ("%d h played", "%d 時間プレイ"),
-    "Todavía no hay reseñas en tu idioma": ("No reviews in your language yet", "あなたの言語のレビューはまだありません"),
 
     # Extras y similares
     "CONTENIDO DESCARGABLE (%d)": ("DOWNLOADABLE CONTENT (%d)", "ダウンロードコンテンツ (%d)"),

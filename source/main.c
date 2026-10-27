@@ -85,6 +85,7 @@ static struct {
 	char rcursor[128];
 	Req *rreq;
 	bool rend;
+	int rother;                  // desde qué reseña son de otros idiomas (-1: aún las de tu idioma)
 	int rsel;
 	float rscroll;
 	RowList dlc, similar;
@@ -2374,6 +2375,8 @@ static void open_game(u32 appid, bool push)
 	if (S.rreq) net_release(S.rreq);
 	S.rreq = NULL;
 	S.rend = false;
+	S.rother = -1;
+	steam_reviews_other(false);
 	S.rsel = auth_logged() && owned_app(appid) ? -1 : 0;   // tu reseña, la primera
 	S.rscroll = 0;
 	review_editor_close();
@@ -2423,6 +2426,8 @@ static void reviews_set_filter(int f)
 	if (S.rreq) net_release(S.rreq);
 	S.rreq = NULL;
 	S.rend = false;
+	S.rother = -1;
+	steam_reviews_other(false);
 	if (S.rsel > 0) S.rsel = 0;
 	S.rscroll = 0;
 }
@@ -2684,7 +2689,17 @@ static void game_poll(const AppInfo *a)
 	if (S.rreq && S.rreq->state >= REQ_DONE) {
 		if (S.rreq->state == REQ_DONE) {
 			int n = steam_parse_reviews(S.rreq->data, S.reviews + S.nreviews, MAX_REVIEWS - S.nreviews, S.rcursor, sizeof S.rcursor);
-			if (n <= 0) S.rend = true;
+			if (n < 0 || steam_reviews_last_raw() == 0) {
+				// Se acabaron las de tu idioma (o no había): se sigue con las de otros idiomas, aparte
+				if (n >= 0 && S.rother < 0 && rv_filter != 4) {
+					S.rother = S.nreviews;
+					S.rcursor[0] = 0;
+					steam_reviews_other(true);
+				} else {
+					S.rend = true;
+				}
+				n = n < 0 ? 0 : n;
+			}
 			for (int i = 0; i < n; i++) {
 				int k = S.nreviews + i;
 				ui_block_parse(&S.rtext[k], review_buf, S.reviews[k].text, SZ_TINY, TOP_W - 36, 3);
@@ -2697,7 +2712,8 @@ static void game_poll(const AppInfo *a)
 		S.rreq = NULL;
 	}
 	if (!a) return;
-	if (S.sec == SEC_REVIEWS && S.nreviews == 0 && !S.rend) reviews_more();
+	// Se piden hasta llenar la pantalla (si hay pocas en tu idioma, siguen las de otros sin esperar)
+	if (S.sec == SEC_REVIEWS && S.nreviews < 6 && !S.rend) reviews_more();
 	if (S.sec == SEC_ACH && S.ach_for != a->appid) {
 		ach_reset();
 		S.ach_for = a->appid;
@@ -2943,6 +2959,13 @@ static void draw_reqs_top(const AppInfo *a)
 	}
 }
 // Alto de la tarjeta de una opinión: según las líneas de texto que tenga (hasta tres)
+// Encima de la primera reseña en otro idioma, un título que lo separa (o el aviso, si no hay
+// ninguna en tu idioma)
+static float review_head(int i)
+{
+	return S.rother >= 0 && i == S.rother ? (S.rother == 0 ? 34 : 22) : 0;
+}
+
 static float review_h(int i)
 {
 	int n = S.rtext[i].n < 1 ? 1 : S.rtext[i].n;
@@ -3008,7 +3031,7 @@ static void draw_reviews_top(const AppInfo *a)
 		top += mine_h + 5;   // las demás, debajo (se desplaza todo junto)
 	}
 	if (S.nreviews == 0) {
-		if (S.rend) ui_text(TOP_W / 2, 120, rv_filter == 0 ? _("Todavía no hay reseñas en tu idioma") : _("No hay reseñas con este filtro"), SZ_BODY, COL_DIM, AL_CENTER, 0);
+		if (S.rend) ui_text(TOP_W / 2, 120, rv_filter == 1 || rv_filter == 2 ? _("No hay reseñas con este filtro") : _("Este juego todavía no tiene reseñas"), SZ_BODY, COL_DIM, AL_CENTER, 0);
 		else draw_net_wait(TOP_W / 2, 125, NULL);
 		return;
 	}
@@ -3016,6 +3039,19 @@ static void draw_reviews_top(const AppInfo *a)
 	float y = top - S.rscroll;
 	for (int i = 0; i < S.nreviews; i++) {
 		const Review *r = &S.reviews[i];
+		float hd = review_head(i);
+		if (hd > 0) {
+			if (y + hd > clip && y < bottom) {
+				if (S.rother == 0) {
+					ui_text(TOP_W / 2, y + 2, _("No hay reseñas en tu idioma para este juego."), SZ_SMALL, COL_ACC, AL_CENTER, TOP_W - 24);
+					ui_text(TOP_W / 2, y + 16, _("Se muestran reseñas en otros idiomas."), SZ_TINY, COL_DIM, AL_CENTER, TOP_W - 24);
+				} else {
+					ui_text(14, y + 4, _("Reseñas en otros idiomas"), SZ_SMALL, COL_ACC, AL_LEFT, 0);
+					ui_hline(14, y + hd - 4, TOP_W - 28, C2D_Color32(0xff, 0xff, 0xff, 0x1c));
+				}
+			}
+			y += hd;
+		}
 		float h = review_h(i);
 		if (y + h > clip && y < bottom) {
 			bool on = i == S.rsel;
@@ -9859,7 +9895,8 @@ int main(int argc, char **argv)
 			float rvis = SCR_H - 20 - 52, ry = 0, rt = S.rscroll;
 			float mine = ge && ge->done ? my_review_h(&ge->info) : 0;
 			if (mine > 0 && S.rsel >= 0) ry += mine + 5;
-			for (int i = 0; i < S.rsel && i < S.nreviews; i++) ry += review_h(i) + 5;
+			for (int i = 0; i < S.rsel && i < S.nreviews; i++) ry += review_head(i) + review_h(i) + 5;
+			if (S.rsel >= 0 && S.rsel < S.nreviews) ry += review_head(S.rsel);
 			float card = S.rsel < 0 ? mine + 5 : S.rsel < S.nreviews ? review_h(S.rsel) + 5 : 0;
 			if (ry < rt) rt = ry;
 			if (ry + card > rt + rvis) rt = ry + card - rvis;

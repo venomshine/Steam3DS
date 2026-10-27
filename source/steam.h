@@ -59,6 +59,7 @@ typedef struct {
 	int hours;
 	char *text;
 	u64 id;                 // recommendationid (para darle un premio)
+	bool other_lang;        // en otro idioma (se piden cuando se acaban las del tuyo)
 } Review;
 
 typedef struct {
@@ -150,6 +151,9 @@ Req *steam_req_reviews(u32 appid, const char *cursor);
 // Filtro de las reseñas (como en la tienda): type 0 todas, 1 positivas, 2 negativas; recent: las más
 // nuevas primero (si no, las más útiles); all_langs: de todos los idiomas
 void steam_reviews_filter(int type, bool recent, bool all_langs);
+// Se acabaron las reseñas en tu idioma: las siguientes se piden en todos y se saltan las del tuyo
+void steam_reviews_other(bool on);
+int steam_reviews_last_raw(void);   // cuántas trajo la última página (antes de saltar ninguna)
 int steam_parse_reviews(const char *json, Review *out, int max, char *cursor, size_t cursor_sz);
 Req *steam_req_morelike(u32 appid);
 

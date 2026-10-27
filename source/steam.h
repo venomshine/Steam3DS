@@ -447,6 +447,7 @@ typedef struct {
 	char avatar[160];
 	char text[400];
 	u32 when;
+	u64 steamid;            // de su miniperfil (para pedir su nombre si Steam no lo pone)
 } ProfileComment;
 Req *steam_req_comments(u64 steamid, int count);
 int steam_parse_comments(const char *json, ProfileComment *out, int max, int *total);   // -1 si falla

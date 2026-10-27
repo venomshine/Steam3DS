@@ -2794,6 +2794,11 @@ int steam_parse_comments(const char *json, ProfileComment *out, int max, int *to
 				if (fa) memcpy(fa, "avatars.akamai.", 15);
 			}
 		}
+		const char *mp = strstr(c, "data-miniprofile=\"");
+		if (mp && (!next || mp < next)) {
+			unsigned long acc = strtoul(mp + 18, NULL, 10);
+			if (acc) pc->steamid = 76561197960265728ULL + acc;
+		}
 		const char *bd = strstr(c, "<bdi>");
 		if (bd && (!next || bd < next)) html_between(bd + 5, "</bdi>", pc->author, sizeof pc->author);
 		const char *ts = strstr(c, "data-timestamp=\"");
@@ -2803,7 +2808,7 @@ int steam_parse_comments(const char *json, ProfileComment *out, int max, int *to
 			tx = strchr(tx, '>');
 			if (tx) html_between(tx + 1, "</div>", pc->text, sizeof pc->text);
 		}
-		if (pc->author[0]) n++;
+		if (pc->author[0] || pc->steamid) n++;
 	}
 	cJSON_Delete(root);
 	return n;

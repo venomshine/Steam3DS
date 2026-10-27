@@ -6190,6 +6190,7 @@ static struct {
 	int ncom, com_total;
 	bool com_done, want_comment;
 	Req *com_req, *com_post;
+	Req *com_names;              // los nombres que Steam no puso en sus comentarios
 	int fr_kind, rel;
 	bool rel_set;
 	bool fready[UP_FILES];
@@ -6230,7 +6231,7 @@ static void known_add(u64 id, const char *url)
 static void user_reset(void)
 {
 	Req **all[] = {&UP.items, &UP.shows, &UP.xml, &UP.lvreq, &UP.files, &UP.page, &UP.ach_req[0], &UP.ach_req[1], &UP.ach_req[2],
-		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2], &UP.fr_req, &UP.com_req, &UP.com_post, &UP.fam_req, &UP.fam_people};
+		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2], &UP.fr_req, &UP.com_req, &UP.com_post, &UP.fam_req, &UP.fam_people, &UP.com_names};
 	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
 		if (*all[i]) net_release(*all[i]);
 	for (int i = 0; i < UP_FILES; i++)
@@ -6952,6 +6953,27 @@ static void user_comments_poll(void)
 		UP.com_done = true;
 		net_release(UP.com_req);
 		UP.com_req = NULL;
+		// A veces Steam pone el número de la cuenta en vez del nombre: se piden a la API
+		u64 ids[6];
+		int k = 0;
+		for (int i = 0; i < UP.ncom; i++) {
+			const char *a = UP.com[i].author;
+			bool digits = !a[0] || strspn(a, "0123456789") == strlen(a);
+			if (digits && UP.com[i].steamid) ids[k++] = UP.com[i].steamid;
+		}
+		if (k && !UP.com_names) UP.com_names = steam_req_people(ids, k, auth_token());
+	}
+	if (UP.com_names && UP.com_names->state >= REQ_DONE) {
+		SteamPerson pp[6];
+		int n = UP.com_names->state == REQ_DONE ? steam_parse_people(UP.com_names->data, pp, 6) : 0;
+		for (int i = 0; i < UP.ncom; i++)
+			for (int j = 0; j < n; j++)
+				if (UP.com[i].steamid == pp[j].id && pp[j].name[0]) {
+					snprintf(UP.com[i].author, sizeof UP.com[i].author, "%s", pp[j].name);
+					if (!UP.com[i].avatar[0]) auth_avatar_url(pp[j].avatar_sha, UP.com[i].avatar, sizeof UP.com[i].avatar);
+				}
+		net_release(UP.com_names);
+		UP.com_names = NULL;
 	}
 	if (UP.com_post && UP.com_post->state >= REQ_DONE) {
 		cJSON *root = UP.com_post->state == REQ_DONE ? cJSON_Parse(UP.com_post->data) : NULL;

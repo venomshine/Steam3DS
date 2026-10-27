@@ -320,6 +320,14 @@ int main(void) {
 	ProfileComment pcm[6];
 	int ctot = 0;
 	int ncm = steam_parse_comments(slurp("data/comments.json"), pcm, 6, &ctot);
+	// Sin nombre (Steam a veces pone el número de la cuenta): queda su steamid para pedirlo
+	{
+		ProfileComment pc2[2];
+		int t2 = 0;
+		CHECK(steam_parse_comments("{\"success\":true,\"total_count\":1,\"comments_html\":\"<div class=\\\"commentthread_comment \\\">"
+			"<a data-miniprofile=\\\"659591585\\\" href=\\\"x\\\"><bdi>76561198619857313</bdi></a></div>\"}", pc2, 2, &t2) == 1
+			&& pc2[0].steamid == 76561198619857313ULL);
+	}
 	printf("comentarios: %d de %d, el primero de %s (%lu): %.60s\n", ncm, ctot, ncm > 0 ? pcm[0].author : "-", ncm > 0 ? (unsigned long)pcm[0].when : 0UL, ncm > 0 ? pcm[0].text : "");
 	CHECK(ncm == 3 && ctot > 1000 && pcm[0].author[0] && pcm[0].text[0] && pcm[0].when > 1600000000 && strstr(pcm[0].avatar, "avatars.akamai."));
 	// Tienda de puntos

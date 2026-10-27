@@ -98,7 +98,7 @@ if os.environ.get("RELAY_KENJI"):
 NAMES = {FAKE_ID: "VENOMSHiNE (prueba)", 76561190000000101: "Kenji", 76561190000000102: "Lucía", 76561190000000103: "Marco", 76561190000000109: "Sofía"}
 OWNED = [(1091500, "Cyberpunk 2077", 6120, 3), (381210, "Dead by Daylight", 2410, 1), (1145360, "Hades", 3900, 20),
          (292030, "The Witcher 3: Wild Hunt", 9300, 60), (413150, "Stardew Valley", 5200, 9), (730, "Counter-Strike 2", 12000, 2),
-         (570, "Dota 2", 0, 400), (1203620, "Enshrouded", 1500, 12), (251570, "7 Days to Die", 800, 30)]
+         (570, "Dota 2", 0, 400), (1203620, "Enshrouded", 1500, 12), (251570, "7 Days to Die", 800, 30), (33440, "Driver: San Francisco", 1260, 90)]
 # Los juegos ocultos de la biblioteca (colección «hidden»): RELAY_HIDDEN=id,id (por defecto, Dota 2)
 HIDDEN = [int(x) for x in os.environ.get("RELAY_HIDDEN", "570").split(",") if x]
 WISH = [2138330, 1174180, 1716740, 668580]

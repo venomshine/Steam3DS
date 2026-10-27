@@ -47,6 +47,7 @@ typedef struct {
 	AppInfo info;
 	Req *req, *sum;
 	bool done, failed;
+	bool gone;                   // Steam no tiene su ficha (retirado o no se vende en tu país): no se reintenta
 	char err[112];
 	u64 used, fail_at;
 } InfoEnt;
@@ -300,7 +301,11 @@ static void info_poll(void)
 		InfoEnt *e = &cache[i];
 		if (e->req && e->req->state >= REQ_DONE) {
 			if (e->req->state == REQ_DONE && steam_take_appdetails(e->req, &e->info)) e->done = true;
-			else {
+			else if (e->req->state == REQ_DONE && e->req->data && strstr(e->req->data, "\"success\":false")) {
+				// La tienda contesta, pero no tiene este juego: no es un fallo de red, no se reintenta
+				e->gone = true;
+				netlog("ficha %lu: no está en la tienda", (unsigned long)e->appid);
+			} else {
 				e->failed = true;
 				e->fail_at = osGetTime();
 				snprintf(e->err, sizeof e->err, "%s", e->req->state == REQ_DONE ? "json" : e->req->err);
@@ -1748,7 +1753,8 @@ static void draw_preview(const StoreRow *row)
 	if (p) img_draw_cover(p, 12, 28, 200, 94, 0.5f);
 	else {
 		ui_rect(12, 28, 200, 94, COL_PANEL);
-		if (!(a && img_failed(a->header))) ui_spinner(112, 75, 7, COL_DIM);
+		if (e && e->gone) ui_icon(IC_PAD, 112 - 14, 61, 28, COL_DIM);   // sin ficha en la tienda: no llegará
+		else if (!(a && img_failed(a->header))) ui_spinner(112, 75, 7, COL_DIM);
 	}
 	fx_rim(12, 28, 200, 94, 0, 1, false);
 
@@ -1810,6 +1816,8 @@ static void draw_preview(const StoreRow *row)
 			fx = 48;
 		}
 		draw_feats(fx, ry + 1, TOP_W - 12 - fx, a, a->desc ? 2 : 4);
+	} else if (e && e->gone) {
+		ui_text(12, 140, _("Este juego no está disponible en la tienda de Steam"), SZ_SMALL, COL_DIM, AL_LEFT, TOP_W - 24);
 	} else if (e && e->failed) {
 		ui_text(12, 140, _("No se pudo cargar la página del juego"), SZ_SMALL, COL_DIM, AL_LEFT, 0);
 	} else {
@@ -3307,6 +3315,24 @@ static void draw_ach_top(const AppInfo *a)
 static void draw_game_top(void)
 {
 	InfoEnt *e = info_get(S.app, false);
+	if (e && e->gone) {
+		// Retirado de la tienda o no se vende en tu país: lo que se sabe por tu biblioteca
+		const StoreRow *own = owned_row(S.app);
+		char iu[160];
+		if (own) steam_icon_url(own, iu, sizeof iu);
+		const Pic *ip = own && iu[0] ? img_get(iu, 64) : NULL;
+		if (ip) img_draw_cover(ip, TOP_W / 2 - 24, 44, 48, 48, 0.5f);
+		else ui_icon(IC_PAD, TOP_W / 2 - 18, 50, 36, COL_DIM);
+		ui_text(TOP_W / 2, 102, own && own->name[0] ? own->name : _("Este juego"), SZ_LARGE, COL_WHITE, AL_CENTER, 380);
+		ui_text(TOP_W / 2, 128, _("No está disponible en la tienda de Steam"), SZ_BODY, COL_TXT, AL_CENTER, 380);
+		ui_text_wrap(40, 150, TOP_W - 80, _("Puede que lo hayan retirado o que no se venda en tu país. Si lo tienes, sigue en tu biblioteca y puedes jugarlo en tu PC."), SZ_SMALL, COL_DIM, 3, 15);
+		if (own && own->minutes) {
+			char t[48];
+			snprintf(t, sizeof t, _("%d h jugadas"), (own->minutes + 30) / 60);
+			ui_text(TOP_W / 2, 204, t, SZ_SMALL, COL_ACC, AL_CENTER, 0);
+		}
+		return;
+	}
 	if (!e || !e->done) {
 		if (e && e->failed) {
 			int left = retry_delay(e->err) - (int)((osGetTime() - e->fail_at) / 1000);

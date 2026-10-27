@@ -2152,11 +2152,11 @@ static void draw_store_bottom(void)
 		static const char *hh3[] = {"A", "Reintentar", "L R", "Pestaña", "START", "Menú"};
 		draw_hints(hh3, 3);
 	} else if (S.tab == TAB_HOME) {
-		static const char *hh4[] = {"A", "Abrir", "↑↓", "Elegir", "← →", "Categoría", "L R", "Pestaña", "START", "Menú"};
-		draw_hints(hh4, 5);
+		static const char *hh4[] = {"A", "Abrir", "↑↓", "Elegir", "L R", "Pestaña", "START", "Menú"};
+		draw_hints(hh4, 4);
 	} else {
-		static const char *hh2[] = {"A", "Abrir", "↑↓", "Elegir", "← →", "Saltar", "L R", "Pestaña", "START", "Menú"};
-		draw_hints(hh2, 5);
+		static const char *hh2[] = {"A", "Abrir", "↑↓", "Elegir", "L R", "Pestaña", "START", "Menú"};
+		draw_hints(hh2, 4);
 	}
 }
 
@@ -4093,8 +4093,8 @@ static void draw_inv_bottom(void)
 			ui_text(x + INV_CELL - 5, y + INV_CELL - 15, a, SZ_TINY, COL_WHITE, AL_RIGHT, 0);
 		}
 	}
-	static const char *h[] = {"← →", "Elegir", "↑↓", "Fila", "B", "Volver"};
-	draw_hints(h, 3);
+	static const char *h[] = {"↑↓", "Elegir", "B", "Volver"};
+	draw_hints(h, 2);
 }
 
 static void input_inv(u32 kd, u32 kh, touchPosition *tp)
@@ -7296,10 +7296,11 @@ static void draw_settings_bottom(void)
 		else ui_text(BOT_W - 14, y + 7, v, SZ_SMALL, COL_ACC, AL_RIGHT, 110);
 		if (i < ST_COUNT - 1) ui_hline(36, y + RH - 1, BOT_W - 44, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
 	}
-	static const char *hv[] = {"← →", "Cambiar", "↑↓", "Elegir", "B", "Volver"};
+	static const char *hv[] = {"← →", "Cambiar", "B", "Volver"};
 	static const char *hc[] = {"A", "Vaciar", "↑↓", "Elegir", "B", "Volver"};
 	static const char *ha[] = {"A", "Abrir", "↑↓", "Elegir", "B", "Volver"};
-	draw_hints(set_sel == ST_CACHE ? hc : set_sel == ST_ABOUT || set_sel == ST_ACCOUNT || set_sel == ST_HISTORY ? ha : hv, 3);
+	bool v = set_sel != ST_CACHE && set_sel != ST_ABOUT && set_sel != ST_ACCOUNT && set_sel != ST_HISTORY;
+	draw_hints(set_sel == ST_CACHE ? hc : v ? hv : ha, v ? 2 : 3);
 }
 
 static void open_accset(void);
@@ -7561,8 +7562,8 @@ static void draw_accset_bottom(void)
 		}
 		if (i < AS_COUNT - 1) ui_hline(14, y + RH - 1, BOT_W - 28, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
 	}
-	static const char *h[] = {"← →", "Cambiar", "↑↓", "Elegir", "B", "Volver"};
-	draw_hints(h, 3);
+	static const char *h[] = {"← →", "Cambiar", "B", "Volver"};
+	draw_hints(h, 2);
 }
 
 // Siguiente valor de privacidad hacia más público (d > 0) o más privado, sin pasar del máximo

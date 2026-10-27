@@ -6300,6 +6300,8 @@ static struct {
 	// De su página en la comunidad: nivel, insignias, capturas y reseñas (lo que su privacidad deje ver)
 	ProfilePage pg;
 	Req *pg_req, *shots_req, *revs_req;
+	int pg_retry;                // la comunidad contestó 429 (demasiadas seguidas): se vuelve a pedir
+	u64 pg_at;
 	ProfileShot shots[6];
 	int nshots;
 	ProfileReview revs[3];
@@ -7146,6 +7148,17 @@ static void user_family_poll(void)
 // Su página en la comunidad y, si los tiene y se ven, sus capturas y sus reseñas
 static void user_page_poll(void)
 {
+	if (UP.pg_req && UP.pg_req->state >= REQ_DONE && UP.pg_req->http == 429 && UP.pg_retry < 3) {
+		net_release(UP.pg_req);
+		UP.pg_req = NULL;
+		UP.pg_retry++;
+		UP.pg_at = osGetTime() + 2500 * UP.pg_retry;
+		netlog("perfil %llu: la comunidad pide esperar (429), reintento %d", (unsigned long long)UP.id, UP.pg_retry);
+	}
+	if (!UP.pg_req && UP.pg_at && osGetTime() >= UP.pg_at) {
+		UP.pg_at = 0;
+		UP.pg_req = steam_req_profile_page(UP.id);
+	}
 	if (UP.pg_req && UP.pg_req->state >= REQ_DONE) {
 		bool ok = UP.pg_req->state == REQ_DONE && steam_parse_profile_page(UP.pg_req->data, &UP.pg);
 		netlog("perfil %llu: página %s (nivel %d, %d insignias, %d capturas, %d reseñas, HTTP %ld)", (unsigned long long)UP.id,

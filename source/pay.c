@@ -19,7 +19,8 @@ static WalletInfo wallet;
 static Req *page_req, *wallet_req, *req, *auth_req;
 static char transid[32];
 static char cvv[8];
-static char cookies[1400];
+static char cookies[200];       // de dónde viene la petición (como la web)
+static char jar[10240];         // las cookies de la sesión, cada una para su dominio
 static int calls;
 static u64 next_poll, poll_start;
 static enum { ST_NONE, ST_INIT, ST_PRICE, ST_FINAL, ST_STATUS } step;
@@ -57,28 +58,39 @@ static void fail(int detail, const char *err)
 const PayInfo *pay_info(void) { return &P; }
 bool pay_busy(void) { return P.state == PAY_PAYING || P.state == PAY_BANK; }
 
-// Cabeceras de las peticiones al checkout: cookies de la sesión, y de dónde viene (como la web)
+// Peticiones al checkout: las cookies van como en un navegador, cada una a su dominio (también la
+// de renovar en login.steampowered.com: si Steam pide renovar el token por el camino, se renueva
+// en vez de rebotar entre las dos webs hasta agotar las redirecciones), y de dónde vienen
 static void build_cookies(void)
 {
-	char c[1200];
 	cookies[0] = 0;
-	if (!auth_web_cookies("checkout.steampowered.com", c, sizeof c)) return;
-	snprintf(cookies, sizeof cookies, "%s\nOrigin: https://checkout.steampowered.com\nReferer: " CHECKOUT "?accountcart=1", c);
-	memset(c, 0, sizeof c);
+	if (!auth_web_jar(jar, sizeof jar)) {
+		memset(jar, 0, sizeof jar);
+		return;
+	}
+	snprintf(cookies, sizeof cookies, "Origin: https://checkout.steampowered.com\nReferer: " CHECKOUT "?accountcart=1");
 }
 
 static Req *co_get(const char *path_query)
 {
 	char url[256];
 	snprintf(url, sizeof url, CHECKOUT "%s", path_query);
-	return net_request(url, NULL, cookies);
+	return net_request_jar(url, NULL, cookies, jar);
 }
 
 static Req *co_post(const char *path, const char *body)
 {
 	char url[160];
 	snprintf(url, sizeof url, CHECKOUT "%s", path);
-	return net_request(url, body, cookies);
+	return net_request_jar(url, body, cookies, jar);
+}
+
+// Si Steam renovó la cookie del checkout en una petición, las siguientes ya van con la nueva
+static void take_cookie(Req *r)
+{
+	if (!r || !r->login_cookie || !strstr(r->url, "checkout.steampowered.com")) return;
+	auth_web_update("checkout.steampowered.com", r->login_cookie);
+	build_cookies();
 }
 
 void pay_open(void)
@@ -119,6 +131,7 @@ void pay_close(void)
 	if (P.state == PAY_PREPARING || P.state == PAY_REVIEW) cancel_transaction();
 	release_all();
 	wipe_cvv();
+	memset(jar, 0, sizeof jar);
 	memset(&P, 0, sizeof P);
 }
 
@@ -263,6 +276,14 @@ void pay_update(void)
 {
 	u64 now = osGetTime();
 	cJSON *root = NULL;
+	Req *mine[] = {page_req, req, auth_req};
+	for (int i = 0; i < 3; i++)
+		if (mine[i] && mine[i]->state >= REQ_DONE && mine[i]->login_cookie) {
+			take_cookie(mine[i]);
+			memset(mine[i]->login_cookie, 0, strlen(mine[i]->login_cookie));
+			free(mine[i]->login_cookie);
+			mine[i]->login_cookie = NULL;
+		}
 
 	// 1) Página de pago y cartera
 	if (P.state == PAY_LOADING && page_req && page_req->state >= REQ_DONE && wallet_req && wallet_req->state >= REQ_DONE) {

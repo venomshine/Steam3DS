@@ -20,6 +20,8 @@ typedef struct Req {
 	bool head;              // solo cabeceras (HEAD)
 	char *post;             // cuerpo de un POST (application/x-www-form-urlencoded); nunca va al registro
 	char *headers;          // cabeceras extra, una por línea (cookies de la sesión); nunca van al registro
+	char *jar;              // cookies por dominio, como un navegador (líneas de formato Netscape); siguen
+	                        // las redirecciones solo a su dominio y se borran al acabar; nunca van al registro
 	bool jpeg;              // decodificar como JPEG al terminar
 	int jpeg_max_w;         // ancho máximo de la imagen decodificada
 
@@ -35,6 +37,7 @@ typedef struct Req {
 	char ctype[32];         // Content-Type de la respuesta (en minúsculas)
 	long clen;              // Content-Length (-1 si no vino)
 	char *login_cookie;     // valor de la cookie steamLoginSecure, si la manda (se borra al soltar)
+	char redir[200];        // por dónde redirigió (dominio y ruta, sin la consulta), para el registro
 
 	// Trabajo pesado que se hace en el hilo de red al terminar bien (leer un JSON grande): así la
 	// interfaz no pierde frames. parse deja el resultado en parse_out y dice si salió bien;
@@ -64,6 +67,8 @@ Req *net_post(const char *url, const char *body);
 Req *net_get_parsed(const char *url, NetLane lane, bool (*parse)(Req *r), void *out, void (*out_free)(void *out));
 // GET (body NULL) o POST con cabeceras extra separadas por '\n' ("Cookie: …", "Content-Type: …")
 Req *net_request(const char *url, const char *body, const char *headers);
+// Igual, pero con las cookies en un «tarro» por dominio (jar: líneas «dominio\tFALSE\t/\tTRUE\t0\tnombre\tvalor»)
+Req *net_request_jar(const char *url, const char *body, const char *headers, const char *jar);
 void net_release(Req *r);
 
 // Estado de la conexión, para mostrar el motivo real en pantalla.

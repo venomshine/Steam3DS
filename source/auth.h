@@ -50,6 +50,11 @@ const AuthInfo *auth_info(void);
 const char *auth_token(void);     // token de acceso para la Web API ("" sin sesión)
 // Cabecera «Cookie: …» de la web de Steam para un dominio (p. ej. checkout.steampowered.com)
 bool auth_web_cookies(const char *host, char *out, size_t sz);
+// Todas las cookies de la sesión, cada una para su dominio (para net_request_jar), como las tiene
+// un navegador: steamLoginSecure y sessionid de cada web y la de renovar en login.steampowered.com
+bool auth_web_jar(char *out, size_t sz);
+// Steam renovó por el camino la cookie de un dominio: se guarda la nueva
+void auth_web_update(const char *host, const char *cookie);
 // El avatar de 64 px a partir de sha_digest_avatar (base64), como lo dan las APIs de Steam
 bool auth_avatar_url(const char *sha_b64, char *out, size_t n);
 const char *auth_sessionid(void);  // el sessionid de esas cookies (va también en los formularios)

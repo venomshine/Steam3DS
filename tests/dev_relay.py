@@ -582,11 +582,21 @@ def cart_cents():
     return sum(int(l["price_when_added"]["amount_in_cents"]) for l in cart_json().get("line_items", []))
 
 
+# RELAY_PAY_REFRESH=1: como pasa con Steam, el checkout no acepta el token que trae la consola y
+# manda a renovarlo a login.steampowered.com/jwt/refresh, que solo lo renueva con la cookie
+# steamRefresh_steam (sin ella devuelve al checkout y se entra en bucle)
+PAY_REFRESH = os.environ.get("RELAY_PAY_REFRESH") == "1"
+RELAY_BASE = "http://127.0.0.1:8099/"
+
+
 def fake_checkout(method, path, q, body, headers):
-    """(status, content-type, cuerpo) o None."""
+    """(status, content-type, cuerpo) o None; 302 -> (302, Location, set-cookie)."""
     ck = cookies_of(headers)
     if not ck.get("steamLoginSecure", "").startswith(str(FAKE_ID)):
         return 302, "text/html", "<html>login</html>"
+    if PAY_REFRESH and "renewed" not in ck.get("steamLoginSecure", ""):
+        back = RELAY_BASE + "checkout.steampowered.com/" + path + ("?" + urllib.parse.urlencode(q) if q else "")
+        return "redirect", RELAY_BASE + "login.steampowered.com/jwt/refresh?redir=" + urllib.parse.quote(back, safe=""), None
     form = dict(urllib.parse.parse_qsl(body)) if method == "POST" else {}
     if method == "POST" and form.get("sessionid") != ck.get("sessionid"):
         return 200, "application/json", json.dumps({"success": 2, "purchaseresultdetail": 7})
@@ -710,8 +720,27 @@ class Relay(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if FAKE and PAY_REFRESH and host == "login.steampowered.com" and path == "jwt/refresh":
+            ck = cookies_of(self.headers)
+            self.send_response(302)
+            if ck.get("steamRefresh_steam", "").startswith(str(FAKE_ID)):
+                self.send_header("Set-Cookie", "steamLoginSecure=%d%%7C%%7Crenewed.fake.jwt0000000000; Path=/" % FAKE_ID)
+                sys.stderr.write("FAKE jwt/refresh -> renovada\n")
+            else:
+                sys.stderr.write("FAKE jwt/refresh -> sin cookie de renovar, vuelve\n")
+            self.send_header("Location", q.get("redir", ""))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if FAKE and host == "checkout.steampowered.com" and path.startswith("checkout/"):
             r = fake_checkout(method, path, q, self.body, self.headers)
+            if r is not None and r[0] == "redirect":
+                self.send_response(302)
+                self.send_header("Location", r[1])
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                sys.stderr.write("FAKE %s %s -> 302 a jwt/refresh\n" % (method, path))
+                return
             if r is not None:
                 st, ct, body = r
                 body = body.encode()

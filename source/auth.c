@@ -697,6 +697,39 @@ bool auth_web_cookies(const char *host, char *out, size_t sz)
 	return false;
 }
 
+bool auth_web_jar(char *out, size_t sz)
+{
+	if (!auth_logged()) return false;
+	size_t u = 0;
+	out[0] = 0;
+	for (int i = 0; i < MAX_WEB; i++) {
+		if (!web[i].cookie[0]) continue;
+		int w = snprintf(out + u, sz - u, "%s\tFALSE\t/\tTRUE\t0\tsteamLoginSecure\t%s\n%s\tFALSE\t/\tTRUE\t0\tsessionid\t%s\n",
+			web[i].host, web[i].cookie, web[i].host, sessionid);
+		if (w < 0 || (size_t)w >= sz - u) return false;
+		u += w;
+	}
+	if (refresh_tok[0]) {
+		int w = snprintf(out + u, sz - u, "login.steampowered.com\tFALSE\t/\tTRUE\t0\tsteamRefresh_steam\t%llu%%7C%%7C%s\n",
+			(unsigned long long)A.steamid, refresh_tok);
+		if (w < 0 || (size_t)w >= sz - u) return false;
+	}
+	return u > 0;
+}
+
+void auth_web_update(const char *host, const char *cookie)
+{
+	if (!cookie || strlen(cookie) < 20 || strlen(cookie) >= sizeof web[0].cookie) return;
+	for (int i = 0; i < MAX_WEB; i++)
+		if (web[i].cookie[0] && !strcmp(web[i].host, host)) {
+			if (strcmp(web[i].cookie, cookie)) {
+				snprintf(web[i].cookie, sizeof web[i].cookie, "%s", cookie);
+				netlog("sesion: %s renovada por el camino", host);
+			}
+			return;
+		}
+}
+
 const char *auth_sessionid(void) { return sessionid; }
 
 bool auth_avatar_url(const char *sha_b64, char *out, size_t n)

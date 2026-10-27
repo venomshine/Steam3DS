@@ -328,6 +328,10 @@ static void req_free(Req *r)
 		memset(r->headers, 0, strlen(r->headers));
 		free(r->headers);
 	}
+	if (r->jar) {
+		memset(r->jar, 0, strlen(r->jar));
+		free(r->jar);
+	}
 	if (r->login_cookie) {
 		memset(r->login_cookie, 0, strlen(r->login_cookie));
 		free(r->login_cookie);
@@ -444,6 +448,17 @@ Req *net_request(const char *url, const char *body, const char *headers)
 	return r;
 }
 
+Req *net_request_jar(const char *url, const char *body, const char *headers, const char *jar)
+{
+	Req *r = req_new(url, LANE_API);
+	if (!r) return NULL;
+	if (body) r->post = strdup(body);
+	if (headers) r->headers = strdup(headers);
+	if (jar) r->jar = strdup(jar);
+	lane_push(&lanes[LANE_API], r);
+	return r;
+}
+
 Req *net_head(const char *url)
 {
 	Req *r = req_new(url, LANE_API);
@@ -520,6 +535,18 @@ static size_t on_header(char *p, size_t sz, size_t n, void *ud)
 	}
 	static const char er[] = "x-eresult:";
 	if (len > sizeof(er) && strncasecmp(p, er, sizeof(er) - 1) == 0) r->eresult = atoi(p + sizeof(er) - 1);
+	// Redirecciones: se apunta el dominio y la ruta (nunca la consulta, que puede llevar datos)
+	static const char lo[] = "location:";
+	if (len > sizeof lo && strncasecmp(p, lo, sizeof lo - 1) == 0) {
+		const char *v = p + sizeof lo - 1;
+		while (*v == ' ') v++;
+		if (!strncmp(v, "https://", 8)) v += 8;
+		else if (!strncmp(v, "http://", 7)) v += 7;
+		size_t n = 0;
+		while (v[n] && v[n] != '?' && v[n] != '#' && v[n] != '\r' && v[n] != '\n' && n < 60) n++;
+		size_t u = strlen(r->redir);
+		if (u + n + 4 < sizeof r->redir) snprintf(r->redir + u, sizeof r->redir - u, "%s%.*s", u ? " > " : "", (int)n, v);
+	}
 	static const char login[] = "set-cookie: steamLoginSecure=";
 	if (len > sizeof(login) && strncasecmp(p, login, sizeof(login) - 1) == 0) {
 		const char *v = p + sizeof(login) - 1;
@@ -978,6 +1005,32 @@ static void run_req(Lane *l, Req *r)
 		curl_easy_setopt(c, CURLOPT_POSTFIELDS, r->post);
 		curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)strlen(r->post));
 	}
+	// El motor de cookies de curl guarda las de cada dominio (y las nuevas que lleguen en las
+	// redirecciones, como hace un navegador); se vacía antes y después: el manejador se reutiliza
+	curl_easy_setopt(c, CURLOPT_COOKIELIST, "ALL");
+	if (r->jar) {
+		curl_easy_setopt(c, CURLOPT_COOKIEFILE, "");
+		char *copy = strdup(r->jar), *save = NULL;
+		for (char *line = strtok_r(copy, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+#ifdef DEV_RELAY
+			// En pruebas todo va a 127.0.0.1/host/…: solo las cookies del host pedido, con ese dominio
+			const char *oh = strstr(r->url, ":8099/");
+			char tmp[1400];
+			size_t ohn = oh ? strcspn(oh + 6, "/") : 0;
+			static const char lg[] = "login.steampowered.com\t";
+			bool mine = oh && !strncmp(line, oh + 6, ohn) && line[ohn] == '\t';
+			if (!mine && strncmp(line, lg, sizeof lg - 2)) continue;   // la de renovar también
+			size_t skip = mine ? ohn : sizeof lg - 2;
+			snprintf(tmp, sizeof tmp, "127.0.0.1%s", line + skip);
+			curl_easy_setopt(c, CURLOPT_COOKIELIST, tmp);
+			memset(tmp, 0, sizeof tmp);
+#else
+			curl_easy_setopt(c, CURLOPT_COOKIELIST, line);
+#endif
+		}
+		memset(copy, 0, strlen(r->jar));
+		free(copy);
+	}
 	struct curl_slist *hl = NULL;
 	if (r->headers) {
 		char *copy = strdup(r->headers), *save = NULL;
@@ -1003,6 +1056,42 @@ static void run_req(Lane *l, Req *r)
 		curl_easy_setopt(c, CURLOPT_HTTPHEADER, NULL);
 	}
 
+	if (r->jar) {
+		// Si Steam renovó la sesión por el camino, la cookie nueva del dominio pedido se guarda
+		// (en login_cookie) para las siguientes peticiones; luego se vacía todo
+		char host[64] = "";
+		const char *h = strstr(r->url, "://");
+		h = h ? h + 3 : r->url;
+		size_t hn = strcspn(h, "/:?");
+		if (hn < sizeof host) snprintf(host, sizeof host, "%.*s", (int)hn, h);
+		struct curl_slist *ck = NULL;
+		if (host[0] && curl_easy_getinfo(c, CURLINFO_COOKIELIST, &ck) == CURLE_OK) {
+			for (struct curl_slist *i = ck; i; i = i->next) {
+				// dominio \t sub \t ruta \t segura \t caduca \t nombre \t valor
+				char *f[7] = {0};
+				char *line = i->data, *save = NULL;
+				size_t full = strlen(line);
+				int k = 0;
+				for (char *t = strtok_r(line, "\t", &save); t && k < 7; t = strtok_r(NULL, "\t", &save)) f[k++] = t;
+				if (k == 7 && !strcmp(f[5], "steamLoginSecure") && strlen(f[6]) > 20) {
+					const char *d = f[0];
+					if (!strncmp(d, "#HttpOnly_", 10)) d += 10;
+					if (*d == '.') d++;
+					if (!strcmp(d, host)) {
+						if (r->login_cookie) {
+							memset(r->login_cookie, 0, strlen(r->login_cookie));
+							free(r->login_cookie);
+						}
+						r->login_cookie = strdup(f[6]);
+					}
+				}
+				memset(i->data, 0, full);
+			}
+			curl_slist_free_all(ck);
+		}
+		curl_easy_setopt(c, CURLOPT_COOKIELIST, "ALL");
+	}
+
 	if (rc != CURLE_OK) {
 		snprintf(r->err, sizeof r->err, "curl=%d %s", rc, curl_easy_strerror(rc));
 	} else if (r->http < 200 || r->http >= 300) {
@@ -1024,6 +1113,7 @@ static void run_req(Lane *l, Req *r)
 		r->head ? "HEAD" : r->post ? "POST" : "GET", shown, r->http, (unsigned long)r->len,
 		tdns, ttcp, ttls, tfirst, (osGetTime() - t0) / 1000.0,
 		r->err[0] ? " ERROR " : "", r->err);
+	if (r->redir[0] && (r->err[0] || r->jar)) netlog("  redirecciones: %s", r->redir);
 
 	// Las imágenes ya decodificadas no necesitan el JPEG
 	if (r->jpeg && r->pixels) {

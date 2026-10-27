@@ -463,6 +463,16 @@ typedef struct {
 	char badge_icon[PROFILE_BADGES][160];
 	char badge_name[PROFILE_BADGES][64];
 	int shots_total, reviews_total;  // -1 si no se ven
+	int games_total;                 // -1 si no se ve
+	// Actividad reciente (como la enseña Steam, con su privacidad): las horas de estas dos semanas y
+	// los últimos juegos, con sus horas, su última sesión y sus logros
+	char recent_hours[64];
+	int nrecent;
+	struct {
+		u32 appid;
+		char name[96], capsule[200], hours[48], last[48];
+		int ach_un, ach_tot;          // ach_tot 0 si no tiene logros
+	} recent[3];
 } ProfilePage;
 Req *steam_req_profile_page(u64 steamid, const char *cookies);   // con tu sesión: lo «solo amigos» también
 bool steam_parse_profile_page(const char *html, ProfilePage *out);

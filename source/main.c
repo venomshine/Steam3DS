@@ -5618,16 +5618,17 @@ static void draw_profile_top(void)
 		else if (lib->list.err[0]) ui_text(TOP_W / 2, 160, human_err(lib->list.err), SZ_SMALL, COL_DIM, AL_CENTER, 380);
 		return;
 	}
-	// Juegos, horas y lo más jugado
+	// Juegos, horas y la actividad reciente (lo último jugado)
 	long total = 0;
-	int top3[3] = {-1, -1, -1};
+	int rec3[3] = {-1, -1, -1};
 	for (int i = 0; i < lib->list.count; i++) {
-		int m = lib->list.rows[i].minutes;
-		total += m;
+		total += lib->list.rows[i].minutes;
+		u32 lp = lib->list.rows[i].last_played;
+		if (!lp) continue;
 		for (int k = 0; k < 3; k++) {
-			if (top3[k] < 0 || m > lib->list.rows[top3[k]].minutes) {
-				for (int j = 2; j > k; j--) top3[j] = top3[j - 1];
-				top3[k] = i;
+			if (rec3[k] < 0 || lp > lib->list.rows[rec3[k]].last_played) {
+				for (int j = 2; j > k; j--) rec3[j] = rec3[j - 1];
+				rec3[k] = i;
 				break;
 			}
 		}
@@ -5636,20 +5637,21 @@ static void draw_profile_top(void)
 	snprintf(st, sizeof st, _("%d juegos · %ld h jugadas"), lib->list.count, (total + 30) / 60);
 	fx_glass(8, 120, TOP_W - 16, 114, 14, 1, 0);
 	ui_text(18, 128, st, SZ_BODY, COL_TXT, AL_LEFT, 380);
-	ui_text(18, 150, _("LO MÁS JUGADO"), SZ_TINY, COL_ACC, AL_LEFT, 0);
-	int maxm = top3[0] >= 0 ? lib->list.rows[top3[0]].minutes : 0;
-	if (!maxm) ui_text(TOP_W / 2, 162 + (72 - ui_line_h(SZ_SMALL)) / 2 + 1, _("Aún no hay horas de juego en tu cuenta"), SZ_SMALL, COL_DIM, AL_CENTER, 360);
-	for (int k = 0; k < 3; k++) {
-		if (top3[k] < 0 || !lib->list.rows[top3[k]].minutes) break;
-		const StoreRow *r = &lib->list.rows[top3[k]];
+	ui_text(18, 150, _("ACTIVIDAD RECIENTE"), SZ_TINY, COL_ACC, AL_LEFT, 0);
+	if (rec3[0] < 0) ui_text(TOP_W / 2, 162 + (72 - ui_line_h(SZ_SMALL)) / 2 + 1, _("Aún no has jugado a nada"), SZ_SMALL, COL_DIM, AL_CENTER, 360);
+	int maxm = 1;
+	for (int k = 0; k < 3; k++)
+		if (rec3[k] >= 0 && lib->list.rows[rec3[k]].minutes > maxm) maxm = lib->list.rows[rec3[k]].minutes;
+	for (int k = 0; k < 3 && rec3[k] >= 0; k++) {
+		const StoreRow *r = &lib->list.rows[rec3[k]];
 		float y = 166 + k * 22;
-		char hrs[16];
-		snprintf(hrs, sizeof hrs, "%d h", (r->minutes + 30) / 60);
-		ui_text(18, y, r->name, SZ_SMALL, COL_WHITE, AL_LEFT, 250);
-		ui_text(TOP_W - 18, y, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
-		float bw = (TOP_W - 36) * r->minutes / (float)maxm;
+		char when[40], right[64];
+		notif_when(r->last_played, when, sizeof when);
+		snprintf(right, sizeof right, "%d h · %s", (r->minutes + 30) / 60, when);
+		float rw = ui_text(TOP_W - 18, y, right, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
+		ui_text(18, y, r->name, SZ_SMALL, COL_WHITE, AL_LEFT, TOP_W - 36 - rw - 8);
 		ui_rrect(18, y + 14, TOP_W - 36, 4, 2, C2D_Color32(0xff, 0xff, 0xff, 0x14));
-		ui_rrect(18, y + 14, bw, 4, 2, COL_ACC);
+		ui_rrect(18, y + 14, (TOP_W - 36) * r->minutes / (float)maxm, 4, 2, COL_ACC);
 	}
 }
 
@@ -6804,9 +6806,8 @@ static struct {
 	bool fready[UP_FILES];
 	// Sus juegos: cuántos, horas, lo más jugado y lo último que ha jugado (con sus logros)
 	RowList games;
-	Req *games_req, *prog_req[3];
+	Req *games_req;
 	bool games_done, games_private;
-	int top[3], recent[3], prog_un[3], prog_tot[3];
 	long total_min;
 	TopAch ach[96];              // sus logros de los juegos de su vitrina de logros
 	int nach;
@@ -6839,7 +6840,7 @@ static void known_add(u64 id, const char *url)
 static void user_reset(void)
 {
 	Req **all[] = {&UP.items, &UP.shows, &UP.xml, &UP.lvreq, &UP.files, &UP.page, &UP.ach_req[0], &UP.ach_req[1], &UP.ach_req[2],
-		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2], &UP.fr_req, &UP.com_req, &UP.com_post, &UP.fam_req, &UP.fam_people, &UP.com_names,
+		&UP.games_req, &UP.fr_req, &UP.com_req, &UP.com_post, &UP.fam_req, &UP.fam_people, &UP.com_names,
 		&UP.pg_req, &UP.shots_req, &UP.revs_req};
 	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
 		if (*all[i]) net_release(*all[i]);
@@ -6887,7 +6888,6 @@ static void user_load(u64 id)
 	if (auth_logged()) UP.games_req = steam_req_owned(id, auth_token());
 	UP.com_req = steam_req_comments(id, 6);
 	UP.pg_req = steam_req_profile_page(id, community_ck());
-	for (int i = 0; i < 3; i++) UP.top[i] = UP.recent[i] = UP.prog_tot[i] = -1;
 }
 
 static bool user_loading(void)
@@ -6968,39 +6968,8 @@ static void user_poll(void)
 		net_release(UP.games_req);
 		UP.games_req = NULL;
 		UP.games_done = true;
-		// Lo más jugado y lo último jugado (tres de cada)
 		UP.total_min = 0;
-		for (int i = 0; i < UP.games.count; i++) {
-			const StoreRow *r = &UP.games.rows[i];
-			UP.total_min += r->minutes;
-			for (int k = 0; k < 3; k++) {
-				if (r->minutes > 0 && (UP.top[k] < 0 || r->minutes > UP.games.rows[UP.top[k]].minutes)) {
-					for (int j = 2; j > k; j--) UP.top[j] = UP.top[j - 1];
-					UP.top[k] = i;
-					break;
-				}
-			}
-			for (int k = 0; k < 3; k++) {
-				if (r->last_played && (UP.recent[k] < 0 || r->last_played > UP.games.rows[UP.recent[k]].last_played)) {
-					for (int j = 2; j > k; j--) UP.recent[j] = UP.recent[j - 1];
-					UP.recent[k] = i;
-					break;
-				}
-			}
-		}
-		for (int k = 0; k < 3 && auth_logged(); k++)
-			if (UP.recent[k] >= 0) UP.prog_req[k] = steam_req_achievement_progress(UP.games.rows[UP.recent[k]].appid, UP.id, auth_token());
-	}
-	for (int k = 0; k < 3; k++) {
-		Req *r = UP.prog_req[k];
-		if (!r || r->state < REQ_DONE) continue;
-		int un = 0, tot = 0;
-		if (r->state == REQ_DONE && steam_parse_achievement_progress(r->data, &un, &tot)) {
-			UP.prog_un[k] = un;
-			UP.prog_tot[k] = tot;
-		}
-		net_release(r);
-		UP.prog_req[k] = NULL;
+		for (int i = 0; i < UP.games.count; i++) UP.total_min += UP.games.rows[i].minutes;
 	}
 	for (int i = 0; i < 3; i++) {
 		Req *r = UP.ach_req[i];
@@ -7380,66 +7349,37 @@ static float draw_showcase(const Showcase *s, float y, bool draw)
 }
 
 // Sus juegos: totales, lo más jugado y su actividad reciente (con el progreso de logros)
-static float draw_user_games(float y)
+// Actividad reciente, como en Steam: la de su página (con su privacidad), con las horas de estas
+// dos semanas, y por juego sus horas, su última sesión y sus logros
+static float draw_user_recent(float y)
 {
 	const float x = 12, w = TOP_W - 24;
 	char t[160];
-	if (!auth_logged()) return 0;
-	if (!UP.games_done) {
-		fx_glass(x, y, w, 40, 10, 1, 0);
-		ui_spinner(TOP_W / 2, y + 20, 6, COL_DIM);
-		return 48;
-	}
-	if (UP.games_private || !UP.games.count) {
-		fx_glass(x, y, w, 34, 10, 1, 0);
-		ui_icon(IC_LOCK, x + 10, y + 11, 12, COL_DIM);
-		ui_text(x + 28, y + 10, UP.games_private ? _("Sus juegos no son visibles para ti") : _("Todavía no tiene juegos"), SZ_SMALL, COL_DIM, AL_LEFT, w - 40);
-		return 42;
-	}
-	int ntop = 0, nrec = 0;
-	for (int k = 0; k < 3; k++) ntop += UP.top[k] >= 0, nrec += UP.recent[k] >= 0;
-	float h = 30 + (ntop ? 16 + ntop * 22 : 0) + (nrec ? 18 + nrec * 44 : 0) + 4;
+	int n = UP.pg.nrecent;
+	if (!n) return 0;
+	float h = 24 + n * 44 + 2;
 	if (y > SCR_H || y + h < 18) return h + 8;
 	fx_glass(x, y, w, h, 10, 1, 0);
-	snprintf(t, sizeof t, _("%d juegos · %ld h jugadas"), UP.games.count, (UP.total_min + 30) / 60);
-	ui_text(x + 10, y + 8, t, SZ_BODY, COL_TXT, AL_LEFT, w - 20);
-	float cy = y + 30;
-	if (ntop) {
-		ui_text(x + 10, cy, _("LO MÁS JUGADO"), SZ_TINY, COL_ACC, AL_LEFT, 0);
-		cy += 16;
-		int maxm = UP.games.rows[UP.top[0]].minutes;
-		for (int k = 0; k < ntop; k++) {
-			const StoreRow *r = &UP.games.rows[UP.top[k]];
-			char hrs[16];
-			snprintf(hrs, sizeof hrs, "%d h", (r->minutes + 30) / 60);
-			ui_text(x + 10, cy, r->name, SZ_SMALL, COL_WHITE, AL_LEFT, w - 80);
-			ui_text(x + w - 10, cy, hrs, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
-			ui_rrect(x + 10, cy + 14, w - 20, 4, 2, C2D_Color32(0xff, 0xff, 0xff, 0x14));
-			ui_rrect(x + 10, cy + 14, (w - 20) * r->minutes / (float)(maxm ? maxm : 1), 4, 2, COL_ACC);
-			cy += 22;
+	ui_text(x + 10, y + 6, _("ACTIVIDAD RECIENTE"), SZ_TINY, COL_ACC, AL_LEFT, 0);
+	if (UP.pg.recent_hours[0]) ui_text(x + w - 10, y + 6, UP.pg.recent_hours, SZ_TINY, COL_DIM, AL_RIGHT, 200);
+	float cy = y + 24;
+	for (int k = 0; k < n; k++) {
+		const typeof(UP.pg.recent[0]) *r = &UP.pg.recent[k];
+		char url[200];
+		const char *u = r->capsule[0] ? r->capsule : app_img(r->appid, false, url, sizeof url);
+		draw_img_slot(u, x + 10, cy, 100, 37, true);
+		ui_text(x + 118, cy - 1, r->name, SZ_SMALL, COL_WHITE, AL_LEFT, w - 128);
+		if (r->last[0]) snprintf(t, sizeof t, "%s · %s", r->hours, r->last);
+		else snprintf(t, sizeof t, "%s", r->hours);
+		ui_text(x + 118, cy + 13, t, SZ_TINY, COL_DIM, AL_LEFT, w - 128);
+		if (r->ach_tot > 0) {
+			float bw = w - 128 - 112;
+			snprintf(t, sizeof t, _("%d de %d logros"), r->ach_un, r->ach_tot);
+			ui_rrect(x + 118, cy + 29, bw, 4, 2, C2D_Color32(0xff, 0xff, 0xff, 0x14));
+			ui_rrect(x + 118, cy + 29, bw * r->ach_un / (float)r->ach_tot, 4, 2, COL_LIME);
+			ui_text(x + w - 10, cy + 25, t, SZ_TINY, COL_DIM, AL_RIGHT, 106);
 		}
-	}
-	if (nrec) {
-		ui_text(x + 10, cy + 2, _("ACTIVIDAD RECIENTE"), SZ_TINY, COL_ACC, AL_LEFT, 0);
-		cy += 18;
-		for (int k = 0; k < nrec; k++) {
-			const StoreRow *r = &UP.games.rows[UP.recent[k]];
-			char url[200], when[40], hrs[32];
-			draw_img_slot(app_img(r->appid, false, url, sizeof url), x + 10, cy + 2, 100, 37, true);
-			ui_text(x + 118, cy + 1, r->name, SZ_SMALL, COL_WHITE, AL_LEFT, w - 128);
-			notif_when(r->last_played, when, sizeof when);
-			snprintf(hrs, sizeof hrs, _("%d h en total"), (r->minutes + 30) / 60);
-			snprintf(t, sizeof t, "%s · %s", hrs, when);
-			ui_text(x + 118, cy + 15, t, SZ_TINY, COL_DIM, AL_LEFT, w - 128);
-			if (UP.prog_tot[k] > 0) {
-				float bw = w - 128 - 112;
-				snprintf(t, sizeof t, _("%d de %d logros"), UP.prog_un[k], UP.prog_tot[k]);
-				ui_rrect(x + 118, cy + 31, bw, 4, 2, C2D_Color32(0xff, 0xff, 0xff, 0x14));
-				ui_rrect(x + 118, cy + 31, bw * UP.prog_un[k] / (float)UP.prog_tot[k], 4, 2, COL_LIME);
-				ui_text(x + w - 10, cy + 27, t, SZ_TINY, COL_DIM, AL_RIGHT, 106);
-			}
-			cy += 44;
-		}
+		cy += 44;
 	}
 	return h + 8;
 }
@@ -7465,6 +7405,18 @@ static float draw_user_extras(float y0)
 				if (bp) img_draw_cover(bp, bx, by, 40, 40, 0.5f);
 				else ui_rrect(bx, by, 40, 40, 8, col_alpha(COL_WHITE, 0.06f));
 			}
+		}
+		y += h + 8;
+	}
+	// Juegos: cuántos (lo que dice su página; si no, lo que dio GetOwnedGames)
+	int ng = UP.pg.ok && UP.pg.games_total >= 0 ? UP.pg.games_total : UP.games_done && !UP.games_private ? UP.games.count : -1;
+	if (ng > 0) {
+		float h = 30;
+		if (y < SCR_H && y + h > 18) {
+			fx_glass(x, y, w, h, 10, 1, 0);
+			ui_icon(IC_PAD, x + 10, y + 9, 12, COL_ACC);
+			snprintf(t, sizeof t, ng == 1 ? _("%d juego") : _("%d juegos"), ng);
+			ui_text(x + 28, y + 7, t, SZ_SMALL, COL_TXT, AL_LEFT, w - 40);
 		}
 		y += h + 8;
 	}
@@ -7561,8 +7513,29 @@ static void draw_user_top(void)
 		ui_text_wrap(20, y, TOP_W - 40, UP.p.summary, SZ_SMALL, COL_TXT, 14, 14);
 		y += nl * 14 + 10;
 	}
-	if (!UP.p.is_private) y += draw_user_games(y);
+	// En el orden de Steam (su página en una columna): insignias y contadores, grupos, vitrinas,
+	// actividad reciente y comentarios
 	if (!UP.p.is_private) y += draw_user_extras(y);
+	// Sus grupos
+	if (UP.p.ngroups && !UP.p.is_private) {
+		float gh = 24 + UP.p.ngroups * 34 + 4;
+		if (y < SCR_H && y + gh > 18) {
+			fx_glass(12, y, TOP_W - 24, gh, 10, 1, 0);
+			ui_text(22, y + 6, _("GRUPOS"), SZ_TINY, COL_ACC, AL_LEFT, 0);
+			for (int i = 0; i < UP.p.ngroups; i++) {
+				float gy = y + 24 + i * 34;
+				const Pic *gp = UP.p.group[i].avatar[0] ? img_get(UP.p.group[i].avatar, 64) : NULL;
+				if (gp) img_draw_cover(gp, 22, gy, 28, 28, 0.5f);
+				else ui_rect(22, gy, 28, 28, col_alpha(COL_WHITE, 0.06f));
+				ui_text(58, gy + 1, UP.p.group[i].name, SZ_SMALL, COL_WHITE, AL_LEFT, TOP_W - 160);
+				char mt[48];
+				snprintf(mt, sizeof mt, UP.p.group[i].members == 1 ? _("%d miembro") : _("%d miembros"), UP.p.group[i].members);
+				ui_text(58, gy + 15, mt, SZ_TINY, COL_DIM, AL_LEFT, 0);
+				if (UP.p.group[i].primary) ui_text(TOP_W - 22, gy + 8, _("Grupo principal"), SZ_TINY, COL_ACC, AL_RIGHT, 0);
+			}
+		}
+		y += gh + 8;
+	}
 	if (UP.p.is_private) {
 		ui_icon(IC_LOCK, TOP_W / 2 - 9, y + 4, 18, COL_DIM);
 		ui_text(TOP_W / 2, y + 28, _("Este perfil es privado"), SZ_BODY, COL_DIM, AL_CENTER, 0);
@@ -7574,6 +7547,7 @@ static void draw_user_top(void)
 		if (y < SCR_H && y + h > 18) draw_showcase(s, y, true);
 		y += h + 8;
 	}
+	if (!UP.p.is_private) y += draw_user_recent(y);
 	// Tu Familia de Steam
 	if (user_is_me() && UP.fam.n) {
 		float fh = 24 + UP.fam.n * 30 + 4;
@@ -7595,26 +7569,6 @@ static void draw_user_top(void)
 			}
 		}
 		y += fh + 8;
-	}
-	// Sus grupos
-	if (UP.p.ngroups && !UP.p.is_private) {
-		float gh = 24 + UP.p.ngroups * 34 + 4;
-		if (y < SCR_H && y + gh > 18) {
-			fx_glass(12, y, TOP_W - 24, gh, 10, 1, 0);
-			ui_text(22, y + 6, _("GRUPOS"), SZ_TINY, COL_ACC, AL_LEFT, 0);
-			for (int i = 0; i < UP.p.ngroups; i++) {
-				float gy = y + 24 + i * 34;
-				const Pic *gp = UP.p.group[i].avatar[0] ? img_get(UP.p.group[i].avatar, 64) : NULL;
-				if (gp) img_draw_cover(gp, 22, gy, 28, 28, 0.5f);
-				else ui_rect(22, gy, 28, 28, col_alpha(COL_WHITE, 0.06f));
-				ui_text(58, gy + 1, UP.p.group[i].name, SZ_SMALL, COL_WHITE, AL_LEFT, TOP_W - 160);
-				char mt[48];
-				snprintf(mt, sizeof mt, UP.p.group[i].members == 1 ? _("%d miembro") : _("%d miembros"), UP.p.group[i].members);
-				ui_text(58, gy + 15, mt, SZ_TINY, COL_DIM, AL_LEFT, 0);
-				if (UP.p.group[i].primary) ui_text(TOP_W - 22, gy + 8, _("Grupo principal"), SZ_TINY, COL_ACC, AL_RIGHT, 0);
-			}
-		}
-		y += gh + 8;
 	}
 	// Sus comentarios (los últimos)
 	if (UP.com_done && !UP.p.is_private) {

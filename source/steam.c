@@ -2990,6 +2990,63 @@ bool steam_parse_profile_page(const char *html, ProfilePage *o)
 	if (o->badges_total < 0) o->badges_total = o->nbadges;
 	o->shots_total = count_link(html, "/screenshots/");
 	o->reviews_total = count_link(html, "/recommended/");
+	o->games_total = count_link(html, "/games/?tab=all");
+	// Actividad reciente
+	const char *ra = strstr(html, "class=\"profile_recentgame_header");
+	if (ra) {
+		const char *rp = strstr(ra, "recentgame_recentplaytime");
+		const char *blk = strstr(ra, "profile_customization_block");
+		if (rp && (!blk || rp < blk)) {
+			rp = strstr(rp, "<div>");
+			if (rp) html_between(rp + 5, "</div>", o->recent_hours, sizeof o->recent_hours);
+		}
+		for (const char *g = strstr(ra, "class=\"recent_game\""); g && o->nrecent < 3; g = strstr(g + 10, "class=\"recent_game\"")) {
+			const char *next = strstr(g + 10, "class=\"recent_game\"");
+			const char *lim = next ? next : strstr(g, "recentgame_quicklinks");
+			int k = o->nrecent;
+			memset(&o->recent[k], 0, sizeof o->recent[k]);
+			const char *ap = strstr(g, "steamcommunity.com/app/");
+			if (ap && (!lim || ap < lim)) o->recent[k].appid = (u32)strtoul(ap + 23, NULL, 10);
+			const char *cap = strstr(g, "class=\"game_capsule\"");
+			if (cap && (!lim || cap < lim)) attr_in(cap, lim, "src=\"", o->recent[k].capsule, sizeof o->recent[k].capsule);
+			const char *nm = strstr(g, "class=\"game_name\"");
+			if (nm && (!lim || nm < lim)) {
+				nm = strchr(nm, '>');
+				if (nm) html_between(nm + 1, "</div>", o->recent[k].name, sizeof o->recent[k].name);
+			}
+			// «1,1 h registradas<br>última sesión: 21 OCT» (o «Jugando ahora»)
+			const char *dt = strstr(g, "class=\"game_info_details\">");
+			if (dt && (!lim || dt < lim)) {
+				char d[120];
+				html_between(dt + 26, "</div>", d, sizeof d);
+				char *nl = strchr(d, '\n');
+				if (nl) {
+					*nl = 0;
+					const char *l = nl + 1;
+					while (*l == '\n' || *l == ' ') l++;
+					copy_utf8(o->recent[k].last, sizeof o->recent[k].last, l);
+					char *e = strchr(o->recent[k].last, '\n');
+					if (e) *e = 0;
+				}
+				copy_utf8(o->recent[k].hours, sizeof o->recent[k].hours, d);
+			}
+			const char *ac = strstr(g, "game_info_achievement_summary");
+			if (ac && (!lim || ac < lim)) {
+				ac = strstr(ac, "\">");
+				if (ac) {
+					ac += 2;
+					while (*ac == ' ' || *ac == '\n' || *ac == '\t' || *ac == '\r') ac++;
+					if (*ac == '<') ac = strchr(ac, '>') ? strchr(ac, '>') + 1 : ac;
+					int un = 0, tot = 0;
+					if (sscanf(ac, "%d/%d", &un, &tot) == 2 && tot > 0) {
+						o->recent[k].ach_un = un;
+						o->recent[k].ach_tot = tot;
+					}
+				}
+			}
+			if (o->recent[k].appid && o->recent[k].name[0]) o->nrecent++;
+		}
+	}
 	return true;
 }
 

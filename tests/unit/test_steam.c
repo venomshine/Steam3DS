@@ -328,6 +328,18 @@ int main(void) {
 			pg.fav_icon, pg.badges_total, pg.nbadges, pg.badge_name[0], pg.shots_total, pg.reviews_total);
 		CHECK(!strcmp(pg.fav_name, "Empleado de Valve") && pg.badges_total == 17 && pg.nbadges >= 4 && strstr(pg.badge_icon[0], "akamai"));
 	}
+	// Actividad reciente (la de la página, con la privacidad de cada uno)
+	{
+		ProfilePage pg;
+		CHECK(steam_parse_profile_page(slurp("data/profile_recent.html"), &pg));
+		for (int i = 0; i < pg.nrecent; i++)
+			printf("  reciente %u «%s» %s · %s · %d/%d · %s\n", pg.recent[i].appid, pg.recent[i].name, pg.recent[i].hours, pg.recent[i].last,
+				pg.recent[i].ach_un, pg.recent[i].ach_tot, pg.recent[i].capsule);
+		printf("  %s, juegos %d\n", pg.recent_hours, pg.games_total);
+		CHECK(pg.nrecent == 3 && pg.recent[2].appid == 2483190 && !strcmp(pg.recent[2].name, "Forza Horizon 6") && pg.recent[0].ach_tot == 57);
+		CHECK(strstr(pg.recent[0].hours, "registradas") && strstr(pg.recent[0].last, "21 OCT") && strstr(pg.recent_hours, "2 semanas"));
+		CHECK(strstr(pg.recent[2].capsule, "akamai") && pg.games_total > 0);
+	}
 	// Juegos dentro de otro, playtests y retirados
 	{
 		ItemMeta im[4];

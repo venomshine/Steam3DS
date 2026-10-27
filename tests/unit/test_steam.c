@@ -300,6 +300,13 @@ int main(void) {
 		"{\"appid\":10,\"app\":\"Alan Wake\",\"installed\":true}]}}", &pa, &freeb) == 3);
 	CHECK(pa && pa[0].appid == 730 && pa[0].done == 100 && pa[0].total == 400 && pa[1].appid == 10 && freeb == 5000000000LL);
 	free(pa);
+	// Steam Deck y noticias
+	CHECK(steam_parse_deck("{\"response\":{\"store_items\":[{\"appid\":730,\"platforms\":{\"windows\":true,\"steam_deck_compat_category\":2}}]}}", 730) == 2);
+	CHECK(steam_parse_deck("{\"response\":{\"store_items\":[{\"appid\":730}]}}", 730) == -1);
+	SteamNews snw[2];
+	CHECK(steam_parse_news("{\"appnews\":{\"newsitems\":[{\"title\":\"Parche 1.2\",\"contents\":\"{STEAM_CLAN_IMAGE}/1/a.png [b]Novedades[/b]<br>Arreglos varios\",\"date\":1700000000}]}}", snw, 2) == 1);
+	printf("noticia: [%s] [%s]\n", snw[0].title, snw[0].text);
+	CHECK(!strcmp(snw[0].title, "Parche 1.2") && !strcmp(snw[0].text, "Novedades Arreglos varios") && snw[0].date == 1700000000);
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

@@ -1375,10 +1375,17 @@ static void draw_rating(float x, float y, float s, const AppInfo *a)
 	ui_text(x + s / 2, y + h * 0.66f, sys, s * 0.0085f, fg, AL_CENTER, s - 2);
 }
 
+static int deck_for(u32 appid);
+
 static int feat_list(const AppInfo *a, Icon *ic, char (*lab)[32], int max)
 {
 	int n = 0;
 #define ADD(i, t) do { if (n < max) { ic[n] = i; snprintf(lab[n], 32, "%s", t); n++; } } while (0)
+	// Compatibilidad con Steam Deck, como la enseña la tienda (si ya se sabe)
+	int deck = deck_for(a->appid);
+	if (deck == 3) ADD(IC_CHECK, _("Steam Deck: verificado"));
+	else if (deck == 2) ADD(IC_INFO, _("Steam Deck: jugable"));
+	else if (deck == 1) ADD(IC_HIDE, _("Steam Deck: no compatible"));
 	if (a->feats & FEAT_SINGLE) ADD(IC_USER, _("1 jugador"));
 	if (a->feats & FEAT_MULTI) ADD(IC_USERS, _("Multijugador"));
 	if (a->feats & FEAT_COOP) ADD(IC_USERS, _("Cooperativo"));
@@ -2326,10 +2333,25 @@ static void myreview_poll(const AppInfo *a)
 // El playtest del juego abierto y los que ya has pedido en esta sesión
 static struct {
 	u32 appid, playtest;
+	int deck;                    // compatibilidad con Steam Deck (-1 no se sabe)
 	Req *req;
 	u32 asked[16];
 	int nasked;
 } PT;
+
+static int deck_for(u32 appid)
+{
+	return PT.appid == appid && !PT.req ? PT.deck : -1;
+}
+
+// Noticias oficiales del juego abierto (al final del Resumen)
+static struct {
+	u32 appid;
+	SteamNews n[4];
+	int nn;
+	Req *req;
+	bool done;
+} NW;
 
 static bool pt_asked(u32 appid)
 {
@@ -2345,9 +2367,13 @@ static void playtest_poll(const AppInfo *a)
 		PT.req = steam_req_playtest(a->appid);
 		PT.appid = a->appid;
 		PT.playtest = 0;
+		PT.deck = -1;
 	}
 	if (PT.req && PT.req->state >= REQ_DONE) {
-		if (PT.req->state == REQ_DONE) PT.playtest = steam_parse_playtest(PT.req->data, PT.appid);
+		if (PT.req->state == REQ_DONE) {
+			PT.playtest = steam_parse_playtest(PT.req->data, PT.appid);
+			PT.deck = steam_parse_deck(PT.req->data, PT.appid);
+		}
 		if (PT.playtest) netlog("playtest de %lu: %lu", (unsigned long)PT.appid, (unsigned long)PT.playtest);
 		net_release(PT.req);
 		PT.req = NULL;
@@ -2511,6 +2537,19 @@ static void game_poll(const AppInfo *a)
 	myshots_poll(a);
 	myreview_poll(a);
 	playtest_poll(a);
+	if (S.sec == SEC_SUMMARY && NW.appid != a->appid) {
+		if (NW.req) net_release(NW.req);
+		memset(&NW, 0, sizeof NW);
+		NW.appid = a->appid;
+		NW.req = steam_req_news(a->appid);
+	}
+	if (NW.req && NW.req->state >= REQ_DONE) {
+		int n = NW.req->state == REQ_DONE ? steam_parse_news(NW.req->data, NW.n, 4) : -1;
+		NW.nn = n < 0 ? 0 : n;
+		NW.done = true;
+		net_release(NW.req);
+		NW.req = NULL;
+	}
 	remote_poll(a);
 	if (S.sec == SEC_EXTRAS && S.dlc_for != a->appid) {
 		rowlist_free(&S.dlc);
@@ -2661,6 +2700,28 @@ static void draw_summary_top(const AppInfo *a)
 			else ui_text(12, y, buf, SZ_SMALL, COL_TXT, AL_LEFT, 0);
 		}
 		y += lh;
+	}
+	// Noticias: los últimos anuncios oficiales
+	if (NW.appid == a->appid && NW.nn) {
+		y += 10;
+		ui_hline(12, y, TOP_W - 24, C2D_Color32(0xff, 0xff, 0xff, 0x26));
+		y += 8;
+		if (y + 17 > 18 && y < SCR_H) ui_text(12, y, _("NOTICIAS"), SZ_BODY, COL_ACC, AL_LEFT, 0);
+		y += 20;
+		for (int i = 0; i < NW.nn; i++) {
+			const SteamNews *nw = &NW.n[i];
+			int nl = ui_text_lines(nw->text, SZ_TINY, TOP_W - 24);
+			if (nl > 3) nl = 3;
+			float h = 30 + nl * 12 + 8;
+			if (y + h > 18 && y < SCR_H) {
+				char d[40];
+				notif_when(nw->date, d, sizeof d);
+				ui_text(12, y, nw->title, SZ_SMALL, COL_WHITE, AL_LEFT, TOP_W - 24);
+				ui_text(12, y + 15, d, SZ_TINY, COL_DIM, AL_LEFT, 0);
+				ui_text_wrap(12, y + 29, TOP_W - 24, nw->text, SZ_TINY, COL_TXT, 3, 12);
+			}
+			y += h;
+		}
 	}
 	ui_scissor_off();
 	S.ocontent = y - oy - 18 + 10;

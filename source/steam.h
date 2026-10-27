@@ -361,8 +361,9 @@ int steam_parse_remote_app(const char *json, u32 appid);   // 1 instalado, 0 no,
 Req *steam_req_remote_install(u64 client, u32 appid, const char *token);
 
 // Playtest del juego (el appid del playtest, 0 si no tiene): lo da la tienda en related_items
-Req *steam_req_playtest(u32 appid);
+Req *steam_req_playtest(u32 appid);   // también trae la compatibilidad con Steam Deck
 u32 steam_parse_playtest(const char *json, u32 appid);
+int steam_parse_deck(const char *json, u32 appid);   // 3 verificado, 2 jugable, 1 no compatible, 0 sin probar, -1 no se sabe
 
 // Privacidad de tu perfil: la de la página de edición del perfil en la comunidad (se lee de su
 // configuración y se guarda con su mismo formulario, ajaxsetprivacy). Valores: 1 privado, 2 solo
@@ -416,3 +417,12 @@ bool steam_friend_action_ok(const Req *r);
 // Tu cola de descubrimiento (los juegos que Steam te recomienda; rebuild: una cola nueva)
 Req *steam_req_discovery(bool rebuild, const char *token);
 int steam_parse_discovery(const char *json, u32 *ids, int max);   // -1 si falla
+
+// Noticias oficiales del juego (los anuncios de su comunidad en Steam)
+typedef struct {
+	char title[128];
+	char text[300];         // el principio, en texto
+	u32 date;
+} SteamNews;
+Req *steam_req_news(u32 appid);
+int steam_parse_news(const char *json, SteamNews *out, int max);   // -1 si falla

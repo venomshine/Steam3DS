@@ -2231,7 +2231,8 @@ Req *steam_req_playtest(u32 appid)
 	cJSON_AddNumberToObject(o, "appid", appid);
 	cJSON_AddItemToArray(arr, o);
 	cJSON_AddItemToObject(in, "context", context());
-	cJSON_AddObjectToObject(in, "data_request");
+	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
+	cJSON_AddBoolToObject(dr, "include_platforms", true);
 	char *js = cJSON_PrintUnformatted(in);
 	char *esc = url_escape(js);
 	size_t n = strlen(esc) + 128;
@@ -2579,6 +2580,67 @@ int steam_parse_discovery(const char *json, u32 *ids, int max)
 	const cJSON *it;
 	cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(resp, "appids"))
 		if (n < max && cJSON_IsNumber(it)) ids[n++] = (u32)it->valuedouble;
+	cJSON_Delete(root);
+	return n;
+}
+
+int steam_parse_deck(const char *json, u32 appid)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	int deck = -1;
+	const cJSON *it, *items = resp ? cJSON_GetObjectItemCaseSensitive(resp, "store_items") : NULL;
+	cJSON_ArrayForEach(it, items) {
+		if ((u32)jnum(it, "appid", 0) != appid) continue;
+		const cJSON *pl = cJSON_GetObjectItemCaseSensitive(it, "platforms");
+		const cJSON *d = pl ? cJSON_GetObjectItemCaseSensitive(pl, "steam_deck_compat_category") : NULL;
+		if (cJSON_IsNumber(d)) deck = d->valueint;
+		break;
+	}
+	cJSON_Delete(root);
+	return deck;
+}
+
+Req *steam_req_news(u32 appid)
+{
+	char url[200];
+	snprintf(url, sizeof url, "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=%lu&count=4&maxlength=280"
+		"&feeds=steam_community_announcements&format=json", (unsigned long)appid);
+	return net_get(url, LANE_API);
+}
+
+int steam_parse_news(const char *json, SteamNews *out, int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *an = root ? cJSON_GetObjectItemCaseSensitive(root, "appnews") : NULL;
+	if (!an) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *it;
+	cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(an, "newsitems")) {
+		if (n >= max) break;
+		SteamNews *nw = &out[n];
+		memset(nw, 0, sizeof *nw);
+		copy_utf8(nw->title, sizeof nw->title, jstr(it, "title"));
+		if (!nw->title[0]) continue;
+		char tmp[600];
+		html_to_lines(jstr(it, "contents") ? jstr(it, "contents") : "", tmp, sizeof tmp);
+		tidy_text(tmp);
+		// Las noticias traen etiquetas propias de Steam ({STEAM_CLAN_IMAGE}/…): fuera
+		for (char *p; (p = strstr(tmp, "{STEAM_CLAN_IMAGE}"));) {
+			char *e = p + strcspn(p, " \n");
+			memmove(p, e, strlen(e) + 1);
+		}
+		for (char *p = tmp; *p; p++)
+			if (*p == '\n') *p = ' ';
+		const char *t = tmp;
+		while (*t == ' ') t++;
+		copy_utf8(nw->text, sizeof nw->text, t);
+		nw->date = (u32)jnum(it, "date", 0);
+		n++;
+	}
 	cJSON_Delete(root);
 	return n;
 }

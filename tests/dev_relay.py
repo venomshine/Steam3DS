@@ -164,6 +164,11 @@ def fake_post(host, path, body):
             return False, []
         (FOLLOWED.discard if f.get("unfollow") == "1" else FOLLOWED.add)(a)
         return True, []
+    if host == "steamcommunity.com" and path.startswith("comment/Profile/post/"):
+        raw = body.decode() if isinstance(body, bytes) else (body or "")
+        f = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+        sys.stderr.write("COMENTARIO %s\n" % f.get("comment"))
+        return ({"success": True} if f.get("sessionid") and f.get("comment") else {"success": False, "error": "Falta el texto"}), []
     if host == "store.steampowered.com" and path.startswith("ajaxrequestplaytestaccess/"):
         return {"success": 1, "granted": 0}, []
     if host == "store.steampowered.com" and path == "friends/recommendgame":
@@ -683,7 +688,8 @@ class Relay(BaseHTTPRequestHandler):
             sys.stderr.write("FAKE GET edit/settings\n")
             return
         # Los perfiles de las cuentas simuladas son perfiles públicos de verdad, muy personalizados
-        if FAKE and ("GetProfileItemsEquipped" in path or "GetProfileCustomization" in path or path.startswith("profiles/")):
+        if FAKE and ("GetProfileItemsEquipped" in path or "GetProfileCustomization" in path or path.startswith("profiles/")
+                     or path.startswith("comment/Profile/render/")):
             for fid, real in PROFILE_AS.items():
                 url = url.replace(str(fid), str(real))
         fake, extra = None, []

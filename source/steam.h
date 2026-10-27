@@ -315,6 +315,8 @@ typedef struct {
 	u32 since;                      // miembro desde (hora Unix)
 	bool is_private;
 	char *summary;                  // «sobre mí» en texto (malloc)
+	struct { char name[64], avatar[160]; int members; bool primary; } group[6];   // sus grupos
+	int ngroups;
 } SteamProfile;
 Req *steam_req_profile_items(u64 steamid);
 bool steam_parse_profile_items(const char *json, SteamProfile *p);
@@ -430,3 +432,14 @@ typedef struct {
 } SteamNews;
 Req *steam_req_news(u32 appid);
 int steam_parse_news(const char *json, SteamNews *out, int max);   // -1 si falla
+
+// Comentarios de un perfil (los de la comunidad) y escribir uno
+typedef struct {
+	char author[48];
+	char avatar[160];
+	char text[400];
+	u32 when;
+} ProfileComment;
+Req *steam_req_comments(u64 steamid, int count);
+int steam_parse_comments(const char *json, ProfileComment *out, int max, int *total);   // -1 si falla
+Req *steam_req_post_comment(u64 steamid, const char *text, const char *sessionid, const char *cookies);

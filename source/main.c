@@ -5339,6 +5339,10 @@ static struct {
 	u64 page_at;                 // no antes de esta hora (la comunidad limita las peticiones seguidas)
 	Req *fhead[UP_FILES];        // la cabecera de cada imagen: si es un GIF se pide el original
 	Req *fr_req;                 // aceptar, ignorar o mandar una solicitud de amistad
+	ProfileComment com[6];       // sus comentarios (los últimos)
+	int ncom, com_total;
+	bool com_done, want_comment;
+	Req *com_req, *com_post;
 	int fr_kind, rel;
 	bool rel_set;
 	bool fready[UP_FILES];
@@ -5379,7 +5383,7 @@ static void known_add(u64 id, const char *url)
 static void user_reset(void)
 {
 	Req **all[] = {&UP.items, &UP.shows, &UP.xml, &UP.lvreq, &UP.files, &UP.page, &UP.ach_req[0], &UP.ach_req[1], &UP.ach_req[2],
-		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2], &UP.fr_req};
+		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2], &UP.fr_req, &UP.com_req, &UP.com_post};
 	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
 		if (*all[i]) net_release(*all[i]);
 	for (int i = 0; i < UP_FILES; i++)
@@ -5415,6 +5419,7 @@ static void user_load(u64 id)
 	UP.xml = steam_req_profile_xml(id);
 	if (auth_logged()) UP.lvreq = steam_req_level(id, auth_token());
 	if (auth_logged()) UP.games_req = steam_req_owned(id, auth_token());
+	UP.com_req = steam_req_comments(id, 6);
 	for (int i = 0; i < 3; i++) UP.top[i] = UP.recent[i] = UP.prog_tot[i] = -1;
 }
 
@@ -5967,6 +5972,56 @@ static void draw_user_top(void)
 		if (y < SCR_H && y + h > 18) draw_showcase(s, y, true);
 		y += h + 8;
 	}
+	// Sus grupos
+	if (UP.p.ngroups && !UP.p.is_private) {
+		float gh = 24 + UP.p.ngroups * 34 + 4;
+		if (y < SCR_H && y + gh > 18) {
+			fx_glass(12, y, TOP_W - 24, gh, 10, 1, 0);
+			ui_text(22, y + 6, _("GRUPOS"), SZ_TINY, COL_ACC, AL_LEFT, 0);
+			for (int i = 0; i < UP.p.ngroups; i++) {
+				float gy = y + 24 + i * 34;
+				const Pic *gp = UP.p.group[i].avatar[0] ? img_get(UP.p.group[i].avatar, 64) : NULL;
+				if (gp) img_draw_cover(gp, 22, gy, 28, 28, 0.5f);
+				else ui_rect(22, gy, 28, 28, col_alpha(COL_WHITE, 0.06f));
+				ui_text(58, gy + 1, UP.p.group[i].name, SZ_SMALL, COL_WHITE, AL_LEFT, TOP_W - 160);
+				char mt[48];
+				snprintf(mt, sizeof mt, UP.p.group[i].members == 1 ? _("%d miembro") : _("%d miembros"), UP.p.group[i].members);
+				ui_text(58, gy + 15, mt, SZ_TINY, COL_DIM, AL_LEFT, 0);
+				if (UP.p.group[i].primary) ui_text(TOP_W - 22, gy + 8, _("Grupo principal"), SZ_TINY, COL_ACC, AL_RIGHT, 0);
+			}
+		}
+		y += gh + 8;
+	}
+	// Sus comentarios (los últimos)
+	if (UP.com_done && !UP.p.is_private) {
+		float ch = 24 + (UP.ncom ? 0 : 20);
+		for (int i = 0; i < UP.ncom; i++) {
+			int nl = ui_text_lines(UP.com[i].text, SZ_TINY, TOP_W - 82);
+			ch += 22 + (nl > 3 ? 3 : nl < 1 ? 1 : nl) * 12 + 6;
+		}
+		ch += 4;
+		if (y < SCR_H && y + ch > 18) {
+			fx_glass(12, y, TOP_W - 24, ch, 10, 1, 0);
+			snprintf(t, sizeof t, _("COMENTARIOS (%d)"), UP.com_total);
+			ui_text(22, y + 6, t, SZ_TINY, COL_ACC, AL_LEFT, 0);
+			if (auth_logged()) ui_text(TOP_W - 22, y + 6, _("SELECT: comentar"), SZ_TINY, COL_DIM, AL_RIGHT, 0);
+			float cy = y + 24;
+			if (!UP.ncom) ui_text(22, cy, _("Todavía no hay comentarios"), SZ_SMALL, COL_DIM, AL_LEFT, 0);
+			for (int i = 0; i < UP.ncom; i++) {
+				const ProfileComment *c = &UP.com[i];
+				const Pic *ap = c->avatar[0] ? img_get(c->avatar, 64) : NULL;
+				if (ap) img_draw_cover(ap, 22, cy + 2, 30, 30, 0.5f);
+				else ui_rect(22, cy + 2, 30, 30, col_alpha(COL_WHITE, 0.06f));
+				char w[40];
+				notif_when(c->when, w, sizeof w);
+				float aw = ui_text(60, cy, c->author, SZ_SMALL, COL_WHITE, AL_LEFT, 200);
+				ui_text(60 + aw + 8, cy + 2, w, SZ_TINY, COL_DIM, AL_LEFT, 0);
+				int nl = ui_text_wrap(60, cy + 16, TOP_W - 82, c->text, SZ_TINY, COL_TXT, 3, 12);
+				cy += 22 + (nl < 1 ? 1 : nl) * 12 + 6;
+			}
+		}
+		y += ch + 8;
+	}
 	if (UP.p.nother) {
 		snprintf(t, sizeof t, UP.p.nother == 1 ? _("Tiene %d vitrina más que solo se puede ver en Steam (Y)")
 			: _("Tiene %d vitrinas más que solo se pueden ver en Steam (Y)"), UP.p.nother);
@@ -5995,6 +6050,50 @@ static int user_relation(void)
 	for (int i = 0; i < FL.np; i++)
 		if (FL.p[i].id == UP.id) return FL.p[i].request ? 2 : 3;
 	return FL.loaded ? 0 : -1;
+}
+
+static void user_comments_poll(void)
+{
+	if (UP.com_req && UP.com_req->state >= REQ_DONE) {
+		int n = UP.com_req->state == REQ_DONE ? steam_parse_comments(UP.com_req->data, UP.com, 6, &UP.com_total) : -1;
+		netlog("perfil %llu: %d comentarios de %d", (unsigned long long)UP.id, n, UP.com_total);
+		UP.ncom = n < 0 ? 0 : n;
+		UP.com_done = true;
+		net_release(UP.com_req);
+		UP.com_req = NULL;
+	}
+	if (UP.com_post && UP.com_post->state >= REQ_DONE) {
+		cJSON *root = UP.com_post->state == REQ_DONE ? cJSON_Parse(UP.com_post->data) : NULL;
+		const cJSON *sc = cJSON_GetObjectItemCaseSensitive(root, "success");
+		const cJSON *er = cJSON_GetObjectItemCaseSensitive(root, "error");
+		bool ok = cJSON_IsTrue(sc);
+		char t[160];
+		if (ok) snprintf(t, sizeof t, "%s", _("Comentario publicado"));
+		else snprintf(t, sizeof t, _("No se pudo publicar el comentario: %s"), cJSON_IsString(er) ? er->valuestring : _("Steam no lo aceptó"));
+		toast_icon(t, IC_CHAT);
+		cJSON_Delete(root);
+		net_release(UP.com_post);
+		UP.com_post = NULL;
+		if (ok) UP.com_req = steam_req_comments(UP.id, 6);   // con el tuyo arriba
+	}
+}
+
+static void open_comment_keyboard(void)
+{
+	SwkbdState kb;
+	static char buf[3000];
+	buf[0] = 0;
+	swkbdInit(&kb, SWKBD_TYPE_NORMAL, 2, 1000);
+	swkbdSetHintText(&kb, _("Escribe un comentario"));
+	swkbdSetButton(&kb, SWKBD_BUTTON_LEFT, _("Cancelar"), false);
+	swkbdSetButton(&kb, SWKBD_BUTTON_RIGHT, _("Publicar"), true);
+	swkbdSetFeatures(&kb, SWKBD_DARKEN_TOP_SCREEN | SWKBD_ALLOW_HOME | SWKBD_ALLOW_RESET | SWKBD_ALLOW_POWER | SWKBD_MULTILINE);
+	swkbdSetValidation(&kb, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
+	if (swkbdInputText(&kb, buf, sizeof buf) != SWKBD_BUTTON_RIGHT) return;
+	char ck[1200];
+	if (UP.com_post || !auth_web_cookies("steamcommunity.com", ck, sizeof ck)) return;
+	UP.com_post = steam_req_post_comment(UP.id, buf, auth_sessionid(), ck);
+	memset(ck, 0, sizeof ck);
 }
 
 static void user_friend_poll(void)
@@ -6102,6 +6201,7 @@ static void input_user(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	if ((kd & KEY_A) && rel == 2) b = BT_UADD;
 	if ((kd & KEY_A) && rel == 0) b = BT_UADDW;
 	if ((kd & KEY_SELECT) && rel == 2) b = BT_UIGN;
+	else if ((kd & KEY_SELECT) && auth_logged()) UP.want_comment = true;   // escribir un comentario
 	if (b == BT_UADD) user_friend_action(FRIEND_ACCEPT);
 	if (b == BT_UIGN) user_friend_action(FRIEND_IGNORE);
 	if (b == BT_UADDW) user_friend_action(FRIEND_ADD);
@@ -8796,6 +8896,12 @@ int main(int argc, char **argv)
 			DQ.req = NULL;
 		}
 		user_friend_poll();
+		user_comments_poll();
+		if (UP.want_comment) {
+			UP.want_comment = false;
+			open_comment_keyboard();
+			kd = kh = ku = 0;
+		}
 		accset_poll();
 		pcdl_poll();
 

@@ -243,6 +243,8 @@ int main(void) {
 	CHECK(steam_parse_profile_xml(slurp("data/profile.xml"), &pr));
 	printf("perfil: %s · %s · %s · desde %lu · %s\nsobre mi: %s\n", pr.name, pr.realname, pr.location, (unsigned long)pr.since, pr.state, pr.summary ? pr.summary : "-");
 	CHECK(pr.name[0] && pr.since > 1200000000 && !pr.is_private);
+	printf("perfil: %d grupos, el primero %s (%d miembros)\n", pr.ngroups, pr.ngroups ? pr.group[0].name : "-", pr.ngroups ? pr.group[0].members : 0);
+	CHECK(pr.ngroups >= 2 && pr.group[0].primary && pr.group[0].members > 1000 && strstr(pr.group[0].avatar, "akamai"));
 	steam_profile_free(&pr);
 	char fu[200];
 	CHECK(steam_parse_file_page(slurp("data/file_page.html"), fu, sizeof fu) && strstr(fu, "imw=400"));
@@ -307,6 +309,12 @@ int main(void) {
 	CHECK(steam_parse_news("{\"appnews\":{\"newsitems\":[{\"title\":\"Parche 1.2\",\"contents\":\"{STEAM_CLAN_IMAGE}/1/a.png [b]Novedades[/b]<br>Arreglos varios\",\"date\":1700000000}]}}", snw, 2) == 1);
 	printf("noticia: [%s] [%s]\n", snw[0].title, snw[0].text);
 	CHECK(!strcmp(snw[0].title, "Parche 1.2") && !strcmp(snw[0].text, "Novedades Arreglos varios") && snw[0].date == 1700000000);
+	// Comentarios de un perfil (el HTML que da la comunidad)
+	ProfileComment pcm[6];
+	int ctot = 0;
+	int ncm = steam_parse_comments(slurp("data/comments.json"), pcm, 6, &ctot);
+	printf("comentarios: %d de %d, el primero de %s (%lu): %.60s\n", ncm, ctot, ncm > 0 ? pcm[0].author : "-", ncm > 0 ? (unsigned long)pcm[0].when : 0UL, ncm > 0 ? pcm[0].text : "");
+	CHECK(ncm == 3 && ctot > 1000 && pcm[0].author[0] && pcm[0].text[0] && pcm[0].when > 1600000000 && strstr(pcm[0].avatar, "avatars.akamai."));
 	printf(fails ? "\n%d FALLOS\n" : "\nTODO OK\n", fails);
 	return fails != 0;
 }

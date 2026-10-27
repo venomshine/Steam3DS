@@ -1969,6 +1969,22 @@ bool steam_parse_profile_xml(const char *xml, SteamProfile *p)
 		}
 	}
 	free(sum);
+	// Sus grupos (el principal primero, como en su perfil)
+	p->ngroups = 0;
+	for (const char *g = end ? strstr(end, "<group ") : NULL; g && p->ngroups < 6; g = strstr(g + 7, "<group ")) {
+		const char *ge = strstr(g, "</group>");
+		if (!ge) break;
+		typeof(p->group[0]) *gr = &p->group[p->ngroups];
+		memset(gr, 0, sizeof *gr);
+		if (!xml_tag(g, ge, "groupName", tmp, sizeof tmp)) continue;
+		html_to_lines(tmp, gr->name, sizeof gr->name);
+		xml_tag(g, ge, "avatarMedium", gr->avatar, sizeof gr->avatar);
+		char *fa = strstr(gr->avatar, "avatars.fastly.");
+		if (fa) memcpy(fa, "avatars.akamai.", 15);
+		if (xml_tag(g, ge, "memberCount", tmp, sizeof tmp)) gr->members = atoi(tmp);
+		gr->primary = !strncmp(g, "<group isPrimary=\"1\"", 20);
+		p->ngroups++;
+	}
 	p->xml_ok = true;
 	return true;
 }
@@ -2672,4 +2688,95 @@ int steam_parse_news(const char *json, SteamNews *out, int max)
 	}
 	cJSON_Delete(root);
 	return n;
+}
+
+// ----------------------------------------------------------------------------
+// Comentarios de los perfiles (comment/Profile, como la página del perfil)
+
+Req *steam_req_comments(u64 steamid, int count)
+{
+	char url[160];
+	snprintf(url, sizeof url, "https://steamcommunity.com/comment/Profile/render/%llu/-1/?start=0&count=%d", (unsigned long long)steamid, count);
+	return net_get(url, LANE_API);
+}
+
+// El texto entre a y la primera «end» de después, sin etiquetas
+static void html_between(const char *a, const char *end, char *out, size_t n)
+{
+	out[0] = 0;
+	if (!a) return;
+	const char *b = strstr(a, end);
+	if (!b) return;
+	size_t l = (size_t)(b - a);
+	char *tmp = malloc(l + 1);
+	if (!tmp) return;
+	memcpy(tmp, a, l);
+	tmp[l] = 0;
+	char *txt = malloc(l + 16);
+	if (txt) {
+		html_to_lines(tmp, txt, l + 16);
+		tidy_text(txt);
+		copy_utf8(out, n, txt);
+	}
+	free(txt);
+	free(tmp);
+}
+
+int steam_parse_comments(const char *json, ProfileComment *out, int max, int *total)
+{
+	cJSON *root = cJSON_Parse(json);
+	const char *html = jstr(root, "comments_html");
+	if (!root || !jbool(root, "success") || !html) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	*total = (int)jnum(root, "total_count", 0);
+	int n = 0;
+	for (const char *c = strstr(html, "class=\"commentthread_comment "); c && n < max; c = strstr(c + 10, "class=\"commentthread_comment ")) {
+		const char *next = strstr(c + 10, "class=\"commentthread_comment ");
+		ProfileComment *pc = &out[n];
+		memset(pc, 0, sizeof *pc);
+		// El avatar: la imagen de dentro del enlace al perfil (no la del marco)
+		const char *av = strstr(c, "commentthread_comment_avatar");
+		const char *link = av ? strstr(av, "<a href=") : NULL;
+		const char *img = link ? strstr(link, "<img src=\"") : NULL;
+		if (img && (!next || img < next)) {
+			img += 10;
+			size_t l = strcspn(img, "\"");
+			if (l < sizeof pc->avatar) {
+				memcpy(pc->avatar, img, l);
+				char *fa = strstr(pc->avatar, "avatars.fastly.");
+				if (fa) memcpy(fa, "avatars.akamai.", 15);
+			}
+		}
+		const char *bd = strstr(c, "<bdi>");
+		if (bd && (!next || bd < next)) html_between(bd + 5, "</bdi>", pc->author, sizeof pc->author);
+		const char *ts = strstr(c, "data-timestamp=\"");
+		if (ts && (!next || ts < next)) pc->when = (u32)strtoul(ts + 16, NULL, 10);
+		const char *tx = strstr(c, "class=\"commentthread_comment_text\"");
+		if (tx && (!next || tx < next)) {
+			tx = strchr(tx, '>');
+			if (tx) html_between(tx + 1, "</div>", pc->text, sizeof pc->text);
+		}
+		if (pc->author[0]) n++;
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
+Req *steam_req_post_comment(u64 steamid, const char *text, const char *sessionid, const char *cookies)
+{
+	char url[160];
+	snprintf(url, sizeof url, "https://steamcommunity.com/comment/Profile/post/%llu/-1/", (unsigned long long)steamid);
+	char *esc = url_escape(text);
+	size_t n = strlen(esc) + 160;
+	char *body = malloc(n);
+	Req *r = NULL;
+	if (body) {
+		snprintf(body, n, "comment=%s&count=6&sessionid=%s&feature2=-1", esc, sessionid);
+		r = net_request(url, body, cookies);
+	}
+	free(body);
+	free(esc);
+	return r;
 }

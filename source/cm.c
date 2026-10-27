@@ -43,7 +43,9 @@ static unsigned long long now_ms(void) { return osGetTime(); }
 #define EMSG_MULTI 1
 #define EMSG_SERVICE_RESPONSE 147
 #define EMSG_SERVICE_CALL 151
+#define EMSG_HEARTBEAT 703
 #define EMSG_LOGOFF 706
+#define EMSG_CHANGE_STATUS 716
 #define EMSG_LICENSE_LIST 780
 #define EMSG_LOGON_RESPONSE 751
 #define EMSG_LOGON 5514
@@ -390,6 +392,7 @@ typedef struct {
 	// lo que se espera
 	bool logged_on;
 	int logon_eresult;
+	int heartbeat;        // cada cuántos segundos hay que dar señales (lo dice Steam al iniciar sesión)
 	uint64_t want_job;    // el trabajo cuya respuesta se espera
 	bool got_response;
 	int resp_eresult;
@@ -515,8 +518,10 @@ static void cm_packet(Cm *c, const uint8_t *d, size_t n, int depth)
 	} else if (emsg == EMSG_LOGON_RESPONSE) {
 		int er = 2;
 		PbR b = {body, body + bn};
-		while (pbr_next(&b, &f))
+		while (pbr_next(&b, &f)) {
 			if (f.field == 1) er = (int)(int32_t)f.v;
+			else if (f.field == 2 && f.wire == 0) c->heartbeat = (int)f.v;   // out_of_game_heartbeat_seconds
+		}
 		c->logon_eresult = er;
 		c->logged_on = true;
 		if (sid) c->steamid = sid;
@@ -993,30 +998,42 @@ static int pick_endpoint(char *out, size_t n)
 	return ok;
 }
 
+// El token del chat web (el mismo que pide steamcommunity.com/chat). Devuelve el JSON (se libera con
+// cJSON_Delete) o NULL; *token, *account y *sid apuntan dentro
+static cJSON *web_token(const char *jar, const char **token, const char **account, uint64_t *sid)
+{
+	char *js = http_get("https://steamcommunity.com/chat/clientjstoken", jar);
+	cJSON *root = js ? cJSON_Parse(js) : NULL;
+	if (js) memset(js, 0, strlen(js));
+	free(js);
+	*token = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "token"));
+	*account = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "account_name"));
+	const char *id = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "steamid"));
+	if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "logged_in")) || !*token || !**token || !*account || !id) {
+		cJSON_Delete(root);
+		return NULL;
+	}
+	*sid = strtoull(id, NULL, 10);
+	return root;
+}
+
 // Con tu sesión web: el token del chat web, un servidor de Steam y la sesión con el trabajo
 static int cm_run(const char *jar, Job *job, uint32_t **ids, char *err, size_t errsz)
 {
 	*ids = NULL;
 	err[0] = 0;
 	srand((unsigned)now_ms());
-	// 1) El token del chat web (el mismo que pide steamcommunity.com/chat)
-	char *js = http_get("https://steamcommunity.com/chat/clientjstoken", jar);
-	cJSON *root = js ? cJSON_Parse(js) : NULL;
-	if (js) memset(js, 0, strlen(js));
-	free(js);
-	const char *token = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "token"));
-	const char *account = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "account_name"));
-	const char *sid = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(root, "steamid"));
-	if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "logged_in")) || !token || !*token || !account || !sid) {
+	const char *token, *account;
+	uint64_t sid;
+	cJSON *root = web_token(jar, &token, &account, &sid);
+	if (!root) {
 		snprintf(err, errsz, "%s", "la comunidad no dio el token del chat web");
-		cJSON_Delete(root);
 		return -1;
 	}
-	// 2) Un servidor de Steam y 3) la sesión
 	char ep[96];
 	int n = -1;
 	if (!pick_endpoint(ep, sizeof ep)) snprintf(err, errsz, "%s", "no se pudo saber a qué servidor de Steam conectar");
-	else n = cm_session(ep, account, token, strtoull(sid, NULL, 10), job, ids, err, errsz);
+	else n = cm_session(ep, account, token, sid, job, ids, err, errsz);
 	cJSON_Delete(root);
 	return n;
 }
@@ -1143,6 +1160,196 @@ int cm_licensed(uint32_t **apps)
 
 bool cm_closed_start(const char *jar, const uint32_t *apps, int n) { return n > 0 && cm_start(jar, 1, apps, n); }
 bool cm_closed_poll(uint32_t **ids, int *n, char *err, size_t errsz) { return cm_poll(1, ids, n, err, errsz); }
+
+// ---------------------------------------------------------------------------- en línea
+
+// Como el chat web abierto: una conexión que se queda abierta mientras usas la app, con el latido
+// que pide Steam, y el estado «En línea». Al salir (o al desactivarlo) se cierra la sesión y Steam
+// te pasa a «Desconectado» al momento. Si se corta (sin Wi-Fi, consola en reposo), se reconecta
+#ifdef CM_HOST_TEST
+static pthread_mutex_t pr_mx = PTHREAD_MUTEX_INITIALIZER;
+static void pr_lock(void) { pthread_mutex_lock(&pr_mx); }
+static void pr_unlock(void) { pthread_mutex_unlock(&pr_mx); }
+#else
+static LightLock pr_mx;
+static bool pr_mx_ok;
+static void pr_lock(void) { if (!pr_mx_ok) { LightLock_Init(&pr_mx); pr_mx_ok = true; } LightLock_Lock(&pr_mx); }
+static void pr_unlock(void) { LightLock_Unlock(&pr_mx); }
+static Thread pr_th;
+#endif
+
+static struct {
+	volatile bool run, want;
+	volatile int state, gen;
+	char *jar;
+	uint64_t id;
+} PR;
+
+static bool pr_keep(int gen) { return PR.run && PR.want && PR.gen == gen; }
+
+// Una sesión en línea: vuelve cuando ya no se quiere, cambia la cuenta o se corta
+static bool presence_session(const char *jar, int gen)
+{
+	const char *token, *account;
+	uint64_t sid;
+	cJSON *root = web_token(jar, &token, &account, &sid);
+	char ep[96], err[96] = "";
+	if (!root || !pick_endpoint(ep, sizeof ep)) {
+		netlog("en línea: %s", root ? "sin servidor de Steam" : "la comunidad no dio el token del chat web");
+		cJSON_Delete(root);
+		return false;
+	}
+	Ws w = {0};
+	w.err = err;
+	w.errsz = sizeof err;
+	w.deadline = now_ms() + 20000;
+	Cm c = {0};
+	bool ok = false;
+	if (!ws_open(&w, ep)) goto out;
+	Pb body = {0};
+	pb_u64(&body, 1, PROTOCOL_VERSION);
+	c.steamid = sid;
+	pb_u64(&body, 7, 4294966596u);
+	pb_u64(&body, 32, 4);
+	pb_u64(&body, 33, 2);
+	pb_str(&body, 50, account);
+	pb_str(&body, 103, token);
+	bool sent = cm_send(&w, &c, EMSG_LOGON, NULL, &body);
+	free(body.b);
+	if (!sent || !cm_wait(&w, &c, &c.logged_on) || c.logon_eresult != 1) {
+		if (c.logged_on) snprintf(err, sizeof err, "Steam no aceptó la sesión (eresult %d)", c.logon_eresult);
+		goto out;
+	}
+	// «En línea»
+	Pb st = {0};
+	pb_u64(&st, 1, 1);
+	cm_send(&w, &c, EMSG_CHANGE_STATUS, NULL, &st);
+	free(st.b);
+	PR.state = 2;
+	ok = true;
+	int hb = c.heartbeat > 0 && c.heartbeat < 120 ? c.heartbeat : 9;
+	netlog("en línea: conectado a %s (latido cada %d s)", ep, hb);
+	unsigned long long next = now_ms() + hb * 1000ULL;
+	while (pr_keep(gen)) {
+		unsigned long long now = now_ms();
+		w.deadline = now + 5000;
+		if (now >= next) {
+			if (!cm_send(&w, &c, EMSG_HEARTBEAT, NULL, NULL)) break;
+			next = now + hb * 1000ULL;
+		}
+		// Lo que mande Steam (amigos, avisos…) se lee y se descarta; si no llega nada en un rato, se sigue
+		w.deadline = now_ms() + 300;
+		err[0] = 0;
+		uint8_t *m = NULL;
+		size_t mn = 0;
+		if (ws_recv_msg(&w, &m, &mn)) {
+			cm_packet(&c, m, mn, 0);
+			free(m);
+		} else if (strcmp(err, "Steam no contestó a tiempo")) {
+			break;   // se cortó de verdad
+		}
+	}
+	w.deadline = now_ms() + 3000;
+	if (err[0] && strcmp(err, "Steam no contestó a tiempo")) netlog("en línea: se cortó (%s)", err);
+	else cm_send(&w, &c, EMSG_LOGOFF, NULL, NULL);
+	err[0] = 0;
+out:
+	if (err[0]) netlog("en línea: no se pudo conectar (%s)", err);
+	free(c.resp);
+	free(c.pkgs);
+	free(c.pkg_tok);
+	ws_close(&w);
+	cJSON_Delete(root);
+	PR.state = 0;
+	return ok;
+}
+
+static void presence_thread(void *arg)
+{
+	(void)arg;
+	int wait = 5;
+	while (PR.run) {
+		if (!PR.want) {
+			nap(200);
+			continue;
+		}
+		pr_lock();
+		char *jar = PR.jar ? strdup(PR.jar) : NULL;
+		int gen = PR.gen;
+		pr_unlock();
+		if (!jar) {
+			nap(500);
+			continue;
+		}
+		PR.state = 1;
+		unsigned long long t0 = now_ms();
+		presence_session(jar, gen);
+		memset(jar, 0, strlen(jar));
+		free(jar);
+		if (!PR.run || !PR.want || PR.gen != gen) {
+			wait = 5;
+			continue;
+		}
+		// Se cortó: se vuelve a intentar, cada vez con algo más de calma (si duró, desde el principio)
+		if (now_ms() - t0 > 60000) wait = 5;
+		for (int i = 0; i < wait * 5 && pr_keep(gen); i++) nap(200);
+		wait = wait < 120 ? wait * 2 : 120;
+	}
+	netlog("en línea: desconectado");
+}
+
+#ifdef CM_HOST_TEST
+static void *presence_thread_p(void *a)
+{
+	presence_thread(a);
+	return NULL;
+}
+#endif
+
+void cm_presence_set(bool want, const char *jar, uint64_t steamid)
+{
+	pr_lock();
+	if (jar && (!PR.jar || strcmp(PR.jar, jar))) {
+		if (PR.jar) memset(PR.jar, 0, strlen(PR.jar));
+		free(PR.jar);
+		PR.jar = strdup(jar);
+	}
+	if (steamid != PR.id) {
+		PR.id = steamid;
+		PR.gen++;   // otra cuenta: la sesión de antes se cierra
+	}
+	pr_unlock();
+	PR.want = want && jar && steamid;
+	if (PR.want && !PR.run) {
+		PR.run = true;
+#ifdef CM_HOST_TEST
+		pthread_t p;
+		pthread_create(&p, NULL, presence_thread_p, NULL);
+		pthread_detach(p);
+#else
+		s32 prio = 0x30;
+		svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+		pr_th = threadCreate(presence_thread, NULL, 64 * 1024, prio + 1, -2, false);
+		if (!pr_th) PR.run = false;
+#endif
+	}
+}
+
+int cm_presence_state(void) { return PR.state; }
+
+void cm_presence_stop(void)
+{
+	if (!PR.run) return;
+	PR.want = false;
+	PR.run = false;
+#ifndef CM_HOST_TEST
+	if (pr_th) {
+		threadJoin(pr_th, 4000000000ULL);   // cierra la sesión (como mucho unos segundos)
+		threadFree(pr_th);
+		pr_th = NULL;
+	}
+#endif
+}
 
 #ifdef CM_HOST_TEST
 // Prueba sin cuenta: sesión anónima contra un servidor de verdad. Sin appids, la llamada a las

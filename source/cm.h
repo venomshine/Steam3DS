@@ -25,3 +25,10 @@ int cm_licensed(uint32_t **apps);
 int cm_fetch_closed(const char *jar, const uint32_t *apps, int n, uint32_t **ids, char *err, size_t errsz);
 bool cm_closed_start(const char *jar, const uint32_t *apps, int n);
 bool cm_closed_poll(uint32_t **ids, int *n, char *err, size_t errsz);
+
+// «En línea» en Steam mientras usas la app (como el chat web abierto). want: conectarse o no; jar:
+// las cookies de la sesión web (se copian; se puede llamar a menudo para tenerlas al día); steamid:
+// tu cuenta (si cambia, se reconecta con la nueva). cm_presence_state: 0 no, 1 conectando, 2 en línea
+void cm_presence_set(bool want, const char *jar, uint64_t steamid);
+int cm_presence_state(void);
+void cm_presence_stop(void);   // al salir: cierra la sesión (Steam te pasa a «Desconectado»)

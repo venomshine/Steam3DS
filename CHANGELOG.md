@@ -23,6 +23,7 @@ Primera versión pública.
   ilustraciones (también GIF), capturas, reseñas, grupos, comentarios y Familia de Steam.
 - Biblioteca con horas y orden; sin tus juegos ocultos de Steam (y vista «Ocultos»).
 - Amigos en tiempo real, solicitudes y código de amigo; notificaciones al momento.
+- Apareces «En línea» para tus amigos mientras usas la app (como con el chat web; se puede desactivar).
 - Descargas de tu PC e instalación remota, playtests, tienda de puntos, premios a reseñas,
   historial de compras, «Tus reseñas», privacidad y tema del perfil.
 

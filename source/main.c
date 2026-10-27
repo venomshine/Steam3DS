@@ -8078,7 +8078,7 @@ static void input_accounts(u32 kd, u32 kh, touchPosition *tp)
 
 // ---------------------------------------------------------------------------- Configuración
 
-enum { ST_LANG, ST_REQS, ST_SOUND, ST_CACHE, ST_ACCOUNT, ST_HISTORY, ST_ABOUT, ST_COUNT };
+enum { ST_LANG, ST_REQS, ST_SOUND, ST_ONLINE, ST_CACHE, ST_ACCOUNT, ST_HISTORY, ST_ABOUT, ST_COUNT };
 static int set_sel;
 static Scene set_back;
 
@@ -8117,6 +8117,7 @@ static void settings_value(int i, char *out, size_t n)
 	case ST_LANG: snprintf(out, n, "%s", _(lang_names[lang_index()])); break;
 	case ST_REQS: snprintf(out, n, "%s", g_cfg.reqs_mac ? "macOS" : "Windows"); break;
 	case ST_SOUND: snprintf(out, n, "%s", g_cfg.quiet ? _("Desactivado") : _("Activado")); break;
+	case ST_ONLINE: snprintf(out, n, "%s", g_cfg.hide_online ? _("Desactivado") : _("Activado")); break;
 	case ST_CACHE: {
 		s64 b = net_cache_bytes();
 		if (b < 0) snprintf(out, n, "%s", _("Calculando…"));
@@ -8130,11 +8131,12 @@ static void settings_value(int i, char *out, size_t n)
 
 static void draw_settings_top(void)
 {
-	static const char *title[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Privacidad y perfil", "Historial de compras", "Acerca de Steam3DS"};
+	static const char *title[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Aparecer en línea", "Caché de imágenes", "Privacidad y perfil", "Historial de compras", "Acerca de Steam3DS"};
 	static const char *desc[ST_COUNT] = {
 		"El idioma de la app y de la tienda. Con «Idioma de la consola» se usa el que tenga configurado tu Nintendo 3DS.",
 		"Qué requisitos se muestran en la ficha de cada juego. También puedes cambiarlo en el apartado Requisitos de la ficha.",
 		"El golpe de la válvula, el bombillo, el óxido y el vapor al abrir la app. Se aplica la próxima vez que la abras.",
+		"Mientras usas Steam3DS apareces «En línea» para tus amigos, como con el chat web de Steam, y al salir pasas a «Desconectado». El estado es de toda tu cuenta: si estabas «Invisible» en otro dispositivo, al abrir la app pasas a «En línea». Desactívalo para que la app no lo cambie.",
 		"Las imágenes de la tienda se guardan en la tarjeta SD para que aparezcan al momento la próxima vez. Ocupa como mucho 64 MB y lo más antiguo se borra solo. Vaciarla no borra nada de tu cuenta.",
 		"Quién puede ver tu perfil, tus juegos, tu lista de amigos y tu inventario, quién puede comentar, y el tema de tu perfil. Los cambios se guardan en tu cuenta de Steam.",
 		"Tus compras, regalos y fondos añadidos al monedero en Steam, con la fecha y el importe.",
@@ -8158,9 +8160,9 @@ static void draw_settings_bottom(void)
 	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
 	ui_icon(IC_WRENCH, 28, 6, 12, COL_ACC);
 	ui_text(46, 5, _("Configuración"), SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
-	static const Icon ic[ST_COUNT] = {IC_CHAT, IC_PC, IC_BELL, IC_IMAGE, IC_LOCK, IC_DOC, IC_INFO};
-	static const char *label[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Caché de imágenes", "Privacidad y perfil", "Historial de compras", "Acerca de Steam3DS"};
-	const float RH = 27;
+	static const Icon ic[ST_COUNT] = {IC_CHAT, IC_PC, IC_BELL, IC_WIFI, IC_IMAGE, IC_LOCK, IC_DOC, IC_INFO};
+	static const char *label[ST_COUNT] = {"Idioma", "Requisitos del sistema", "Sonido de la pantalla de carga", "Aparecer en línea", "Caché de imágenes", "Privacidad y perfil", "Historial de compras", "Acerca de Steam3DS"};
+	const float RH = 24;
 	for (int i = 0; i < ST_COUNT; i++) {
 		float y = LIST_Y + 4 + i * RH;
 		bool on = i == set_sel;
@@ -8169,12 +8171,12 @@ static void draw_settings_bottom(void)
 			ui_rrect(3, y + 1, BOT_W - 8, RH - 2, 6, col_alpha(COL_WHITE, br));
 			ui_rrect(3, y + 6, 2, RH - 12, 1, col_alpha(COL_ACC, 0.8f));
 		}
-		ui_icon(ic[i], 14, y + 8, 12, on ? COL_ACC : COL_DIM);
-		ui_text(36, y + 6, _(label[i]), SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, 170);
+		ui_icon(ic[i], 14, y + 6, 12, on ? COL_ACC : COL_DIM);
+		ui_text(36, y + 4, _(label[i]), SZ_BODY - 0.02f, on ? COL_WHITE : COL_TXT, AL_LEFT, 170);
 		char v[64];
 		settings_value(i, v, sizeof v);
-		if (i == ST_ABOUT || i == ST_ACCOUNT || i == ST_HISTORY) ui_text(BOT_W - 20, y + 4, "›", SZ_LARGE, COL_ACC, AL_LEFT, 0);
-		else ui_text(BOT_W - 14, y + 7, v, SZ_SMALL, COL_ACC, AL_RIGHT, 110);
+		if (i == ST_ABOUT || i == ST_ACCOUNT || i == ST_HISTORY) ui_text(BOT_W - 20, y + 2, "›", SZ_LARGE, COL_ACC, AL_LEFT, 0);
+		else ui_text(BOT_W - 14, y + 5, v, SZ_SMALL, COL_ACC, AL_RIGHT, 110);
 		if (i < ST_COUNT - 1) ui_hline(36, y + RH - 1, BOT_W - 44, C2D_Color32(0xff, 0xff, 0xff, 0x0c));
 	}
 	static const char *hv[] = {"← →", "Cambiar", "B", "Volver"};
@@ -8196,7 +8198,7 @@ static void input_settings(u32 kd, u32 kh, touchPosition *tp)
 	if (key_repeat(kd, kh, KEY_DOWN)) set_sel = (set_sel + 1) % ST_COUNT;
 	if (key_repeat(kd, kh, KEY_UP)) set_sel = (set_sel + ST_COUNT - 1) % ST_COUNT;
 	if ((kd & KEY_TOUCH) && tp->py >= LIST_Y + 4) {
-		int i = (int)((tp->py - LIST_Y - 4) / 27);
+		int i = (int)((tp->py - LIST_Y - 4) / 24);
 		if (i >= 0 && i < ST_COUNT) {
 			if (i == set_sel) kd |= KEY_A;
 			set_sel = i;
@@ -8214,6 +8216,10 @@ static void input_settings(u32 kd, u32 kh, touchPosition *tp)
 		break;
 	case ST_SOUND:
 		g_cfg.quiet = !g_cfg.quiet;
+		config_save();
+		break;
+	case ST_ONLINE:
+		g_cfg.hide_online = !g_cfg.hide_online;
 		config_save();
 		break;
 	case ST_CACHE:
@@ -9422,6 +9428,28 @@ static void terms_note_account(void)
 		free(t);
 	}
 	free(b);
+}
+
+// «En línea» en Steam mientras usas la app (si no lo has desactivado y ya aceptaste las condiciones).
+// Las cookies se renuevan solas: se le pasan de nuevo de vez en cuando para que reconecte con ellas
+static void presence_tick(void)
+{
+	static u64 next, who;
+	static bool was;
+	bool want = auth_logged() && TM.ok == 1 && !g_cfg.hide_online;
+	u64 id = want ? auth_info()->steamid : 0, now = osGetTime();
+	if (want == was && id == who && now < next) return;
+	static char jar[10240];
+	if (want && !auth_web_jar(jar, sizeof jar)) {
+		next = now + 5000;   // aún no hay sesión web: en un momento
+		return;
+	}
+	if (want != was) netlog("en línea: %s", want ? "activado" : "desactivado");
+	was = want;
+	who = id;
+	next = now + 60000;
+	cm_presence_set(want, want ? jar : NULL, id);
+	memset(jar, 0, sizeof jar);
 }
 
 static void terms_open(Scene next)
@@ -11026,6 +11054,7 @@ int main(int argc, char **argv)
 		// Con sesión, la biblioteca y los deseados se cargan en segundo plano (para «ya es tuyo» y
 		// «en deseados» en las fichas); se espera a que la tienda sepa el país y el idioma
 		terms_note_account();
+		presence_tick();
 		if (auth_logged() && S.ctx_ready && TM.ok == 1) {
 			if (!tabs[TAB_LIBRARY].started) lib_start();
 			if (!tabs[TAB_WISHLIST].started) tab_more(TAB_WISHLIST);
@@ -11288,6 +11317,7 @@ int main(int argc, char **argv)
 	if (wheel_sheet) C2D_SpriteSheetFree(wheel_sheet);
 	if (ui_sheet) C2D_SpriteSheetFree(ui_sheet);
 	C2D_TextBufDelete(review_buf);
+	cm_presence_stop();   // cierra la sesión: Steam te pasa a «Desconectado» al momento
 	img_exit();
 	auth_exit();
 	net_exit();

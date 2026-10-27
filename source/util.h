@@ -17,6 +17,7 @@ typedef struct {
 	char birth[12];      // AAAA-MM-DD (por si algún día Steam la pide)
 	bool reqs_mac;       // requisitos de macOS en vez de los de Windows
 	bool quiet;          // sin el sonido de la pantalla de carga
+	bool hide_online;    // no aparecer «En línea» en Steam mientras se usa la app
 } Config;
 
 extern Config g_cfg;

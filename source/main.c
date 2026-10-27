@@ -164,7 +164,7 @@ static struct {
 } S;
 
 enum { BT_NONE, BT_IGNORE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
-	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW, BT_RUP, BT_RDOWN, BT_RTEXT, BT_RVIS, BT_RCANCEL, BT_RSEND, BT_PDL, BT_UADD, BT_UADDW, BT_UIGN };
+	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW, BT_RUP, BT_RDOWN, BT_RTEXT, BT_RVIS, BT_RCANCEL, BT_RSEND, BT_PDL, BT_UADD, BT_UADDW, BT_UIGN, BT_FOLLOW };
 
 // Pestañas de la tienda
 #define HOME_PARTS 5
@@ -774,6 +774,10 @@ static void owned_poll(Tab *t)
 		int ni = r->state == REQ_DONE ? steam_parse_userdata_ignored(r->data, &ign) : -1;
 		if (ni >= 0) shop_set_ignored(ign, ni);
 		free(ign);
+		u32 *fo = NULL;
+		int nf = r->state == REQ_DONE ? steam_parse_userdata_followed(r->data, &fo) : -1;
+		if (nf >= 0) shop_set_followed(fo, nf);
+		free(fo);
 		net_release(r);
 		t->list.req = NULL;
 		if (n < 0) {
@@ -2257,6 +2261,25 @@ static void game_back(void)
 	go_scene(S.game_back, -1);
 }
 
+// Filtro de Opiniones: 0 destacadas (tu idioma), 1 positivas, 2 negativas, 3 recientes, 4 todos los idiomas
+static int rv_filter;
+static const char *const rv_filter_name[] = {"Destacadas", "Positivas", "Negativas", "Recientes", "Todos los idiomas"};
+
+static void reviews_set_filter(int f)
+{
+	rv_filter = f % 5;
+	steam_reviews_filter(rv_filter == 1 ? 1 : rv_filter == 2 ? 2 : 0, rv_filter == 3, rv_filter == 4);
+	for (int i = 0; i < S.nreviews; i++) free(S.reviews[i].text);
+	S.nreviews = 0;
+	S.rcursor[0] = 0;
+	C2D_TextBufClear(review_buf);
+	if (S.rreq) net_release(S.rreq);
+	S.rreq = NULL;
+	S.rend = false;
+	if (S.rsel > 0) S.rsel = 0;
+	S.rscroll = 0;
+}
+
 static void reviews_more(void)
 {
 	if (S.rreq || S.rend || S.nreviews >= MAX_REVIEWS) return;
@@ -2818,7 +2841,10 @@ static void draw_my_review(const AppInfo *a, float y)
 static void draw_reviews_top(const AppInfo *a)
 {
 	if (a->review_label[0]) {
-		ui_text(12, 24, a->review_label, SZ_BODY, COL_WHITE, AL_LEFT, 0);
+		float lw = ui_text(12, 24, a->review_label, SZ_BODY, COL_WHITE, AL_LEFT, 0);
+		char ft[48];
+		snprintf(ft, sizeof ft, "· %s", _(rv_filter_name[rv_filter]));
+		ui_text(12 + lw + 8, 25, ft, SZ_SMALL, COL_ACC, AL_LEFT, 150);
 		char t[64];
 		snprintf(t, sizeof t, _("%d %% de %d reseñas"), a->review_pct, a->review_count);
 		ui_text(TOP_W - 12, 25, t, SZ_SMALL, COL_DIM, AL_RIGHT, 0);
@@ -2835,7 +2861,7 @@ static void draw_reviews_top(const AppInfo *a)
 		top += mine_h + 5;   // las demás, debajo (se desplaza todo junto)
 	}
 	if (S.nreviews == 0) {
-		if (S.rend) ui_text(TOP_W / 2, 120, _("Todavía no hay reseñas en tu idioma"), SZ_BODY, COL_DIM, AL_CENTER, 0);
+		if (S.rend) ui_text(TOP_W / 2, 120, rv_filter == 0 ? _("Todavía no hay reseñas en tu idioma") : _("No hay reseñas con este filtro"), SZ_BODY, COL_DIM, AL_CENTER, 0);
 		else draw_net_wait(TOP_W / 2, 125, NULL);
 		return;
 	}
@@ -3100,7 +3126,8 @@ static Box B_WISH = {12, 116, 145, 26};
 static Box B_SHOTS = {163, 116, 145, 26};
 static Box B_INST = {12, 148, 296, 26};
 static Box B_IGNORE = {178, 148, 130, 26};
-static bool has_ignore_btn;
+static Box B_FOLLOW = {178, 148, 130, 26};
+static bool has_ignore_btn, has_follow_btn;
 
 static void game_layout(const AppInfo *a)
 {
@@ -3121,8 +3148,15 @@ static void game_layout(const AppInfo *a)
 		B_SHOTS = (Box){163, 116, 145, 26};
 		B_INST = (Box){12, 148, 296, 26};
 	}
-	B_IGNORE = (Box){178, B_INST.y, 130, B_INST.h};
-	if (has_ignore_btn) B_INST.w = 160;
+	// Con sesión: si es tuyo, Instalar en el PC y Seguir; si no, Seguir e Ignorar (como en la tienda)
+	has_follow_btn = auth_logged();
+	if (has_ignore_btn) {
+		B_FOLLOW = (Box){12, B_INST.y, 145, B_INST.h};
+		B_IGNORE = (Box){163, B_INST.y, 145, B_INST.h};
+	} else if (has_follow_btn) {
+		B_INST.w = 160;
+		B_FOLLOW = (Box){178, B_INST.y, 130, B_INST.h};
+	}
 }
 
 static bool hit(const Box *b, int x, int y)
@@ -3864,8 +3898,16 @@ static void draw_game_bottom(void)
 		if (!a->nshots && mine) snprintf(shots, sizeof shots, _("Tus capturas (%d)"), mine);
 		else snprintf(shots, sizeof shots, _("Capturas (%d)"), nsh);
 		draw_button_k(&B_SHOTS, nsh ? "X+→" : NULL, false, IC_IMAGE, shots, COL_BTN2, COL_BTN2, COL_ACC, nsh ? 1 : 0.45f, S.pressed == BT_SHOTS);
-		draw_button_k(&B_INST, own ? "X+↓" : NULL, false, IC_PC, has_ignore_btn ? _("Instalar en el PC") : _("Instalar en tu PC de forma remota"),
-			C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, own ? 1 : 0.4f, S.pressed == BT_INST);
+		if (!has_ignore_btn)
+			draw_button_k(&B_INST, own ? "X+↓" : NULL, false, IC_PC, has_follow_btn ? _("Instalar en el PC") : _("Instalar en tu PC de forma remota"),
+				C2D_Color32(0x47, 0xbf, 0xff, 0xff), C2D_Color32(0x1a, 0x44, 0xc2, 0xff), COL_WHITE, own ? 1 : 0.4f, S.pressed == BT_INST);
+		if (has_follow_btn) {
+			bool fo = shop_followed(a->appid);
+			bool busy_fo = shop_busy_with(fo ? SH_UNFOLLOW : SH_FOLLOW, a->appid);
+			const char *fk = has_ignore_btn ? "X+↓" : "X+↑";
+			if (fo) draw_button_k(&B_FOLLOW, fk, false, IC_CHECK, busy_fo ? _("Quitando…") : _("Siguiendo"), C2D_Color32(0x3a, 0x6f, 0x96, 0xff), C2D_Color32(0x2a, 0x55, 0x78, 0xff), COL_WHITE, 1, S.pressed == BT_FOLLOW);
+			else draw_button_k(&B_FOLLOW, fk, false, IC_BELL, busy_fo ? _("Siguiendo…") : _("Seguir"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_FOLLOW);
+		}
 		if (has_ignore_btn) {
 			bool ign = shop_ignored(a->appid);
 			bool busy_ign = shop_busy_with(ign ? SH_UNIGNORE : SH_IGNORE, a->appid);
@@ -3874,7 +3916,7 @@ static void draw_game_bottom(void)
 		}
 		float ny = B_INST.y + B_INST.h + 5;
 		if (!in) ui_text(BOT_W / 2, ny, _("Inicia sesión (START) para comprar y usar tu lista de deseos"), SZ_TINY, COL_DIM, AL_CENTER, 300);
-		else if (!own) ui_text(BOT_W / 2, ny, _("La instalación remota requiere tener el juego en tu biblioteca"), SZ_TINY, COL_DIM, AL_CENTER, 300);
+		else if (!own) ui_text(BOT_W / 2, ny, _("Sigue un juego para enterarte de sus novedades en Steam"), SZ_TINY, COL_DIM, AL_CENTER, 300);
 	}
 
 	if (S.show_qr) {
@@ -3890,11 +3932,11 @@ static void draw_game_bottom(void)
 		static const char *h[] = {"↑↓", "Elegir", "L R", "Apartado", "B", "Volver", "START", "Menú"};
 		draw_hints(h, 4);
 	} else if (S.sec == SEC_REVIEWS && S.rsel == -1 && MR.loaded) {
-		static const char *hw[] = {"A", "Escribir reseña", "↑↓", "Leer", "L R", "Apartado", "B", "Volver"};
-		static const char *he[] = {"A", "Editar reseña", "↑↓", "Leer", "L R", "Apartado", "B", "Volver"};
+		static const char *hw[] = {"A", "Escribir reseña", "↑↓", "Leer", "Y", "Filtrar", "B", "Volver"};
+		static const char *he[] = {"A", "Editar reseña", "↑↓", "Leer", "Y", "Filtrar", "B", "Volver"};
 		draw_hints(MR.r.has ? he : hw, 4);
 	} else if (S.sec == SEC_REVIEWS) {
-		static const char *h[] = {"↑↓", "Leer", "L R", "Apartado", "B", "Volver", "START", "Menú"};
+		static const char *h[] = {"↑↓", "Leer", "Y", "Filtrar", "L R", "Apartado", "B", "Volver"};
 		draw_hints(h, 4);
 	} else if (S.sec == SEC_SUMMARY) {
 		static const char *h[] = {"↑↓", "Desplazar", "L R", "Apartado", "B", "Volver", "START", "Menú"};
@@ -7902,6 +7944,7 @@ static const Box *button_box(int id)
 	case BT_UADD: return &B_UADD;
 	case BT_UADDW: return &B_UADDW;
 	case BT_UIGN: return &B_UIGN;
+	case BT_FOLLOW: return &B_FOLLOW;
 	case BT_RUP: return &B_RUP;
 	case BT_RDOWN: return &B_RDOWN;
 	case BT_RTEXT: return &B_RTEXT;
@@ -8026,11 +8069,11 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	int key_b = BT_NONE;
 	bool combo = kh & KEY_X;
 	if (a) {
-		if ((kd & KEY_Y) && !(S.sec == SEC_ACH && ach_cmp_count())) key_b = auth_logged() ? BT_CART : -1;   // en Logros, Y compara
+		if ((kd & KEY_Y) && !(S.sec == SEC_ACH && ach_cmp_count()) && S.sec != SEC_REVIEWS) key_b = auth_logged() ? BT_CART : -1;   // en Logros Y compara; en Opiniones, filtra
 		if (combo && (kd & KEY_RIGHT)) key_b = BT_SHOTS;
 		if (combo && (kd & KEY_LEFT)) key_b = BT_WISH;
-		if (combo && (kd & KEY_DOWN)) key_b = BT_INST;
-		if (combo && (kd & KEY_UP) && has_ignore_btn) key_b = BT_IGNORE;
+		if (combo && (kd & KEY_DOWN)) key_b = has_ignore_btn ? BT_FOLLOW : BT_INST;
+		if (combo && (kd & KEY_UP)) key_b = has_ignore_btn ? BT_IGNORE : has_follow_btn ? BT_FOLLOW : BT_NONE;
 		if ((kd & KEY_SELECT) && S.has_demo_btn) key_b = BT_DEMO;
 	}
 	if (combo) {
@@ -8073,6 +8116,10 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		if (key_repeat(kd, kh, KEY_DOWN) && S.lsel + 1 < S.nach) S.lsel++;
 		if (key_repeat(kd, kh, KEY_UP) && S.lsel > 0) S.lsel--;
 	}
+	if (S.sec == SEC_REVIEWS && (kd & KEY_Y)) {
+		reviews_set_filter(rv_filter + 1);
+		return;
+	}
 	if (S.sec == SEC_REVIEWS) {
 		bool mine = a && my_review_shown(a);
 		if (key_repeat(kd, kh, KEY_DOWN) && S.rsel + 1 < S.nreviews) S.rsel++;
@@ -8087,7 +8134,8 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 
 	if ((kd & KEY_TOUCH) && hit(&B_SEG, tp->px, tp->py))
 		game_set_sec((int)((tp->px - B_SEG.x) / (B_SEG.w / SEC_COUNT)));
-	int ids[6] = {BT_CART, BT_WISH, BT_SHOTS, BT_INST}, nids = 4;
+	int ids[7] = {BT_CART, BT_WISH, BT_SHOTS, has_ignore_btn ? BT_FOLLOW : BT_INST}, nids = 4;
+	if (has_follow_btn && !has_ignore_btn) ids[nids++] = BT_FOLLOW;
 	if (S.has_demo_btn) ids[nids++] = BT_DEMO;
 	if (has_ignore_btn) ids[nids++] = BT_IGNORE;
 	int b = a ? press_update(kd, kh, ku, tp, ids, nids) : BT_NONE;
@@ -8111,6 +8159,9 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 	} else if (b == BT_IGNORE) {
 		if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
 		else shop_ignore(a->appid, a->name, !shop_ignored(a->appid));
+	} else if (b == BT_FOLLOW) {
+		if (shop_busy()) toast(_("Espera a que termine la acción anterior"));
+		else shop_follow(a->appid, a->name, !shop_followed(a->appid));
 	} else if (b == BT_INST) {
 		if (!owned_app(a->appid)) toast(_("La instalación remota requiere tener el juego en tu biblioteca"));
 		else remote_open(a);
@@ -8286,6 +8337,12 @@ static void shop_events(void)
 				snprintf(t, sizeof t, _("No se pudo publicar tu reseña: %s"), shop_err(ev.code));
 			}
 			break;
+		case SH_FOLLOW:
+		case SH_UNFOLLOW:
+			if (ev.ok && ev.kind == SH_FOLLOW) snprintf(t, sizeof t, _("Sigues %s: verás sus novedades en Steam"), ev.what);
+			else if (ev.ok) snprintf(t, sizeof t, _("Ya no sigues %s"), ev.what);
+			else snprintf(t, sizeof t, _("No se pudo cambiar: %s"), shop_err(ev.code));
+			break;
 		case SH_IGNORE:
 		case SH_UNIGNORE:
 			if (ev.ok && ev.kind == SH_IGNORE) snprintf(t, sizeof t, _("Has ignorado %s: no saldrá en tus recomendaciones"), ev.what);
@@ -8295,7 +8352,7 @@ static void shop_events(void)
 		}
 		static const Icon ic[] = {[SH_CART_ADD] = IC_CART, [SH_CART_REMOVE] = IC_CART, [SH_WISH_ADD] = IC_HEART,
 			[SH_WISH_REMOVE] = IC_HEART, [SH_FREE] = IC_PAD, [SH_IGNORE] = IC_HIDE, [SH_UNIGNORE] = IC_HIDE,
-			[SH_ACTIVATE] = IC_CODE, [SH_WALLET] = IC_COIN, [SH_REVIEW] = IC_CHAT, [SH_PLAYTEST] = IC_PAD};
+			[SH_ACTIVATE] = IC_CODE, [SH_WALLET] = IC_COIN, [SH_REVIEW] = IC_CHAT, [SH_PLAYTEST] = IC_PAD, [SH_FOLLOW] = IC_BELL, [SH_UNFOLLOW] = IC_BELL};
 		toast_icon(t, ic[ev.kind]);
 	}
 }

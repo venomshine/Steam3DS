@@ -842,13 +842,24 @@ bool steam_parse_review_summary(const char *json, AppInfo *a)
 // ----------------------------------------------------------------------------
 // Reseñas
 
+static int rv_type;
+static bool rv_recent, rv_all;
+
+void steam_reviews_filter(int type, bool recent, bool all_langs)
+{
+	rv_type = type;
+	rv_recent = recent;
+	rv_all = all_langs;
+}
+
 Req *steam_req_reviews(u32 appid, const char *cursor)
 {
+	static const char *types[] = {"all", "positive", "negative"};
 	char *cur = url_escape(cursor && *cursor ? cursor : "*");
 	char url[320];
 	snprintf(url, sizeof url,
-		"https://store.steampowered.com/appreviews/%lu?json=1&language=%s&filter=all&review_type=all&purchase_type=all&num_per_page=8&cursor=%s",
-		(unsigned long)appid, g_lang, cur);
+		"https://store.steampowered.com/appreviews/%lu?json=1&language=%s&filter=%s&review_type=%s&purchase_type=all&num_per_page=8&cursor=%s",
+		(unsigned long)appid, rv_all ? "all" : g_lang, rv_recent ? "recent" : "all", types[rv_type % 3], cur);
 	free(cur);
 	return net_get(url, LANE_API);
 }
@@ -1694,6 +1705,24 @@ int steam_parse_userdata_ignored(const char *json, u32 **ids)
 		u32 a = it->string ? (u32)strtoul(it->string, NULL, 10) : cJSON_IsNumber(it) ? (u32)it->valuedouble : 0;
 		if (a && *ids) (*ids)[k++] = a;
 	}
+	cJSON_Delete(root);
+	return k;
+}
+
+int steam_parse_userdata_followed(const char *json, u32 **ids)
+{
+	*ids = NULL;
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *fa = cJSON_GetObjectItemCaseSensitive(root, "rgFollowedApps");
+	if (!cJSON_IsArray(fa)) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = cJSON_GetArraySize(fa), k = 0;
+	*ids = malloc(sizeof(u32) * (n ? n : 1));
+	const cJSON *it;
+	cJSON_ArrayForEach(it, fa)
+		if (cJSON_IsNumber(it) && *ids) (*ids)[k++] = (u32)it->valuedouble;
 	cJSON_Delete(root);
 	return k;
 }

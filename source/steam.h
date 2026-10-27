@@ -145,6 +145,9 @@ Req *steam_req_items(const u32 *ids, int n, bool assets);   // assets: también 
 void steam_icon_url(const StoreRow *r, char *out, size_t n);      // nombres, precios y reseñas de varios a la vez
 bool steam_parse_review_summary(const char *json, AppInfo *a);
 Req *steam_req_reviews(u32 appid, const char *cursor);
+// Filtro de las reseñas (como en la tienda): type 0 todas, 1 positivas, 2 negativas; recent: las más
+// nuevas primero (si no, las más útiles); all_langs: de todos los idiomas
+void steam_reviews_filter(int type, bool recent, bool all_langs);
 int steam_parse_reviews(const char *json, Review *out, int max, char *cursor, size_t cursor_sz);
 Req *steam_req_morelike(u32 appid);
 
@@ -166,6 +169,7 @@ int steam_parse_wishlist(const char *json, u32 **ids);       // appids por prior
 // store.steampowered.com/dynamicstore/userdata/ (con las cookies de la tienda): juegos que tienes
 int steam_parse_userdata_owned(const char *json, u32 **ids); // appids (malloc); -1 si falla
 int steam_parse_userdata_ignored(const char *json, u32 **ids); // los juegos ignorados (malloc); -1 si falla
+int steam_parse_userdata_followed(const char *json, u32 **ids); // los juegos que sigues (malloc); -1 si falla
 
 void appinfo_free(AppInfo *a);
 void rowlist_free(RowList *l);

@@ -110,6 +110,7 @@ settoken_calls = []
 
 
 IGNORED = {}   # juegos ignorados (appid -> motivo), como rgIgnoredApps
+FOLLOWED = {1145360}   # juegos que sigues (rgFollowedApps)
 # Privacidad de la cuenta simulada (como la guarda la página de edición del perfil)
 PRIVACY = {"PrivacySettings": {"PrivacyProfile": 3, "PrivacyInventory": 3, "PrivacyInventoryGifts": 3, "PrivacyOwnedGames": 3,
                                "PrivacyPlaytime": 3, "PrivacyFriendsList": 2}, "eCommentPermission": 1}
@@ -153,6 +154,14 @@ def fake_post(host, path, body):
         f = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
         sys.stderr.write("AMIGOS %s %s\n" % (path, f))
         return ({"success": 1, "invited": [f.get("steamid")]} if f.get("sessionID") else {"success": 0}), []
+    if host == "store.steampowered.com" and path == "explore/followgame/":
+        raw = body.decode() if isinstance(body, bytes) else (body or "")
+        f = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+        a = int(f.get("appid", "0") or 0)
+        if not f.get("sessionid") or not a:
+            return False, []
+        (FOLLOWED.discard if f.get("unfollow") == "1" else FOLLOWED.add)(a)
+        return True, []
     if host == "store.steampowered.com" and path.startswith("ajaxrequestplaytestaccess/"):
         return {"success": 1, "granted": 0}, []
     if host == "store.steampowered.com" and path == "friends/recommendgame":
@@ -611,7 +620,7 @@ class Relay(BaseHTTPRequestHandler):
             ck = cookies_of(self.headers)
             ok = ck.get("steamLoginSecure", "").startswith(str(FAKE_ID))
             body = json.dumps({"rgWishlist": WISH, "rgOwnedPackages": [], "rgOwnedApps": [a for a, *_ in OWNED] + [228980, 1, 4406010],
-                               "rgIgnoredApps": {str(a): r for a, r in IGNORED.items()}} if ok else {}).encode()
+                               "rgIgnoredApps": {str(a): r for a, r in IGNORED.items()}, "rgFollowedApps": sorted(FOLLOWED)} if ok else {}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

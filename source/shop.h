@@ -6,7 +6,7 @@
 // Acciones con tu cuenta: carrito, deseados y juegos gratis. Una a la vez; la interfaz
 // pregunta cada frame y enseña el resultado con shop_event().
 
-typedef enum { SH_CART_ADD, SH_CART_REMOVE, SH_WISH_ADD, SH_WISH_REMOVE, SH_FREE, SH_IGNORE, SH_UNIGNORE, SH_ACTIVATE, SH_WALLET, SH_REVIEW, SH_PLAYTEST } ShopKind;
+typedef enum { SH_CART_ADD, SH_CART_REMOVE, SH_WISH_ADD, SH_WISH_REMOVE, SH_FREE, SH_IGNORE, SH_UNIGNORE, SH_ACTIVATE, SH_WALLET, SH_REVIEW, SH_PLAYTEST, SH_FOLLOW, SH_UNFOLLOW } ShopKind;
 
 typedef struct {
 	ShopKind kind;
@@ -59,3 +59,9 @@ void shop_review(u32 appid, const char *name, bool up, const char *text, bool is
 // Pedir acceso al playtest de un juego (el botón «Solicitar acceso» de la tienda:
 // ajaxrequestplaytestaccess). Si sale bien, code es 1 si ya te lo han dado y 0 si queda pendiente
 void shop_playtest(u32 appid, const char *name);
+
+// Seguir un juego (el botón «Seguir» de la tienda: explore/followgame). La lista de los que sigues
+// llega con la de la tienda (rgFollowedApps)
+void shop_follow(u32 appid, const char *name, bool follow);
+bool shop_followed(u32 appid);
+void shop_set_followed(const u32 *ids, int n);

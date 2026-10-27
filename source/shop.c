@@ -35,6 +35,11 @@ static struct {
 	int nign, ign_cap;
 } H;
 
+// Los juegos que sigues
+#define MAX_FOLLOW 512
+static u32 fol[MAX_FOLLOW];
+static int nfol;
+
 static void push_event(bool ok, int code)
 {
 	if (H.nev >= 4) memmove(H.ev, H.ev + 1, sizeof H.ev[0] * 3), H.nev = 3;
@@ -65,6 +70,7 @@ void shop_reset(void)
 		if (*all[i]) net_release(*all[i]);
 	free(H.ign);
 	memset(&H, 0, sizeof H);
+	nfol = 0;
 }
 
 // ---------------------------------------------------------------------------- Opciones de compra
@@ -234,6 +240,43 @@ void shop_ignore(u32 appid, const char *name, bool ignore)
 	memset(ck, 0, sizeof ck);
 }
 
+// ---------------------------------------------------------------------------- Seguir un juego
+
+static void followed_mark(u32 appid, bool on)
+{
+	for (int i = 0; i < nfol; i++)
+		if (fol[i] == appid) {
+			if (!on) fol[i] = fol[--nfol];
+			return;
+		}
+	if (on && nfol < MAX_FOLLOW) fol[nfol++] = appid;
+}
+
+bool shop_followed(u32 appid)
+{
+	for (int i = 0; i < nfol; i++)
+		if (fol[i] == appid) return true;
+	return false;
+}
+
+void shop_set_followed(const u32 *ids, int n)
+{
+	nfol = 0;
+	for (int i = 0; i < n; i++) followed_mark(ids[i], true);
+}
+
+void shop_follow(u32 appid, const char *name, bool follow)
+{
+	char ck[1200];
+	if (!auth_web_cookies("store.steampowered.com", ck, sizeof ck)) return;
+	if (!start_action(follow ? SH_FOLLOW : SH_UNFOLLOW, appid, name)) return;
+	char body[128];
+	snprintf(body, sizeof body, "sessionid=%s&appid=%lu%s", auth_sessionid(), (unsigned long)appid, follow ? "" : "&unfollow=1");
+	H.act = net_request("https://store.steampowered.com/explore/followgame/", body, ck);
+	memset(ck, 0, sizeof ck);
+	if (!H.act) push_event(false, -1);
+}
+
 // ---------------------------------------------------------------------------- Activar un producto
 
 static char act_code[48];
@@ -397,6 +440,10 @@ void shop_update(void)
 			netlog("cuenta: reseña -> %s (HTTP %ld)", ok ? "publicada" : "rechazada", r->http);
 			code = ok ? 0 : req_code(r);
 			cJSON_Delete(root);
+		} else if (H.kind == SH_FOLLOW || H.kind == SH_UNFOLLOW) {
+			// La tienda contesta «true» con un 200
+			ok = r->state == REQ_DONE && r->http == 200 && r->data && !strstr(r->data, "false");
+			if (ok) followed_mark(H.appid, H.kind == SH_FOLLOW);
 		} else if (H.kind == SH_IGNORE || H.kind == SH_UNIGNORE) {
 			// La tienda web contesta con un 200 (sin x-eresult)
 			ok = r->state == REQ_DONE && r->http == 200;

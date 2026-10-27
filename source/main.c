@@ -1264,6 +1264,8 @@ static void account_lists_clear(void)
 
 static void open_pay(void);
 static void gift_open(int line);
+static void user_forget(void);
+static const char *community_ck(void);
 static bool gift_is_open(void);
 static void user_person_live(const SteamPerson *p);
 static void draw_gift_bottom(void);
@@ -6571,6 +6573,14 @@ static bool user_is_me(void)
 }
 
 // Pide todo lo de un perfil (si ya es el que está cargado, no hace nada)
+// Vaciar la caché: el perfil que estaba cargado (y las ilustraciones ya encontradas) se olvidan
+static void user_forget(void)
+{
+	user_reset();
+	UP.id = 0;
+	nknown = 0;
+}
+
 static void user_load(u64 id)
 {
 	if (UP.id == id) return;
@@ -6584,7 +6594,7 @@ static void user_load(u64 id)
 	if (auth_logged()) UP.lvreq = steam_req_level(id, auth_token());
 	if (auth_logged()) UP.games_req = steam_req_owned(id, auth_token());
 	UP.com_req = steam_req_comments(id, 6);
-	UP.pg_req = steam_req_profile_page(id);
+	UP.pg_req = steam_req_profile_page(id, community_ck());
 	for (int i = 0; i < 3; i++) UP.top[i] = UP.recent[i] = UP.prog_tot[i] = -1;
 }
 
@@ -7343,6 +7353,16 @@ static void user_family_poll(void)
 	}
 }
 
+// Las cookies de la comunidad: con tu sesión se ve lo que un perfil enseña solo a sus amigos (y el
+// tuyo entero)
+static const char *community_ck(void)
+{
+	static char ck[1200];
+	ck[0] = 0;
+	if (auth_logged()) auth_web_cookies("steamcommunity.com", ck, sizeof ck);
+	return ck;
+}
+
 // Su página en la comunidad y, si los tiene y se ven, sus capturas y sus reseñas
 static void user_page_poll(void)
 {
@@ -7355,7 +7375,7 @@ static void user_page_poll(void)
 	}
 	if (!UP.pg_req && UP.pg_at && osGetTime() >= UP.pg_at) {
 		UP.pg_at = 0;
-		UP.pg_req = steam_req_profile_page(UP.id);
+		UP.pg_req = steam_req_profile_page(UP.id, community_ck());
 	}
 	if (UP.pg_req && UP.pg_req->state >= REQ_DONE) {
 		bool ok = UP.pg_req->state == REQ_DONE && steam_parse_profile_page(UP.pg_req->data, &UP.pg);
@@ -7364,8 +7384,8 @@ static void user_page_poll(void)
 		net_release(UP.pg_req);
 		UP.pg_req = NULL;
 		if (ok && UP.level < 0 && UP.pg.level >= 0) UP.level = UP.pg.level;
-		if (ok && UP.pg.shots_total > 0) UP.shots_req = steam_req_profile_shots(UP.id);
-		if (ok && UP.pg.reviews_total > 0) UP.revs_req = steam_req_profile_reviews(UP.id);
+		if (ok && UP.pg.shots_total > 0) UP.shots_req = steam_req_profile_shots(UP.id, community_ck());
+		if (ok && UP.pg.reviews_total > 0) UP.revs_req = steam_req_profile_reviews(UP.id, community_ck());
 	}
 	if (UP.shots_req && UP.shots_req->state >= REQ_DONE) {
 		int n = UP.shots_req->state == REQ_DONE ? steam_parse_profile_shots(UP.shots_req->data, UP.shots, 6) : -1;
@@ -7851,6 +7871,8 @@ static void input_settings(u32 kd, u32 kh, touchPosition *tp)
 	case ST_CACHE:
 		if (kd & KEY_A) {
 			net_cache_clear();
+			img_reset();         // también lo cargado en memoria, y lo que se quedó sin cargar
+			user_forget();       // los perfiles se vuelven a pedir enteros
 			toast_icon(_("Caché de imágenes vaciada"), IC_IMAGE);
 		}
 		break;

@@ -2836,11 +2836,11 @@ static void html_between(const char *a, const char *end, char *out, size_t n)
 	free(tmp);
 }
 
-Req *steam_req_profile_page(u64 steamid)
+Req *steam_req_profile_page(u64 steamid, const char *cookies)
 {
 	char url[160];
 	snprintf(url, sizeof url, "https://steamcommunity.com/profiles/%llu/?l=%s", (unsigned long long)steamid, g_lang);
-	return net_get(url, LANE_API);
+	return cookies && *cookies ? net_request(url, NULL, cookies) : net_get(url, LANE_API);
 }
 
 // El valor de un atributo dentro de [a, lim): src="…" (las imágenes, de akamai como el resto)
@@ -2929,12 +2929,12 @@ bool steam_parse_profile_page(const char *html, ProfilePage *o)
 	return true;
 }
 
-Req *steam_req_profile_shots(u64 steamid)
+Req *steam_req_profile_shots(u64 steamid, const char *cookies)
 {
 	char url[200];
 	snprintf(url, sizeof url, "https://steamcommunity.com/profiles/%llu/screenshots/?l=%s&sort=newestfirst&view=imagewall",
 		(unsigned long long)steamid, g_lang);
-	return net_get(url, LANE_API);
+	return cookies && *cookies ? net_request(url, NULL, cookies) : net_get(url, LANE_API);
 }
 
 int steam_parse_profile_shots(const char *html, ProfileShot *out, int max)
@@ -2967,11 +2967,11 @@ int steam_parse_profile_shots(const char *html, ProfileShot *out, int max)
 	return n;
 }
 
-Req *steam_req_profile_reviews(u64 steamid)
+Req *steam_req_profile_reviews(u64 steamid, const char *cookies)
 {
 	char url[160];
 	snprintf(url, sizeof url, "https://steamcommunity.com/profiles/%llu/recommended/?l=%s", (unsigned long long)steamid, g_lang);
-	return net_get(url, LANE_API);
+	return cookies && *cookies ? net_request(url, NULL, cookies) : net_get(url, LANE_API);
 }
 
 int steam_parse_profile_reviews(const char *html, ProfileReview *out, int max)

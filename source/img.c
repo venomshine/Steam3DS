@@ -20,6 +20,8 @@ typedef struct {
 	Req *req;
 	bool queued;        // pedida, esperando su turno para descargarse
 	u64 asked;          // orden de la cola
+	u64 fail_frame;     // cuándo falló (se reintenta un poco después, si se sigue viendo)
+	int tries;
 	bool ready, failed;
 	C3D_Tex tex;
 	Tex3DS_SubTexture sub;
@@ -106,13 +108,17 @@ void img_update(void)
 		if (!s->req) continue;
 		if (s->req->state == REQ_DONE) {
 			if (s->req->pixels && upload(s, s->req->pixels, s->req->w, s->req->h, s->req->tw, s->req->th, s->req->alpha)) s->ready = true;
-			else s->failed = true;
+			else {
+				s->failed = true;
+				s->fail_frame = frame;
+			}
 			net_release(s->req);
 			s->req = NULL;
 			break;
 		}
 		if (s->req->state == REQ_FAILED) {
 			s->failed = true;
+			s->fail_frame = frame;
 			net_release(s->req);
 			s->req = NULL;
 		}
@@ -150,8 +156,22 @@ const Pic *img_get(const char *url, int max_w)
 		best->asked = ++asked_seq;
 		s = best;
 	}
+	// Una que falló (Steam con prisas, la red que se cortó) se vuelve a pedir a los pocos segundos,
+	// hasta tres veces, mientras se siga viendo
+	if (s->failed && s->tries < 3 && frame - s->fail_frame > 240) {
+		s->failed = false;
+		s->tries++;
+		s->queued = true;
+		s->asked = ++asked_seq;
+	}
 	s->used = frame;
 	return s->ready ? &s->pic : NULL;
+}
+
+// Vaciar la caché: también lo que ya estaba cargado (y lo que falló) se vuelve a pedir
+void img_reset(void)
+{
+	for (int i = 0; i < ALL_SLOTS; i++) slot_clear(&slots[i]);
 }
 
 int img_pending(void)

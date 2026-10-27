@@ -211,8 +211,11 @@ static void cache_maintain(void)
 
 s64 net_cache_bytes(void) { return cache_clear_req ? 0 : cache_bytes; }
 
+static void raw_clear(void);
+
 void net_cache_clear(void)
 {
+	raw_clear();   // también las que siguen en memoria
 	cache_clear_req = true;
 	LightEvent_Signal(&log_wake);
 }
@@ -950,6 +953,17 @@ static bool raw_get(Req *r)
 	}
 	LightLock_Unlock(&raw_lock);
 	return hit;
+}
+
+static void raw_clear(void)
+{
+	LightLock_Lock(&raw_lock);
+	for (int i = 0; i < RAW_SLOTS; i++) {
+		free(raw[i].url);
+		free(raw[i].data);
+		memset(&raw[i], 0, sizeof raw[i]);
+	}
+	LightLock_Unlock(&raw_lock);
 }
 
 static void raw_put(const Req *r)

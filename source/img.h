@@ -16,6 +16,7 @@ void img_update(void);                          // una vez por frame: sube a la 
 const Pic *img_get(const char *url, int max_w); // NULL mientras se descarga
 bool img_failed(const char *url);
 int img_pending(void);
+void img_reset(void);   // suelta todas (al vaciar la caché)
 // Mientras una animación está en marcha, las imágenes que llegan esperan a subirse a la GPU
 void img_hold(bool hold);   // imágenes que se están descargando o decodificando
 

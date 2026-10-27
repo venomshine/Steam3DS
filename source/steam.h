@@ -459,15 +459,15 @@ typedef struct {
 	char badge_name[PROFILE_BADGES][64];
 	int shots_total, reviews_total;  // -1 si no se ven
 } ProfilePage;
-Req *steam_req_profile_page(u64 steamid);
+Req *steam_req_profile_page(u64 steamid, const char *cookies);   // con tu sesión: lo «solo amigos» también
 bool steam_parse_profile_page(const char *html, ProfilePage *out);
 
 // Sus capturas (las últimas) y sus reseñas, de sus páginas en la comunidad
 typedef struct { u64 id; u32 appid; char url[220]; char desc[96]; } ProfileShot;
 typedef struct { u32 appid; bool up; char hours[72]; char text[320]; char posted[48]; char capsule[200]; } ProfileReview;
-Req *steam_req_profile_shots(u64 steamid);
+Req *steam_req_profile_shots(u64 steamid, const char *cookies);
 int steam_parse_profile_shots(const char *html, ProfileShot *out, int max);       // -1 si no es la página
-Req *steam_req_profile_reviews(u64 steamid);
+Req *steam_req_profile_reviews(u64 steamid, const char *cookies);
 int steam_parse_profile_reviews(const char *html, ProfileReview *out, int max);   // -1 si no es la página
 
 // Comentarios de un perfil (los de la comunidad) y escribir uno

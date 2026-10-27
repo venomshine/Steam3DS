@@ -5116,17 +5116,19 @@ static float draw_showcase(const Showcase *s, float y, bool draw)
 		return h;
 	}
 	// Capturas e ilustraciones: la primera grande y las demás en miniatura. El recuadro de la grande
-	// toma la forma de la imagen (una ilustración larga hacia abajo sale alta, no encogida)
+	// toma la forma de la imagen (una ilustración larga hacia abajo sale alta y a todo el ancho)
 	const float th = 52, maxw = w - 20;
 	float big_w = maxw, big_h = 170;
 	const char *u0 = user_file_url(s->file[0]);
 	const Pic *p0 = u0 && u0[0] != '-' ? img_get(u0, 400) : NULL;
 	if (p0 && p0->w > 0 && p0->h > 0) {
+		// Siempre a todo el ancho del marco; si es muy alta, se baja para verla entera
 		big_h = maxw * p0->h / p0->w;
-		if (big_h > 520) big_h = 520;   // muy alta: se ve entera, más estrecha
-		if (big_h < 90) big_h = 90;
-		big_w = big_h * p0->w / p0->h;
-		if (big_w > maxw) big_w = maxw;
+		if (big_h < 90) {   // muy apaisada: un mínimo de alto, centrada
+			big_h = 90;
+			big_w = big_h * p0->w / p0->h;
+			if (big_w > maxw) big_w = maxw;
+		}
 	}
 	int rest = s->n - 1;
 	h = 22 + big_h + (rest > 0 ? 6 + th : 0) + 10;

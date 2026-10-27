@@ -2767,6 +2767,178 @@ static void html_between(const char *a, const char *end, char *out, size_t n)
 	free(tmp);
 }
 
+Req *steam_req_profile_page(u64 steamid)
+{
+	char url[160];
+	snprintf(url, sizeof url, "https://steamcommunity.com/profiles/%llu/?l=%s", (unsigned long long)steamid, g_lang);
+	return net_get(url, LANE_API);
+}
+
+// El valor de un atributo dentro de [a, lim): src="…" (las imágenes, de akamai como el resto)
+static void attr_in(const char *a, const char *lim, const char *name, char *out, size_t n)
+{
+	out[0] = 0;
+	const char *v = a ? strstr(a, name) : NULL;
+	if (!v || (lim && v > lim)) return;
+	v += strlen(name);
+	size_t l = strcspn(v, "\"");
+	if (l >= n) return;
+	memcpy(out, v, l);
+	out[l] = 0;
+	char *fa = strstr(out, ".fastly.steamstatic.com");
+	if (fa) memcpy(fa, ".akamai.", 8);
+}
+
+// El número de un contador de la columna derecha: el enlace que acaba en «/badges/», «/screenshots/»…
+static int count_link(const char *html, const char *tail)
+{
+	char key[48];
+	snprintf(key, sizeof key, "%s\">", tail);
+	for (const char *p = strstr(html, key); p; p = strstr(p + 1, key)) {
+		const char *lab = strstr(p, "count_link_label");
+		const char *tot = strstr(p, "profile_count_link_total\">");
+		if (!lab || !tot || tot - p > 400) continue;
+		tot += 26;
+		int n = 0;
+		bool any = false;
+		for (; *tot && *tot != '<'; tot++) {
+			if (*tot >= '0' && *tot <= '9') {
+				n = n * 10 + (*tot - '0');
+				any = true;
+			}
+		}
+		return any ? n : -1;
+	}
+	return -1;
+}
+
+bool steam_parse_profile_page(const char *html, ProfilePage *o)
+{
+	memset(o, 0, sizeof *o);
+	o->level = -1;
+	o->shots_total = o->reviews_total = -1;
+	if (!html || !strstr(html, "profile_header")) return false;
+	o->ok = true;
+	const char *lv = strstr(html, "persona_level");
+	lv = lv ? strstr(lv, "friendPlayerLevelNum\">") : NULL;
+	if (lv) o->level = atoi(lv + 22);
+	// La destacada, junto al nivel
+	const char *fb = strstr(html, "class=\"favorite_badge\"");
+	if (fb) {
+		const char *end = strstr(fb, "</a>");
+		attr_in(fb, end, "src=\"", o->fav_icon, sizeof o->fav_icon);
+		const char *nm = strstr(fb, "class=\"name ellipsis\">");
+		if (nm && (!end || nm < end)) html_between(nm + 22, "</div>", o->fav_name, sizeof o->fav_name);
+		const char *xp = strstr(fb, "class=\"xp\">");
+		if (xp && (!end || xp < end)) html_between(xp + 11, "</div>", o->fav_xp, sizeof o->fav_xp);
+	}
+	// Las insignias de la columna derecha (la sección «profile_badges», no la de premios)
+	const char *pb = strstr(html, "class=\"profile_badges\"");
+	if (pb) {
+		const char *end = strstr(pb, "profile_count_link_preview_ctn");   // la siguiente sección
+		end = end ? strstr(end + 10, "profile_count_link_preview_ctn") : NULL;
+		for (const char *b = strstr(pb, "class=\"profile_badges_badge"); b && (!end || b < end) && o->nbadges < PROFILE_BADGES;
+		     b = strstr(b + 10, "class=\"profile_badges_badge")) {
+			const char *bend = strstr(b, "</div>");
+			int k = o->nbadges;
+			attr_in(b, bend, "src=\"", o->badge_icon[k], sizeof o->badge_icon[k]);
+			char tip[200] = "";
+			const char *tt = strstr(b, "data-tooltip-html=\"");
+			if (tt && (!bend || tt < bend)) {
+				html_between(tt + 19, "\"", tip, sizeof tip);
+				char *nl = strchr(tip, '\n');
+				if (nl) *nl = 0;
+			}
+			copy_utf8(o->badge_name[k], sizeof o->badge_name[k], tip);
+			if (o->badge_icon[k][0]) o->nbadges++;
+		}
+	}
+	o->badges_total = count_link(html, "/badges/");
+	if (o->badges_total < 0) o->badges_total = o->nbadges;
+	o->shots_total = count_link(html, "/screenshots/");
+	o->reviews_total = count_link(html, "/recommended/");
+	return true;
+}
+
+Req *steam_req_profile_shots(u64 steamid)
+{
+	char url[200];
+	snprintf(url, sizeof url, "https://steamcommunity.com/profiles/%llu/screenshots/?l=%s&sort=newestfirst&view=imagewall",
+		(unsigned long long)steamid, g_lang);
+	return net_get(url, LANE_API);
+}
+
+int steam_parse_profile_shots(const char *html, ProfileShot *out, int max)
+{
+	if (!html || !strstr(html, "sharedfiles")) return -1;
+	int n = 0;
+	for (const char *a = strstr(html, "class=\"profile_media_item"); a && n < max; a = strstr(a + 10, "class=\"profile_media_item")) {
+		const char *next = strstr(a + 10, "class=\"profile_media_item");
+		ProfileShot *o = &out[n];
+		memset(o, 0, sizeof *o);
+		const char *ap = strstr(a, "data-appid=\"");
+		if (ap && (!next || ap < next)) o->appid = (u32)strtoul(ap + 12, NULL, 10);
+		const char *id = strstr(a, "data-publishedfileid=\"");
+		if (id && (!next || id < next)) o->id = strtoull(id + 22, NULL, 10);
+		const char *bg = strstr(a, "background-image: url('");
+		if (bg && (!next || bg < next)) {
+			bg += 23;
+			char raw[200];
+			size_t l = strcspn(bg, "'");
+			if (l < sizeof raw) {
+				memcpy(raw, bg, l);
+				raw[l] = 0;
+				ugc_sized(raw, o->url, sizeof o->url);
+			}
+		}
+		const char *q = strstr(a, "<q class=\"ellipsis\">");
+		if (q && (!next || q < next)) html_between(q + 20, "</q>", o->desc, sizeof o->desc);
+		if (o->url[0]) n++;
+	}
+	return n;
+}
+
+Req *steam_req_profile_reviews(u64 steamid)
+{
+	char url[160];
+	snprintf(url, sizeof url, "https://steamcommunity.com/profiles/%llu/recommended/?l=%s", (unsigned long long)steamid, g_lang);
+	return net_get(url, LANE_API);
+}
+
+int steam_parse_profile_reviews(const char *html, ProfileReview *out, int max)
+{
+	if (!html || (!strstr(html, "workshopBrowsePaging") && !strstr(html, "review_box"))) return -1;
+	int n = 0;
+	for (const char *b = strstr(html, "class=\"review_box_content\""); b && n < max; b = strstr(b + 10, "class=\"review_box_content\"")) {
+		const char *next = strstr(b + 10, "class=\"review_box_content\"");
+		ProfileReview *o = &out[n];
+		memset(o, 0, sizeof *o);
+		const char *ap = strstr(b, "steamcommunity.com/app/");
+		if (ap && (!next || ap < next)) o->appid = (u32)strtoul(ap + 23, NULL, 10);
+		const char *cap = strstr(b, "class=\"game_capsule\"");
+		if (cap && (!next || cap < next)) attr_in(cap, next, "src=\"", o->capsule, sizeof o->capsule);
+		const char *th = strstr(b, "icon_thumbs");
+		o->up = th && (!next || th < next) && !strncmp(th + 11, "Up", 2);
+		const char *h = strstr(b, "class=\"hours\">");
+		if (h && (!next || h < next)) {
+			html_between(h + 15, "</div>", o->hours, sizeof o->hours);
+			// Solo las horas que lleva («… (223.8 h en el momento de la reseña)» sobra aquí)
+			char *par = strchr(o->hours, '(');
+			if (par) {
+				*par = 0;
+				size_t l = strlen(o->hours);
+				while (l && o->hours[l - 1] == ' ') o->hours[--l] = 0;
+			}
+		}
+		const char *c = strstr(b, "class=\"content");
+		if (c && (!next || c < next) && (c = strchr(c, '>'))) html_between(c + 1, "</div>", o->text, sizeof o->text);
+		const char *ps = strstr(b, "class=\"posted\">");
+		if (ps && (!next || ps < next)) html_between(ps + 16, "</div>", o->posted, sizeof o->posted);
+		if (o->appid) n++;
+	}
+	return n;
+}
+
 int steam_parse_comments(const char *json, ProfileComment *out, int max, int *total)
 {
 	cJSON *root = cJSON_Parse(json);

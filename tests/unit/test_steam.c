@@ -320,6 +320,25 @@ int main(void) {
 	ProfileComment pcm[6];
 	int ctot = 0;
 	int ncm = steam_parse_comments(slurp("data/comments.json"), pcm, 6, &ctot);
+	// La página del perfil: nivel, destacada, insignias y contadores
+	{
+		ProfilePage pg;
+		CHECK(steam_parse_profile_page(slurp("data/profile_page.html"), &pg) && pg.level == 32);
+		printf("  nivel %d, destacada «%s» (%s) %s, insignias %d (%d vistas: %s), capturas %d, reseñas %d\n", pg.level, pg.fav_name, pg.fav_xp,
+			pg.fav_icon, pg.badges_total, pg.nbadges, pg.badge_name[0], pg.shots_total, pg.reviews_total);
+		CHECK(!strcmp(pg.fav_name, "Empleado de Valve") && pg.badges_total == 17 && pg.nbadges >= 4 && strstr(pg.badge_icon[0], "akamai"));
+	}
+	// Sus capturas y sus reseñas
+	{
+		ProfileShot ps[6];
+		int ns = steam_parse_profile_shots(slurp("data/profile_shots.html"), ps, 6);
+		printf("  capturas %d: %lu %s «%s»\n", ns, (unsigned long)ps[0].appid, ps[0].url, ps[0].desc);
+		CHECK(ns == 6 && ps[0].appid == 526870 && ps[0].id == 3368717413ULL && strstr(ps[0].url, "imw=") && ps[0].desc[0]);
+		ProfileReview pr[3];
+		int nr = steam_parse_profile_reviews(slurp("data/profile_reviews.html"), pr, 3);
+		printf("  reseñas %d: %lu %s «%s» «%s» «%s»\n", nr, (unsigned long)pr[0].appid, pr[0].up ? "sí" : "no", pr[0].hours, pr[0].text, pr[0].posted);
+		CHECK(nr == 1 && pr[0].appid == 365360 && pr[0].up && strstr(pr[0].text, "best") && pr[0].hours[0]);
+	}
 	// Sin nombre (Steam a veces pone el número de la cuenta): queda su steamid para pedirlo
 	{
 		ProfileComment pc2[2];

@@ -6191,6 +6191,14 @@ static struct {
 	bool com_done, want_comment;
 	Req *com_req, *com_post;
 	Req *com_names;              // los nombres que Steam no puso en sus comentarios
+	// De su página en la comunidad: nivel, insignias, capturas y reseñas (lo que su privacidad deje ver)
+	ProfilePage pg;
+	Req *pg_req, *shots_req, *revs_req;
+	ProfileShot shots[6];
+	int nshots;
+	ProfileReview revs[3];
+	int nrevs;
+	RowList revapps;             // los nombres de los juegos de sus reseñas
 	int fr_kind, rel;
 	bool rel_set;
 	bool fready[UP_FILES];
@@ -6231,13 +6239,15 @@ static void known_add(u64 id, const char *url)
 static void user_reset(void)
 {
 	Req **all[] = {&UP.items, &UP.shows, &UP.xml, &UP.lvreq, &UP.files, &UP.page, &UP.ach_req[0], &UP.ach_req[1], &UP.ach_req[2],
-		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2], &UP.fr_req, &UP.com_req, &UP.com_post, &UP.fam_req, &UP.fam_people, &UP.com_names};
+		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2], &UP.fr_req, &UP.com_req, &UP.com_post, &UP.fam_req, &UP.fam_people, &UP.com_names,
+		&UP.pg_req, &UP.shots_req, &UP.revs_req};
 	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
 		if (*all[i]) net_release(*all[i]);
 	for (int i = 0; i < UP_FILES; i++)
 		if (UP.fhead[i]) net_release(UP.fhead[i]);
 	rowlist_free(&UP.apps);
 	rowlist_free(&UP.games);
+	rowlist_free(&UP.revapps);
 	steam_profile_free(&UP.p);
 	Scene back = UP.back;
 	memset(&UP, 0, sizeof UP);
@@ -6268,6 +6278,7 @@ static void user_load(u64 id)
 	if (auth_logged()) UP.lvreq = steam_req_level(id, auth_token());
 	if (auth_logged()) UP.games_req = steam_req_owned(id, auth_token());
 	UP.com_req = steam_req_comments(id, 6);
+	UP.pg_req = steam_req_profile_page(id);
 	for (int i = 0; i < 3; i++) UP.top[i] = UP.recent[i] = UP.prog_tot[i] = -1;
 }
 
@@ -6524,8 +6535,10 @@ static void draw_user_avatar(float x, float y, float sz)
 	}
 }
 
+// «Nivel» y el número en su círculo, como en Steam (cx, cy: el centro del círculo)
 static void draw_level(float cx, float cy, int lv)
 {
+	ui_text(cx - 16, cy - 6, _("Nivel"), SZ_SMALL, COL_WHITE, AL_RIGHT, 0);
 	ui_circle(cx, cy, 12, C2D_Color32(0x9b, 0x9b, 0x9b, 0xff));
 	ui_circle(cx, cy, 10, COL_BG);
 	char t[12];
@@ -6770,6 +6783,74 @@ static float draw_user_games(float y)
 	return h + 8;
 }
 
+static const char *user_rev_game(u32 appid);
+
+// Sus insignias, sus últimas capturas y sus reseñas (lo que su privacidad deje ver); devuelve el alto
+static float draw_user_extras(float y0)
+{
+	float y = y0;
+	char t[96];
+	const float x = 12, w = TOP_W - 24;
+	// Insignias: cuántas y las que enseña en su perfil
+	if (UP.pg.nbadges) {
+		float h = 24 + 44 + 4;
+		if (y < SCR_H && y + h > 18) {
+			fx_glass(x, y, w, h, 10, 1, 0);
+			snprintf(t, sizeof t, _("INSIGNIAS (%d)"), UP.pg.badges_total);
+			ui_text(x + 10, y + 6, t, SZ_TINY, COL_ACC, AL_LEFT, 0);
+			for (int i = 0; i < UP.pg.nbadges; i++) {
+				float bx = x + 12 + i * 60, by = y + 24;
+				const Pic *bp = img_get(UP.pg.badge_icon[i], 64);
+				if (bp) img_draw_cover(bp, bx, by, 40, 40, 0.5f);
+				else ui_rrect(bx, by, 40, 40, 8, col_alpha(COL_WHITE, 0.06f));
+			}
+		}
+		y += h + 8;
+	}
+	// Capturas: las seis últimas, en dos filas
+	if (UP.nshots) {
+		const float tw = (w - 20 - 2 * 6) / 3, th = floorf(tw * 9 / 16);
+		int rows = (UP.nshots + 2) / 3;
+		float h = 24 + rows * (th + 6) + 2;
+		if (y < SCR_H && y + h > 18) {
+			fx_glass(x, y, w, h, 10, 1, 0);
+			snprintf(t, sizeof t, _("CAPTURAS (%d)"), UP.pg.shots_total);
+			ui_text(x + 10, y + 6, t, SZ_TINY, COL_ACC, AL_LEFT, 0);
+			for (int i = 0; i < UP.nshots; i++) {
+				float sx = x + 10 + (i % 3) * (tw + 6), sy = y + 24 + (i / 3) * (th + 6);
+				const Pic *sp = sy < SCR_H && sy + th > 18 ? img_get(UP.shots[i].url, 400) : NULL;
+				if (sp) img_draw_cover(sp, sx, sy, tw, th, 0.5f);
+				else ui_rect(sx, sy, tw, th, col_alpha(COL_WHITE, 0.06f));
+			}
+		}
+		y += h + 8;
+	}
+	// Reseñas: el juego, si lo recomienda, sus horas y el principio del texto
+	if (UP.nrevs) {
+		float h = 24 + UP.nrevs * 58 + 2;
+		if (y < SCR_H && y + h > 18) {
+			fx_glass(x, y, w, h, 10, 1, 0);
+			snprintf(t, sizeof t, _("RESEÑAS (%d)"), UP.pg.reviews_total);
+			ui_text(x + 10, y + 6, t, SZ_TINY, COL_ACC, AL_LEFT, 0);
+			for (int i = 0; i < UP.nrevs; i++) {
+				const ProfileReview *r = &UP.revs[i];
+				float ry = y + 24 + i * 58;
+				const Pic *cp = r->capsule[0] ? img_get(r->capsule, 184) : NULL;
+				if (cp) img_draw_cover(cp, x + 10, ry, 92, 35, 0.5f);
+				else ui_rect(x + 10, ry, 92, 35, col_alpha(COL_WHITE, 0.06f));
+				const char *g = user_rev_game(r->appid);
+				ui_text(x + 110, ry - 1, g ? g : "…", SZ_SMALL, COL_WHITE, AL_LEFT, w - 120);
+				ui_icon(r->up ? IC_THUMB_UP : IC_THUMB_DOWN, x + 110, ry + 15, 11, r->up ? COL_ACC : COL_NEG);
+				snprintf(t, sizeof t, "%s · %s", r->up ? _("Recomendado") : _("No recomendado"), r->hours);
+				ui_text(x + 126, ry + 14, t, SZ_TINY, r->up ? COL_ACC : COL_NEG, AL_LEFT, w - 136);
+				ui_text_wrap(x + 110, ry + 28, w - 120, r->text, SZ_TINY, COL_TXT, 2, 11);
+			}
+		}
+		y += h + 8;
+	}
+	return y - y0;
+}
+
 static void draw_user_top(void)
 {
 	if (UP.qr) {
@@ -6786,15 +6867,26 @@ static void draw_user_top(void)
 	u32 col;
 	user_name(name, sizeof name);
 	draw_user_avatar(20, y + 4, 64);
-	ui_text(100, y, name[0] ? name : "…", SZ_TITLE, COL_WHITE, AL_LEFT, TOP_W - 112 - (UP.level >= 0 ? 34 : 0));
+	ui_text(100, y, name[0] ? name : "…", SZ_TITLE, COL_WHITE, AL_LEFT, TOP_W - 112 - (UP.level >= 0 ? 74 : 0));
 	if (UP.level >= 0) draw_level(TOP_W - 26, y + 12, UP.level);
+	// Su insignia destacada, bajo el nivel (como en Steam)
+	float fav_w = 0;
+	if (UP.pg.fav_icon[0]) {
+		const Pic *fp = img_get(UP.pg.fav_icon, 64);
+		float ix = TOP_W - 14 - 30;
+		if (fp) img_draw_cover(fp, ix, y + 30, 30, 30, 0.5f);
+		else ui_rrect(ix, y + 30, 30, 30, 6, col_alpha(COL_WHITE, 0.06f));
+		ui_text(ix - 6, y + 32, UP.pg.fav_name, SZ_TINY, COL_WHITE, AL_RIGHT, 120);
+		ui_text(ix - 6, y + 45, UP.pg.fav_xp, SZ_TINY, COL_DIM, AL_RIGHT, 120);
+		fav_w = 160;
+	}
 	user_status(st, sizeof st, &col);
-	if (st[0]) ui_text(100, y + 28, st, SZ_SMALL, col, AL_LEFT, TOP_W - 112);
+	if (st[0]) ui_text(100, y + 28, st, SZ_SMALL, col, AL_LEFT, TOP_W - 112 - fav_w);
 	// Nombre real y país, como bajo el nombre en Steam
 	t[0] = 0;
 	if (UP.p.realname[0] && UP.p.location[0]) snprintf(t, sizeof t, "%s · %s", UP.p.realname, UP.p.location);
 	else snprintf(t, sizeof t, "%s", UP.p.realname[0] ? UP.p.realname : UP.p.location);
-	if (t[0]) ui_text(100, y + 46, t, SZ_TINY, COL_DIM, AL_LEFT, TOP_W - 112);
+	if (t[0]) ui_text(100, y + 46, t, SZ_TINY, COL_DIM, AL_LEFT, TOP_W - 112 - fav_w);
 	if (UP.p.since) {
 		char d[40];
 		fmt_date(UP.p.since, d, sizeof d);
@@ -6809,6 +6901,7 @@ static void draw_user_top(void)
 		y += nl * 14 + 10;
 	}
 	if (!UP.p.is_private) y += draw_user_games(y);
+	if (!UP.p.is_private) y += draw_user_extras(y);
 	if (UP.p.is_private) {
 		ui_icon(IC_LOCK, TOP_W / 2 - 9, y + 4, 18, COL_DIM);
 		ui_text(TOP_W / 2, y + 28, _("Este perfil es privado"), SZ_BODY, COL_DIM, AL_CENTER, 0);
@@ -6942,6 +7035,51 @@ static void user_family_poll(void)
 		net_release(UP.fam_people);
 		UP.fam_people = NULL;
 	}
+}
+
+// Su página en la comunidad y, si los tiene y se ven, sus capturas y sus reseñas
+static void user_page_poll(void)
+{
+	if (UP.pg_req && UP.pg_req->state >= REQ_DONE) {
+		bool ok = UP.pg_req->state == REQ_DONE && steam_parse_profile_page(UP.pg_req->data, &UP.pg);
+		netlog("perfil %llu: página %s (nivel %d, %d insignias, %d capturas, %d reseñas, HTTP %ld)", (unsigned long long)UP.id,
+			ok ? "ok" : "mal", UP.pg.level, UP.pg.badges_total, UP.pg.shots_total, UP.pg.reviews_total, UP.pg_req->http);
+		net_release(UP.pg_req);
+		UP.pg_req = NULL;
+		if (ok && UP.level < 0 && UP.pg.level >= 0) UP.level = UP.pg.level;
+		if (ok && UP.pg.shots_total > 0) UP.shots_req = steam_req_profile_shots(UP.id);
+		if (ok && UP.pg.reviews_total > 0) UP.revs_req = steam_req_profile_reviews(UP.id);
+	}
+	if (UP.shots_req && UP.shots_req->state >= REQ_DONE) {
+		int n = UP.shots_req->state == REQ_DONE ? steam_parse_profile_shots(UP.shots_req->data, UP.shots, 6) : -1;
+		UP.nshots = n < 0 ? 0 : n;
+		netlog("perfil %llu: %d capturas", (unsigned long long)UP.id, n);
+		net_release(UP.shots_req);
+		UP.shots_req = NULL;
+	}
+	if (UP.revs_req && UP.revs_req->state >= REQ_DONE) {
+		int n = UP.revs_req->state == REQ_DONE ? steam_parse_profile_reviews(UP.revs_req->data, UP.revs, 3) : -1;
+		UP.nrevs = n < 0 ? 0 : n;
+		netlog("perfil %llu: %d reseñas", (unsigned long long)UP.id, n);
+		net_release(UP.revs_req);
+		UP.revs_req = NULL;
+		u32 ids[3];
+		for (int i = 0; i < UP.nrevs; i++) ids[i] = UP.revs[i].appid;
+		if (UP.nrevs && !UP.revapps.req) UP.revapps.req = steam_req_items(ids, UP.nrevs, false);
+	}
+	if (UP.revapps.req && UP.revapps.req->state >= REQ_DONE) {
+		Req *r = UP.revapps.req;
+		UP.revapps.req = NULL;
+		if (r->state == REQ_DONE && !steam_take_rows(r, &UP.revapps, false)) steam_parse_rows(r->data, &UP.revapps, false);
+		net_release(r);
+	}
+}
+
+static const char *user_rev_game(u32 appid)
+{
+	for (int i = 0; i < UP.revapps.count; i++)
+		if (UP.revapps.rows[i].appid == appid) return UP.revapps.rows[i].name;
+	return NULL;
 }
 
 static void user_comments_poll(void)
@@ -9875,6 +10013,7 @@ int main(int argc, char **argv)
 			DQ.req = NULL;
 		}
 		user_friend_poll();
+		user_page_poll();
 		user_comments_poll();
 		user_family_poll();
 		if (UP.want_comment) {

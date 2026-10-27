@@ -56,7 +56,7 @@ def fetch(method, url, data=None):
     # La comunidad da 429 a urllib desde la nube (a curl no): se repite con curl
     if status == 429 and method == "GET" and "steamcommunity.com/" in url:
         import subprocess
-        out = subprocess.run(["curl", "-s", "-w", "\n%{http_code}", url], capture_output=True, timeout=30).stdout
+        out = subprocess.run(["curl", "-s", "-L", "-w", "\n%{http_code}", url], capture_output=True, timeout=30).stdout
         body, _, code = out.rpartition(b"\n")
         status, headers = int(code or 0), [("Content-Type", "text/html; charset=UTF-8")]
     headers = [(k, v) for k, v in headers if k.lower() in ("content-type", "set-cookie")]

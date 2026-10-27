@@ -441,6 +441,30 @@ typedef struct {
 Req *steam_req_news(u32 appid);
 int steam_parse_news(const char *json, SteamNews *out, int max);   // -1 si falla
 
+// La página del perfil en la comunidad: el nivel, la insignia destacada, las insignias que se
+// ven en la columna de la derecha y cuántas capturas y reseñas tiene (lo que su privacidad deje ver)
+#define PROFILE_BADGES 6
+typedef struct {
+	bool ok;
+	int level;                       // -1 si no se ve
+	char fav_icon[160], fav_name[64], fav_xp[24];
+	int badges_total;
+	int nbadges;
+	char badge_icon[PROFILE_BADGES][160];
+	char badge_name[PROFILE_BADGES][64];
+	int shots_total, reviews_total;  // -1 si no se ven
+} ProfilePage;
+Req *steam_req_profile_page(u64 steamid);
+bool steam_parse_profile_page(const char *html, ProfilePage *out);
+
+// Sus capturas (las últimas) y sus reseñas, de sus páginas en la comunidad
+typedef struct { u64 id; u32 appid; char url[220]; char desc[96]; } ProfileShot;
+typedef struct { u32 appid; bool up; char hours[72]; char text[320]; char posted[48]; char capsule[200]; } ProfileReview;
+Req *steam_req_profile_shots(u64 steamid);
+int steam_parse_profile_shots(const char *html, ProfileShot *out, int max);       // -1 si no es la página
+Req *steam_req_profile_reviews(u64 steamid);
+int steam_parse_profile_reviews(const char *html, ProfileReview *out, int max);   // -1 si no es la página
+
 // Comentarios de un perfil (los de la comunidad) y escribir uno
 typedef struct {
 	char author[48];

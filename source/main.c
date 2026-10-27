@@ -751,6 +751,25 @@ static int lib_mode;
 #define LIB_HIDDEN_MODE 3
 static RowList lib_aside;
 
+// Lo que el cliente de Steam no enseña como juego aparte: los que van dentro de otro que tienes
+// (Black Ops 6 dentro de Call of Duty, REDSEC dentro de Battlefield 6) y los playtests que ya
+// terminaron. Se pregunta a la tienda por toda la biblioteca, de 50 en 50, al acabar de cargarla
+static struct {
+	Req *req;
+	u32 *ids;
+	int nids, next;
+	u32 *drop;
+	int ndrop, capdrop;
+	bool started;
+} MRG;
+
+static bool lib_merged(u32 appid)
+{
+	for (int i = 0; i < MRG.ndrop; i++)
+		if (MRG.drop[i] == appid) return true;
+	return false;
+}
+
 static void aside_add(const StoreRow *r)
 {
 	for (int i = 0; i < lib_aside.count; i++)
@@ -762,10 +781,11 @@ static void aside_add(const StoreRow *r)
 static void lib_drop_hidden(Tab *t)
 {
 	bool show_hidden = lib_mode == LIB_HIDDEN_MODE;
-	if (!HID.n && !show_hidden) return;
+	if (!HID.n && !show_hidden && !MRG.ndrop) return;
 	int n = 0, base = t->lib_base;
 	for (int i = 0; i < t->list.count; i++) {
-		if (lib_hidden(t->list.rows[i].appid) != show_hidden) {
+		u32 id = t->list.rows[i].appid;
+		if (lib_merged(id) || lib_hidden(id) != show_hidden) {
 			if (i < t->lib_base) base--;
 			aside_add(&t->list.rows[i]);
 			continue;
@@ -794,6 +814,69 @@ static void lib_regroup(Tab *t)
 	}
 	lib_aside.count = 0;
 	lib_drop_hidden(t);
+}
+
+// ¿Lo tienes? (en la lista o apartado, y no prestado por tu familia)
+static const StoreRow *lib_find(Tab *t, u32 appid)
+{
+	for (int i = 0; i < t->list.count; i++)
+		if (t->list.rows[i].appid == appid && !t->list.rows[i].family) return &t->list.rows[i];
+	for (int i = 0; i < lib_aside.count; i++)
+		if (lib_aside.rows[i].appid == appid && !lib_aside.rows[i].family) return &lib_aside.rows[i];
+	return NULL;
+}
+
+static bool name_has_playtest(const char *s)
+{
+	for (; s && *s; s++)
+		if (!strncasecmp(s, "playtest", 8)) return true;
+	return false;
+}
+
+static void merge_poll(Tab *t)
+{
+	if (MRG.req && MRG.req->state >= REQ_DONE) {
+		ItemMeta m[50];
+		int n = MRG.req->state == REQ_DONE ? steam_parse_items_meta(MRG.req->data, m, 50) : -1;
+		net_release(MRG.req);
+		MRG.req = NULL;
+		int dropped = 0;
+		for (int i = 0; i < n; i++) {
+			const StoreRow *row = lib_find(t, m[i].appid);
+			bool alive = m[i].success == 1 && m[i].visible;
+			bool playtest = m[i].type == 12 || (row && name_has_playtest(row->name));
+			bool child = m[i].parent && m[i].parent != m[i].appid && m[i].type != 12 && lib_find(t, m[i].parent);
+			if (!((playtest && !alive) || child) || lib_merged(m[i].appid)) continue;
+			if (MRG.ndrop == MRG.capdrop) {
+				int cap = MRG.capdrop ? MRG.capdrop * 2 : 32;
+				u32 *nd = realloc(MRG.drop, cap * sizeof(u32));
+				if (!nd) break;
+				MRG.drop = nd;
+				MRG.capdrop = cap;
+			}
+			MRG.drop[MRG.ndrop++] = m[i].appid;
+			dropped++;
+		}
+		if (n >= 0) netlog("biblioteca: %d de %d agrupados o playtests terminados", dropped, n);
+		if (dropped) lib_drop_hidden(t);
+	}
+	// Al acabar de cargar la biblioteca, se pregunta por todos sus juegos
+	if (!MRG.started && t->started && !t->list.req && t->list.end && t->list.count) {
+		MRG.started = true;
+		free(MRG.ids);
+		MRG.nids = MRG.next = 0;
+		MRG.ids = malloc((t->list.count + lib_aside.count) * sizeof(u32));
+		for (int i = 0; MRG.ids && i < t->list.count; i++)
+			if (!t->list.rows[i].family) MRG.ids[MRG.nids++] = t->list.rows[i].appid;
+		for (int i = 0; MRG.ids && i < lib_aside.count; i++)
+			if (!lib_aside.rows[i].family) MRG.ids[MRG.nids++] = lib_aside.rows[i].appid;
+	}
+	if (MRG.started && !MRG.req && MRG.ids && MRG.next < MRG.nids) {
+		int k = MRG.nids - MRG.next;
+		if (k > 50) k = 50;
+		MRG.req = steam_req_items_meta(MRG.ids + MRG.next, k);
+		MRG.next += k;
+	}
 }
 
 static void lib_sort(Tab *t)
@@ -878,6 +961,7 @@ static bool lib_type_ok(int type)
 static void owned_poll(Tab *t)
 {
 	hidden_poll();
+	merge_poll(t);
 	// Con otra cuenta (o si no se pudo lanzar), se vuelve a pedir
 	static u64 next_ask;
 	if (!HID.asked && t->started && auth_logged() && osGetTime() >= next_ask) {
@@ -1164,6 +1248,10 @@ static void account_lists_clear(void)
 	free(HID.ids);
 	memset(&HID, 0, sizeof HID);   // si hay una consulta en marcha, su resultado se descarta al llegar
 	lib_aside.count = 0;
+	if (MRG.req) net_release(MRG.req);
+	free(MRG.ids);
+	free(MRG.drop);
+	memset(&MRG, 0, sizeof MRG);
 	wish_stash.count = 0;
 	deals_checked = false;
 	for (int ti = TAB_LIBRARY; ti < TAB_H0; ti++) {
@@ -1244,6 +1332,10 @@ static void library_changed(void)
 	t->lib_stage = t->lib_base = 0;
 	t->started = false;
 	t->sel = 0;
+	lib_aside.count = 0;
+	if (MRG.req) net_release(MRG.req);
+	MRG.req = NULL;
+	MRG.started = false;   // la biblioteca nueva se vuelve a mirar (lo ya agrupado se queda)
 }
 
 // Buscar: las recientes se guardan en la SD, la última primero

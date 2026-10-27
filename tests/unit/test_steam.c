@@ -328,6 +328,14 @@ int main(void) {
 			pg.fav_icon, pg.badges_total, pg.nbadges, pg.badge_name[0], pg.shots_total, pg.reviews_total);
 		CHECK(!strcmp(pg.fav_name, "Empleado de Valve") && pg.badges_total == 17 && pg.nbadges >= 4 && strstr(pg.badge_icon[0], "akamai"));
 	}
+	// Juegos dentro de otro, playtests y retirados
+	{
+		ItemMeta im[4];
+		int nm = steam_parse_items_meta("{\"response\":{\"store_items\":[{\"appid\":2933620,\"id\":2933620,\"type\":14,\"success\":1,\"visible\":true,"
+			"\"related_items\":{\"parent_appid\":1938090}},{\"appid\":0,\"id\":2389730,\"success\":15,\"visible\":false},"
+			"{\"appid\":2528700,\"id\":2528700,\"type\":12,\"success\":1,\"visible\":true,\"related_items\":{\"parent_appid\":2518930}}]}}", im, 4);
+		CHECK(nm == 3 && im[0].parent == 1938090 && im[1].appid == 2389730 && im[1].success == 15 && !im[1].visible && im[2].type == 12);
+	}
 	// Sus capturas y sus reseñas
 	{
 		ProfileShot ps[6];

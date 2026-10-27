@@ -395,6 +395,60 @@ Req *steam_req_items(const u32 *ids, int n, bool assets)
 	return service_rows("IStoreBrowseService/GetItems", in);
 }
 
+Req *steam_req_items_meta(const u32 *ids, int n)
+{
+	cJSON *in = cJSON_CreateObject();
+	cJSON *arr = cJSON_AddArrayToObject(in, "ids");
+	for (int i = 0; i < n; i++) {
+		cJSON *o = cJSON_CreateObject();
+		cJSON_AddNumberToObject(o, "appid", ids[i]);
+		cJSON_AddItemToArray(arr, o);
+	}
+	cJSON_AddItemToObject(in, "context", context());
+	cJSON *dr = cJSON_AddObjectToObject(in, "data_request");
+	cJSON_AddBoolToObject(dr, "include_related_items", true);
+	char *js = cJSON_PrintUnformatted(in);
+	char *esc = url_escape(js);
+	size_t un = strlen(esc) + 96;
+	char *url = malloc(un);
+	snprintf(url, un, "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=%s", esc);
+	Req *r = net_get(url, LANE_API);
+	free(url);
+	free(esc);
+	free(js);
+	cJSON_Delete(in);
+	return r;
+}
+
+// Los que ya no están en la tienda llegan con success 15 y sin appid (solo «id»)
+int steam_parse_items_meta(const char *json, ItemMeta *out, int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *it;
+	cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(resp, "store_items")) {
+		if (n >= max) break;
+		ItemMeta *m = &out[n];
+		memset(m, 0, sizeof *m);
+		m->appid = (u32)jnum(it, "id", 0);
+		if (!m->appid) m->appid = (u32)jnum(it, "appid", 0);
+		if (!m->appid) continue;
+		m->success = (int)jnum(it, "success", 0);
+		m->visible = jbool(it, "visible");
+		m->type = (int)jnum(it, "type", -1);
+		const cJSON *rel = cJSON_GetObjectItemCaseSensitive(it, "related_items");
+		m->parent = rel ? (u32)jnum(rel, "parent_appid", 0) : 0;
+		n++;
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
 void steam_icon_url(const StoreRow *r, char *out, size_t n)
 {
 	if (r->icon[0]) snprintf(out, n, "https://shared.akamai.steamstatic.com/community_assets/images/apps/%lu/%s.jpg", (unsigned long)r->appid, r->icon);

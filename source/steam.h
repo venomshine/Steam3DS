@@ -143,7 +143,12 @@ bool steam_take_rows(Req *r, RowList *list, bool append);
 Req *steam_req_appdetails(u32 appid);   // se lee en el hilo de red: recógela con steam_take_appdetails
 bool steam_take_appdetails(Req *r, AppInfo *out);
 bool steam_parse_appdetails(const char *json, u32 appid, AppInfo *out);
-Req *steam_req_items(const u32 *ids, int n, bool assets);   // assets: también el icono
+Req *steam_req_items(const u32 *ids, int n, bool assets);
+// Lo que hace falta para ordenar la biblioteca como el cliente de Steam: de qué juego cuelga (los que
+// van dentro de otro, como Black Ops 6 en Call of Duty), el tipo (12: playtest) y si sigue en la tienda
+typedef struct { u32 appid; int success; bool visible; int type; u32 parent; } ItemMeta;
+Req *steam_req_items_meta(const u32 *ids, int n);
+int steam_parse_items_meta(const char *json, ItemMeta *out, int max);   // -1 si falla   // assets: también el icono
 // URL del icono de 32×32 de una fila (vacía si Steam no lo da)
 void steam_icon_url(const StoreRow *r, char *out, size_t n);      // nombres, precios y reseñas de varios a la vez
 bool steam_parse_review_summary(const char *json, AppInfo *a);

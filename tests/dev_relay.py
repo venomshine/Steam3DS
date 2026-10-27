@@ -98,7 +98,9 @@ if os.environ.get("RELAY_KENJI"):
 NAMES = {FAKE_ID: "VENOMSHiNE (prueba)", 76561190000000101: "Kenji", 76561190000000102: "Lucía", 76561190000000103: "Marco", 76561190000000109: "Sofía"}
 OWNED = [(1091500, "Cyberpunk 2077", 6120, 3), (381210, "Dead by Daylight", 2410, 1), (1145360, "Hades", 3900, 20),
          (292030, "The Witcher 3: Wild Hunt", 9300, 60), (413150, "Stardew Valley", 5200, 9), (730, "Counter-Strike 2", 12000, 2),
-         (570, "Dota 2", 0, 400), (1203620, "Enshrouded", 1500, 12), (251570, "7 Days to Die", 800, 30), (33440, "Driver: San Francisco", 1260, 90)]
+         (570, "Dota 2", 0, 400), (1203620, "Enshrouded", 1500, 12), (251570, "7 Days to Die", 800, 30), (33440, "Driver: San Francisco", 1260, 90),
+         (1938090, "Call of Duty®", 3000, 4), (2933620, "Call of Duty®: Black Ops 6", 0, 0), (2807960, "Battlefield™ 6", 900, 6),
+         (3028330, "Battlefield™ REDSEC", 120, 6), (2389730, "ARC Raiders Playtest", 180, 200)]
 WISH = [2138330, 1174180, 1716740, 668580]
 if os.environ.get("RELAY_WISH"):   # RELAY_WISH=id,id,…: otra lista de deseos (p. ej. con juegos en oferta)
     WISH = [int(x) for x in os.environ["RELAY_WISH"].split(",")]

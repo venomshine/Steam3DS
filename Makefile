@@ -36,6 +36,12 @@ CFLAGS  := -g -Wall -O2 -mword-relocations \
            $(ARCH)
 
 CFLAGS  += $(INCLUDE) -D__3DS__
+# La clave con la que se firma el registro de aceptación de las condiciones: está en
+# secret/terms.key (fuera del repositorio); sin ella se firma con una de pruebas
+TERMS_KEY ?= $(shell cat $(TOPDIR)/secret/terms.key 2>/dev/null)
+ifneq ($(strip $(TERMS_KEY)),)
+CFLAGS  += -DTERMS_KEY=\"$(strip $(TERMS_KEY))\"
+endif
 ifeq ($(DEV),1)
 CFLAGS  += -DDEV_RELAY
 endif

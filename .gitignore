@@ -8,3 +8,4 @@ tests/unit/test_steam
 tests/out/
 __pycache__/
 romfs/gfx/
+secret/

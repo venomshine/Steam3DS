@@ -9,6 +9,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <mbedtls/sha256.h>
+#include <mbedtls/md.h>
 
 #include "app.h"
 #include "fx.h"
@@ -9224,17 +9225,106 @@ static const Box B_TCHECK = {14, 116, BOT_W - 28, 40};
 static const Box B_TEXIT = {14, 176, 112, 34};
 static const Box B_TACCEPT = {134, 176, BOT_W - 148, 34};
 
+#ifndef TERMS_KEY
+#define TERMS_KEY "steam3ds-pruebas"   // las compilaciones oficiales llevan la suya (secret/terms.key)
+#endif
+
+// La consola: una huella de su identificador único (no el identificador), para que un registro
+// copiado de otra no valga
+static const char *terms_console(void)
+{
+	static char out[17];
+	if (out[0]) return out;
+	u64 id = 0;
+	if (R_SUCCEEDED(cfguInit())) {
+		CFGU_GetConfigInfoBlk2(sizeof id, 0x00090001, &id);
+		cfguExit();
+	}
+	unsigned char d[32];
+	mbedtls_sha256((const unsigned char *)&id, sizeof id, d, 0);
+	for (int i = 0; i < 8; i++) sprintf(out + i * 2, "%02x", d[i]);
+	return out;
+}
+
+// La firma del registro: HMAC-SHA256 con la clave de la compilación y la consola
+static void terms_sign(const char *txt, size_t n, char hex[65])
+{
+	char key[160];
+	snprintf(key, sizeof key, "%s|%s", TERMS_KEY, terms_console());
+	unsigned char mac[32];
+	mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), (const unsigned char *)key, strlen(key),
+		(const unsigned char *)txt, n, mac);
+	memset(key, 0, sizeof key);
+	for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", mac[i]);
+}
+
+#define TERMS_SIG "Firma: "
+
+// El registro entero (o NULL); *body: cuánto ocupa lo firmado (todo menos la última línea)
+static char *terms_read(size_t *body)
+{
+	FILE *f = fopen(TERMS_FILE, "rb");
+	if (!f) return NULL;
+	fseek(f, 0, SEEK_END);
+	long n = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	char *b = n > 0 && n < 256 * 1024 ? malloc(n + 1) : NULL;
+	if (b && fread(b, 1, n, f) != (size_t)n) {
+		free(b);
+		b = NULL;
+	}
+	fclose(f);
+	if (!b) return NULL;
+	b[n] = 0;
+	char *sig = NULL;
+	for (char *p = strstr(b, "\n" TERMS_SIG); p; p = strstr(p + 1, "\n" TERMS_SIG)) sig = p + 1;
+	*body = sig ? (size_t)(sig - b) : 0;
+	return b;
+}
+
+// Firmado, de esta consola y de esta versión de las condiciones
+static bool terms_valid(const char *b, size_t body)
+{
+	if (!body) return false;
+	char hex[65];
+	terms_sign(b, body, hex);
+	if (strncmp(b + body + strlen(TERMS_SIG), hex, 64)) return false;
+	char want[48];
+	snprintf(want, sizeof want, "\nVersión de las condiciones: %d\n", TERMS_VERSION);
+	return strstr(b, want) != NULL;
+}
+
+static bool terms_write(const char *txt, size_t n)
+{
+	char hex[65];
+	terms_sign(txt, n, hex);
+	// Primero a un archivo aparte y después se cambia (si se corta, no se pierde el que había)
+	FILE *f = fopen(TERMS_FILE ".tmp", "wb");
+	if (!f) return false;
+	bool ok = fwrite(txt, 1, n, f) == n && fprintf(f, TERMS_SIG "%s\n", hex) > 0;
+	ok = fclose(f) == 0 && ok;
+	if (ok) {
+		remove(TERMS_FILE);
+		ok = rename(TERMS_FILE ".tmp", TERMS_FILE) == 0;
+	}
+	if (ok) netlog("condiciones: registro firmado %.16s…", hex);
+	return ok;
+}
+
 static bool terms_ok(void)
 {
 	if (TM.ok < 0) {
 		TM.ok = 0;
-		FILE *f = fopen(TERMS_FILE, "r");
-		if (f) {
-			char line[160];
-			while (fgets(line, sizeof line, f))
-				if (!strncmp(line, "Versión de las condiciones: ", 29) && atoi(line + 29) == TERMS_VERSION) TM.ok = 1;
-			fclose(f);
+		size_t body = 0;
+		char *b = terms_read(&body);
+		if (b) {
+			TM.ok = terms_valid(b, body);
+			static const char fk[] = "Fecha y hora (reloj de la consola): ";
+			const char *w = strstr(b, fk);
+			if (TM.ok) netlog("condiciones: aceptadas el %.19s (registro válido)", w ? w + sizeof fk - 1 : "?");
+			else netlog("condiciones: el registro no es válido (cambiado, de otra consola o de otra versión): se vuelven a pedir");
 		}
+		free(b);
 	}
 	return TM.ok == 1;
 }
@@ -9260,16 +9350,14 @@ static float terms_max(void)
 	return m > 0 ? m : 0;
 }
 
-// El registro: versión, fecha, huella SHA-256 del texto aceptado (tal como se vio) y una copia
+// El registro: versión, fecha, consola, huella SHA-256 del texto aceptado (tal como se vio), una
+// copia, y al final la firma de todo
 static bool terms_save(void)
 {
 	mkdir(APP_DIR, 0777);
-	FILE *f = fopen(TERMS_FILE, "w");
-	if (!f) return false;
 	time_t now = time(NULL);
-	struct tm *tmv = gmtime(&now);   // el reloj de la consola ya es la hora local
 	char when[32];
-	strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", tmv);
+	strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", gmtime(&now));   // el reloj de la consola ya es la hora local
 	mbedtls_sha256_context sc;
 	unsigned char dig[32];
 	mbedtls_sha256_init(&sc);
@@ -9284,23 +9372,31 @@ static bool terms_save(void)
 	mbedtls_sha256_free(&sc);
 	char hex[65];
 	for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", dig[i]);
-	fprintf(f, "Steam3DS: registro de aceptación de las condiciones de uso y el aviso legal\n\n");
-	fprintf(f, "Versión de las condiciones: %d\n", TERMS_VERSION);
-	fprintf(f, "Versión de la aplicación: %s\n", APP_VERSION);
-	fprintf(f, "Fecha y hora (reloj de la consola): %s\n", when);
 	static const char *const lname[LANG_COUNT] = {"español", "English", "日本語"};
-	fprintf(f, "Idioma en que se leyeron: %s\n", lname[i18n_get() < LANG_COUNT ? i18n_get() : 0]);
-	fprintf(f, "Huella del texto aceptado (SHA-256): %s\n", hex);
-	fprintf(f, "Leídas hasta el final: sí\nCasilla «%s» marcada: sí\n\n", _("He leído y acepto las condiciones de uso y el aviso legal"));
-	fprintf(f, "Texto aceptado:\n\n%s\n\n", _("Condiciones de uso y aviso legal"));
-	for (int i = 0; i < NTERMS; i++) fprintf(f, "%s\n%s\n\n", _(terms_txt[i][0]), _(terms_txt[i][1]));
-	fprintf(f, "Cuentas de Steam con las que se ha iniciado sesión después de aceptar:\n");
-	bool ok = !ferror(f);
-	fclose(f);
+	size_t cap = 24 * 1024, n = 0;
+	char *t = malloc(cap);
+	if (!t) return false;
+#define ADD(...) (n += snprintf(t + n, n < cap ? cap - n : 0, __VA_ARGS__))
+	ADD("Steam3DS: registro de aceptación de las condiciones de uso y el aviso legal\n");
+	ADD("No lo modifiques: está firmado y, si cambia, Steam3DS vuelve a pedir las condiciones.\n\n");
+	ADD("Versión de las condiciones: %d\n", TERMS_VERSION);
+	ADD("Versión de la aplicación: %s\n", APP_VERSION);
+	ADD("Fecha y hora (reloj de la consola): %s\n", when);
+	ADD("Consola: %s\n", terms_console());
+	ADD("Idioma en que se leyeron: %s\n", lname[i18n_get() < LANG_COUNT ? i18n_get() : 0]);
+	ADD("Huella del texto aceptado (SHA-256): %s\n", hex);
+	ADD("Leídas hasta el final: sí\nCasilla «%s» marcada: sí\n\n", _("He leído y acepto las condiciones de uso y el aviso legal"));
+	ADD("Texto aceptado:\n\n%s\n\n", _("Condiciones de uso y aviso legal"));
+	for (int i = 0; i < NTERMS; i++) ADD("%s\n%s\n\n", _(terms_txt[i][0]), _(terms_txt[i][1]));
+	ADD("Cuentas de Steam con las que se ha iniciado sesión después de aceptar:\n");
+#undef ADD
+	bool ok = n < cap && terms_write(t, n);
+	if (ok) netlog("condiciones: aceptadas (versión %d, texto %.16s…, consola %s)", TERMS_VERSION, hex, terms_console());
+	free(t);
 	return ok;
 }
 
-// Cada cuenta con la que se entra después de aceptar se apunta una vez en el registro
+// Cada cuenta con la que se entra después de aceptar se apunta una vez (y se vuelve a firmar)
 static void terms_note_account(void)
 {
 	static u64 noted;
@@ -9308,20 +9404,24 @@ static void terms_note_account(void)
 	noted = auth_info()->steamid;
 	char id[24];
 	snprintf(id, sizeof id, "%llu", (unsigned long long)noted);
-	FILE *f = fopen(TERMS_FILE, "r");
-	if (!f) return;
-	char line[200];
-	bool seen = false;
-	while (!seen && fgets(line, sizeof line, f)) seen = strstr(line, id) != NULL;
-	fclose(f);
-	if (seen) return;
-	f = fopen(TERMS_FILE, "a");
-	if (!f) return;
+	size_t body = 0;
+	char *b = terms_read(&body);
+	if (!b || !terms_valid(b, body) || strstr(b, id)) {
+		free(b);
+		return;
+	}
 	time_t now = time(NULL);
-	char when[32];
+	char when[32], line[160];
 	strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", gmtime(&now));
-	fprintf(f, "- %s (%s), desde el %s\n", id, auth_info()->account[0] ? auth_info()->account : auth_info()->persona, when);
-	fclose(f);
+	int ln = snprintf(line, sizeof line, "- %s (%s), desde el %s\n", id, auth_info()->account[0] ? auth_info()->account : auth_info()->persona, when);
+	char *t = malloc(body + ln + 1);
+	if (t) {
+		memcpy(t, b, body);
+		memcpy(t + body, line, ln);
+		if (terms_write(t, body + ln)) netlog("condiciones: cuenta %s apuntada en el registro", id);
+		free(t);
+	}
+	free(b);
 }
 
 static void terms_open(Scene next)
@@ -9340,7 +9440,6 @@ static void terms_accept(void)
 		return;
 	}
 	TM.ok = 1;
-	netlog("condiciones: aceptadas (versión %d)", TERMS_VERSION);
 	go_scene(TM.next, 1);
 }
 

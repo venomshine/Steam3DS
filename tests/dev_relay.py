@@ -595,6 +595,25 @@ class Relay(BaseHTTPRequestHandler):
             self.end_headers()
             sys.stderr.write("405 %s %s (solo %s)\n" % (method, path, only))
             return
+        # RELAY_TALL_DIR: las dos ilustraciones destacadas de Kenji pasan a ser imágenes muy altas (tall.jpg y tall.gif)
+        tall = os.environ.get("RELAY_TALL_DIR")
+        if FAKE and tall and ((host == "steamcommunity.com" and path == "sharedfiles/filedetails/" and q.get("id") in ("2418659017", "2589121413"))
+                              or (host == "images.steamusercontent.com" and path.startswith("ugc/TALL"))):
+            if host == "steamcommunity.com":
+                kind = "TALLGIF" if q.get("id") == "2418659017" else "TALLJPG"
+                body = ('<meta property="og:image" content="https://images.steamusercontent.com/ugc/%s/X/?imw=512&amp;ima=fit">' % kind).encode()
+                ct = "text/html; charset=UTF-8"
+            else:
+                gif = path.startswith("ugc/TALLGIF")
+                body = open(os.path.join(tall, "tall.gif" if gif else "tall.jpg"), "rb").read()
+                ct = "image/gif" if gif else "image/jpeg"
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            sys.stderr.write("FAKE TALL %s\n" % path)
+            return
         if FAKE and host == "steamcommunity.com" and path == "profiles/%d/edit/settings" % FAKE_ID:
             ck = cookies_of(self.headers)
             ok = ck.get("steamLoginSecure", "").startswith(str(FAKE_ID))

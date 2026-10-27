@@ -1994,7 +1994,7 @@ static void ugc_sized(const char *src, char *out, size_t n)
 	else snprintf(base, sizeof base, "%s", src);
 	char *q = strchr(base, '?');
 	if (q) *q = 0;
-	if (strstr(base, "steamusercontent.com")) snprintf(out, n, "%s?imw=400&imh=400&ima=fit&impolicy=Letterbox&letterbox=false", base);
+	if (strstr(base, "steamusercontent.com")) snprintf(out, n, "%s?imw=400&imh=1000&ima=fit&impolicy=Letterbox&letterbox=false", base);
 	else snprintf(out, n, "%s", base);
 }
 

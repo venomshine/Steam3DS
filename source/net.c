@@ -548,6 +548,7 @@ static bool tile_rgba(Req *r, u8 *src, int sw0, int sh0)
 {
 	int f = 1;
 	while (r->jpeg_max_w > 0 && sw0 / (f * 2) >= r->jpeg_max_w) f *= 2;
+	while (sh0 / f > 1024 || sw0 / f > 1024) f *= 2;   // y que quepa en la textura (1024 como mucho)
 	int w = sw0 / f, h = sh0 / f;
 	int tw = 8, th = 8;
 	while (tw < w) tw <<= 1;
@@ -792,6 +793,11 @@ static bool decode_jpeg(Req *r)
 	if ((int)ci.image_width > r->jpeg_max_w && r->jpeg_max_w > 0) {
 		int n = (8 * r->jpeg_max_w + ci.image_width - 1) / ci.image_width;
 		ci.scale_num = n < 1 ? 1 : n > 8 ? 8 : n;
+	}
+	// Una imagen muy alta (una ilustración larga hacia abajo) se reduce también hasta caber en la textura
+	if (ci.image_height * ci.scale_num > 8 * 1024) {
+		int n = 8 * 1024 / ci.image_height;
+		ci.scale_num = n < 1 ? 1 : n;
 	}
 	jpeg_start_decompress(&ci);
 	int w = ci.output_width, h = ci.output_height;

@@ -5115,14 +5115,25 @@ static float draw_showcase(const Showcase *s, float y, bool draw)
 		}
 		return h;
 	}
-	// Capturas e ilustraciones: la primera grande y las demás en miniatura
-	const float big_h = 170, th = 52;
+	// Capturas e ilustraciones: la primera grande y las demás en miniatura. El recuadro de la grande
+	// toma la forma de la imagen (una ilustración larga hacia abajo sale alta, no encogida)
+	const float th = 52, maxw = w - 20;
+	float big_w = maxw, big_h = 170;
+	const char *u0 = user_file_url(s->file[0]);
+	const Pic *p0 = u0 && u0[0] != '-' ? img_get(u0, 400) : NULL;
+	if (p0 && p0->w > 0 && p0->h > 0) {
+		big_h = maxw * p0->h / p0->w;
+		if (big_h > 520) big_h = 520;   // muy alta: se ve entera, más estrecha
+		if (big_h < 90) big_h = 90;
+		big_w = big_h * p0->w / p0->h;
+		if (big_w > maxw) big_w = maxw;
+	}
 	int rest = s->n - 1;
 	h = 22 + big_h + (rest > 0 ? 6 + th : 0) + 10;
 	if (draw) {
 		fx_glass(x, y, w, h, 10, 1, 0);
 		ui_text(x + 10, y + 6, show_title(s->type), SZ_TINY, COL_ACC, AL_LEFT, 0);
-		draw_img_slot(user_file_url(s->file[0]), x + 10, y + 22, w - 20, big_h, false);
+		draw_img_slot(u0, x + 10 + (maxw - big_w) / 2, y + 22, big_w, big_h, false);
 		float tw = (w - 20 - 6 * 2) / 3;
 		for (int i = 0; i < rest && i < 3; i++)
 			draw_img_slot(user_file_url(s->file[i + 1]), x + 10 + i * (tw + 6), y + 22 + big_h + 6, tw, th, true);

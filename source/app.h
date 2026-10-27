@@ -1,7 +1,7 @@
 #pragma once
 
 #define APP_NAME        "Steam3DS"
-#define APP_VERSION     "0.1.0"
+#define APP_VERSION     "1.0.0"
 #define APP_DIR         "sdmc:/3ds/Steam3DS"
 #define APP_USER_AGENT  "Steam3DS/" APP_VERSION " (Nintendo 3DS)"
 

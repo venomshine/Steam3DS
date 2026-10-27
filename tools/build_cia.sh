@@ -4,8 +4,8 @@
 set -e
 cd "$(dirname "$0")/.."
 
-VER_MAJOR=0
-VER_MINOR=1
+VER_MAJOR=1
+VER_MINOR=0
 VER_MICRO=0
 VER=$(( (VER_MAJOR << 10) | (VER_MINOR << 4) | VER_MICRO ))
 

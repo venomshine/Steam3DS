@@ -3051,3 +3051,35 @@ Req *steam_req_award(int target_type, u64 targetid, u32 reactionid, const char *
 	cJSON_AddNumberToObject(in, "reactionid", reactionid);
 	return steam_post_service("ILoyaltyRewardsService/AddReaction", in, token);
 }
+
+Req *steam_req_family(u64 gid, const char *token)
+{
+	cJSON *in = cJSON_CreateObject();
+	char t[24];
+	snprintf(t, sizeof t, "%llu", (unsigned long long)gid);
+	cJSON_AddStringToObject(in, "family_groupid", t);
+	return steam_get_service("IFamilyGroupsService/GetFamilyGroup", in, token);
+}
+
+bool steam_parse_family(const char *json, SteamFamily *out)
+{
+	memset(out, 0, sizeof *out);
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return false;
+	}
+	copy_utf8(out->name, sizeof out->name, jstr(resp, "name"));
+	const cJSON *m;
+	cJSON_ArrayForEach(m, cJSON_GetObjectItemCaseSensitive(resp, "members")) {
+		if (out->n >= 8) break;
+		u64 id = jid(m, "steamid");
+		if (!id) continue;
+		out->member[out->n] = id;
+		out->role[out->n] = (int)jnum(m, "role", 1);
+		out->n++;
+	}
+	cJSON_Delete(root);
+	return out->n > 0;
+}

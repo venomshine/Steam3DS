@@ -492,3 +492,8 @@ typedef struct { u32 id; int cost; char title[40]; } SteamAward;
 Req *steam_req_award_config(void);
 int steam_parse_award_config(const char *json, SteamAward *out, int max);   // -1 si falla
 Req *steam_req_award(int target_type, u64 targetid, u32 reactionid, const char *token);
+
+// Tu Familia de Steam: su nombre y quién está (role 1 adulto, 2 menor)
+typedef struct { char name[64]; u64 member[8]; int role[8]; int n; } SteamFamily;
+Req *steam_req_family(u64 gid, const char *token);
+bool steam_parse_family(const char *json, SteamFamily *out);

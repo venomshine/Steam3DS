@@ -5929,6 +5929,12 @@ static struct {
 	u64 page_at;                 // no antes de esta hora (la comunidad limita las peticiones seguidas)
 	Req *fhead[UP_FILES];        // la cabecera de cada imagen: si es un GIF se pide el original
 	Req *fr_req;                 // aceptar, ignorar o mandar una solicitud de amistad
+	// Tu Familia de Steam (solo en tu perfil)
+	SteamFamily fam;
+	SteamPerson famp[8];
+	int nfamp;
+	Req *fam_req, *fam_people;
+	bool fam_done;
 	ProfileComment com[6];       // sus comentarios (los últimos)
 	int ncom, com_total;
 	bool com_done, want_comment;
@@ -5973,7 +5979,7 @@ static void known_add(u64 id, const char *url)
 static void user_reset(void)
 {
 	Req **all[] = {&UP.items, &UP.shows, &UP.xml, &UP.lvreq, &UP.files, &UP.page, &UP.ach_req[0], &UP.ach_req[1], &UP.ach_req[2],
-		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2], &UP.fr_req, &UP.com_req, &UP.com_post};
+		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2], &UP.fr_req, &UP.com_req, &UP.com_post, &UP.fam_req, &UP.fam_people};
 	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
 		if (*all[i]) net_release(*all[i]);
 	for (int i = 0; i < UP_FILES; i++)
@@ -6562,6 +6568,28 @@ static void draw_user_top(void)
 		if (y < SCR_H && y + h > 18) draw_showcase(s, y, true);
 		y += h + 8;
 	}
+	// Tu Familia de Steam
+	if (user_is_me() && UP.fam.n) {
+		float fh = 24 + UP.fam.n * 30 + 4;
+		if (y < SCR_H && y + fh > 18) {
+			fx_glass(12, y, TOP_W - 24, fh, 10, 1, 0);
+			snprintf(t, sizeof t, _("FAMILIA DE STEAM · %s"), UP.fam.name);
+			ui_text(22, y + 6, t, SZ_TINY, COL_ACC, AL_LEFT, TOP_W - 44);
+			for (int i = 0; i < UP.fam.n; i++) {
+				float my = y + 24 + i * 30;
+				const SteamPerson *pp = NULL;
+				for (int k = 0; k < UP.nfamp; k++)
+					if (UP.famp[k].id == UP.fam.member[i]) pp = &UP.famp[k];
+				char av[160];
+				const Pic *ap = pp && auth_avatar_url(pp->avatar_sha, av, sizeof av) ? img_get(av, 32) : NULL;
+				if (ap) img_draw_cover(ap, 22, my, 24, 24, 0.5f);
+				else ui_rect(22, my, 24, 24, col_alpha(COL_WHITE, 0.06f));
+				ui_text(54, my + 4, pp ? pp->name : "…", SZ_SMALL, COL_WHITE, AL_LEFT, TOP_W - 170);
+				ui_text(TOP_W - 22, my + 5, UP.fam.role[i] == 2 ? _("Menor") : _("Adulto"), SZ_TINY, COL_DIM, AL_RIGHT, 0);
+			}
+		}
+		y += fh + 8;
+	}
 	// Sus grupos
 	if (UP.p.ngroups && !UP.p.is_private) {
 		float gh = 24 + UP.p.ngroups * 34 + 4;
@@ -6640,6 +6668,28 @@ static int user_relation(void)
 	for (int i = 0; i < FL.np; i++)
 		if (FL.p[i].id == UP.id) return FL.p[i].request ? 2 : 3;
 	return FL.loaded ? 0 : -1;
+}
+
+static void user_family_poll(void)
+{
+	// En tu perfil, cuando ya se sabe tu familia (llega con la biblioteca)
+	if (user_is_me() && FAM.gid && !UP.fam_req && !UP.fam_done) UP.fam_req = steam_req_family(FAM.gid, auth_token());
+	if (UP.fam_req && UP.fam_req->state >= REQ_DONE) {
+		bool ok = UP.fam_req->state == REQ_DONE && steam_parse_family(UP.fam_req->data, &UP.fam);
+		netlog("familia: %s, %d miembros", ok ? UP.fam.name : "no", UP.fam.n);
+		net_release(UP.fam_req);
+		UP.fam_req = NULL;
+		UP.fam_done = true;
+		if (ok) UP.fam_people = steam_req_people(UP.fam.member, UP.fam.n, auth_token());
+	}
+	if (UP.fam_people && UP.fam_people->state >= REQ_DONE) {
+		if (UP.fam_people->state == REQ_DONE) {
+			int n = steam_parse_people(UP.fam_people->data, UP.famp, 8);
+			UP.nfamp = n < 0 ? 0 : n;
+		}
+		net_release(UP.fam_people);
+		UP.fam_people = NULL;
+	}
 }
 
 static void user_comments_poll(void)
@@ -9509,6 +9559,7 @@ int main(int argc, char **argv)
 		}
 		user_friend_poll();
 		user_comments_poll();
+		user_family_poll();
 		if (UP.want_comment) {
 			UP.want_comment = false;
 			open_comment_keyboard();

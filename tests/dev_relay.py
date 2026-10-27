@@ -483,6 +483,9 @@ def fake_get(path, q):
             {"appid": a, "name": n, "playtime_forever": m, "rtime_last_played": now - d * 86400, "img_icon_url": ""}
             for a, n, m, d in OWNED if a not in FREE_ADDED]}}
     # Familia de Steam simulada: Kenji y Lucía comparten dos juegos que la cuenta no tiene
+    if path.endswith("IFamilyGroupsService/GetFamilyGroup/v1/"):
+        return {"response": {"name": "Casa", "members": [{"steamid": str(FAKE_ID), "role": 1}, {"steamid": "76561190000000101", "role": 1},
+                                                          {"steamid": "76561190000000102", "role": 2}], "free_spots": 3}}
     if path.endswith("GetFamilyGroupForUser/v1/"):
         return {"response": {"family_groupid": "9000001", "is_not_member_of_any_group": False,
                              "family_group": {"name": "Casa", "members": [

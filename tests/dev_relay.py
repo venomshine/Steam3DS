@@ -242,6 +242,27 @@ def real_item(kind, ident):
         return {}
 
 
+ICONS = {}
+
+
+def owned_icons():
+    """Los iconos de verdad de los juegos simulados (de la tienda, una vez)"""
+    want = [a for a, *_ in OWNED if a not in ICONS]
+    if want:
+        inp = {"ids": [{"appid": a} for a in want], "context": {"language": "spanish", "country_code": "US"},
+               "data_request": {"include_assets": True}}
+        url = "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=" + urllib.parse.quote(json.dumps(inp))
+        try:
+            _, _, b = fetch("GET", url)
+            for it in json.loads(b)["response"]["store_items"]:
+                ICONS[it.get("id")] = it.get("assets", {}).get("community_icon", "")
+        except Exception:
+            pass
+        for a in want:
+            ICONS.setdefault(a, "")
+    return ICONS
+
+
 def cart_json():
     lines, total = [], 0
     for l in CART:
@@ -511,7 +532,7 @@ def fake_get(path, q):
             return {"response": {}}
         now = int(time.time())
         return {"response": {"game_count": len([a for a, *_ in OWNED if a not in FREE_ADDED]), "games": [
-            {"appid": a, "name": n, "playtime_forever": m, "rtime_last_played": now - d * 86400, "img_icon_url": ""}
+            {"appid": a, "name": n, "playtime_forever": m, "rtime_last_played": now - d * 86400, "img_icon_url": owned_icons().get(a, "")}
             for a, n, m, d in OWNED if a not in FREE_ADDED]}}
     # Familia de Steam simulada: Kenji y Lucía comparten dos juegos que la cuenta no tiene
     if path.endswith("IFamilyGroupsService/GetFamilyGroup/v1/"):

@@ -7410,15 +7410,49 @@ static float draw_user_extras(float y0, int part)
 		y += h + 8;
 	}
 	if (part == 0) return y - y0;
-	// Juegos: cuántos (lo que dice su página; si no, lo que dio GetOwnedGames)
+	// Juegos: cuántos (lo que dice su página; si no, lo que dio GetOwnedGames) y los iconos de los
+	// últimos que ha jugado (si sus juegos se ven)
 	int ng = UP.pg.ok && UP.pg.games_total >= 0 ? UP.pg.games_total : UP.games_done && !UP.games_private ? UP.games.count : -1;
 	if (ng > 0) {
-		float h = 30;
+		const float sz = 32, gap = 6;
+		int fit = (int)((w - 20 + gap) / (sz + gap));
+		if (fit > 16) fit = 16;
+		int pick[16], np = 0;
+		// Los más recientes primero (con icono)
+		for (int i = 0; i < UP.games.count; i++) {
+			const StoreRow *r = &UP.games.rows[i];
+			if (!r->icon[0]) continue;
+			int k = np < fit ? np++ : fit;
+			if (k == fit && r->last_played <= UP.games.rows[pick[fit - 1]].last_played) continue;
+			if (k == fit) k = fit - 1;
+			while (k > 0 && UP.games.rows[pick[k - 1]].last_played < r->last_played) {
+				pick[k] = pick[k - 1];
+				k--;
+			}
+			pick[k] = i;
+		}
+		bool more = ng > np && np == fit;
+		if (more) np--;   // el último hueco dice cuántos más
+		float h = np ? 24 + sz + 10 : 24;
 		if (y < SCR_H && y + h > 18) {
 			fx_glass(x, y, w, h, 10, 1, 0);
-			ui_icon(IC_PAD, x + 10, y + 9, 12, COL_ACC);
-			snprintf(t, sizeof t, ng == 1 ? _("%d juego") : _("%d juegos"), ng);
-			ui_text(x + 28, y + 7, t, SZ_SMALL, COL_TXT, AL_LEFT, w - 40);
+			snprintf(t, sizeof t, _("JUEGOS (%d)"), ng);
+			ui_text(x + 10, y + 6, t, SZ_TINY, COL_ACC, AL_LEFT, 0);
+			for (int i = 0; i < np; i++) {
+				char url[200];
+				steam_icon_url(&UP.games.rows[pick[i]], url, sizeof url);
+				float ix = x + 10 + i * (sz + gap), iy = y + 24;
+				const Pic *ip = img_get(url, 32);
+				if (ip) img_draw_cover(ip, ix, iy, sz, sz, 0.5f);
+				else ui_rrect(ix, iy, sz, sz, 4, col_alpha(COL_WHITE, 0.06f));
+			}
+			if (more) {
+				float ix = x + 10 + np * (sz + gap), iy = y + 24;
+				char m[16];
+				snprintf(m, sizeof m, "+%d", ng - np);
+				ui_rrect(ix, iy, sz, sz, 4, col_alpha(COL_WHITE, 0.08f));
+				ui_text(ix + sz / 2, iy + (sz - ui_line_h(SZ_TINY)) / 2, m, SZ_TINY, COL_DIM, AL_CENTER, sz);
+			}
 		}
 		y += h + 8;
 	}

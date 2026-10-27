@@ -1340,7 +1340,7 @@ static float hint_key(float x, float y, const char *key, bool draw)
 		snprintf(first, sizeof first, "%.*s", (int)(plus - key), key);
 		float w = hint_key(x, y, first, draw);
 		float pw = ui_text_w("+", SZ_TINY);
-		if (draw) ui_text(x + w + 1, y + 4, "+", SZ_TINY, COL_DIM, AL_LEFT, 0);
+		if (draw) ui_text(x + w + 1, y + 5, "+", SZ_TINY, COL_DIM, AL_LEFT, 0);
 		// La flecha de la cruceta, dibujada (no todas las fuentes traen ← → ↑ ↓)
 		float ax = x + w + 3 + pw, cx = ax + 4, cy = y + 10;
 		if (draw) {
@@ -1366,7 +1366,7 @@ static float hint_key(float x, float y, const char *key, bool draw)
 	}
 	if (g[0]) {
 		float w = ui_text_w(g, SZ_SMALL);
-		if (draw) ui_text(x, y + 2, g, SZ_SMALL, COL_WHITE, AL_LEFT, 0);
+		if (draw) ui_text(x, y + 5, g, SZ_SMALL, COL_WHITE, AL_LEFT, 0);   // a la altura de las teclas dibujadas (START)
 		return w;
 	}
 	float kw = ui_text_w(key, SZ_TINY) + 6;

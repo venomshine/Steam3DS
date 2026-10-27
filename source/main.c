@@ -6748,13 +6748,15 @@ static void open_keyboard(void)
 	swkbdSetButton(&kb, SWKBD_BUTTON_LEFT, _("Cancelar"), false);
 	swkbdSetButton(&kb, SWKBD_BUTTON_RIGHT, _("Buscar"), true);
 	swkbdSetFeatures(&kb, SWKBD_DARKEN_TOP_SCREEN | SWKBD_ALLOW_HOME | SWKBD_ALLOW_RESET | SWKBD_ALLOW_POWER);
-	swkbdSetValidation(&kb, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
+	swkbdSetValidation(&kb, SWKBD_ANYTHING, 0, 0);   // Buscar también sin escribir nada
 	if (swkbdInputText(&kb, buf, sizeof buf) != SWKBD_BUTTON_RIGHT) return;
 	char *s = buf;
 	while (*s == ' ') s++;
 	size_t n = strlen(s);
 	while (n > 0 && s[n - 1] == ' ') s[--n] = 0;
+	// Vacío: como en la tienda de Steam, se explora todo el catálogo (con el filtro de precio)
 	if (*s) search_start(s);
+	else search_show_browse();
 }
 
 static RowList *game_list(void)

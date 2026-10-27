@@ -838,6 +838,136 @@ static void wish_poll(Tab *t)
 	t->list.end = t->wish_next >= t->nwish;
 }
 
+
+// ---------------------------------------------------------------------------- Orden de la biblioteca y la lista de deseos
+
+// Y las cambia: biblioteca por nombre, más jugados o jugados recientemente; deseados por prioridad,
+// mayor descuento, precio más bajo o solo ofertas (lo que no está rebajado se aparta en wish_stash)
+static int lib_mode, wish_mode;
+static RowList wish_stash;
+static const char *const lib_mode_name[] = {"Por nombre", "Más jugados", "Jugados recientemente"};
+static const char *const wish_mode_name[] = {"Por prioridad", "Mayor descuento", "Precio más bajo", "Solo ofertas"};
+static const Tab *sort_tab;
+
+static int cmp_lib(const void *x, const void *y)
+{
+	const StoreRow *a = x, *b = y;
+	if (lib_mode == 1 && a->minutes != b->minutes) return b->minutes - a->minutes;
+	if (lib_mode == 2 && a->last_played != b->last_played) return a->last_played < b->last_played ? 1 : -1;
+	return strcasecmp(a->name, b->name);
+}
+
+static int wish_prio(u32 appid)
+{
+	for (int i = 0; i < sort_tab->nwish; i++)
+		if (sort_tab->wish[i] == appid) return i;
+	return 1 << 20;
+}
+
+static int cmp_wish(const void *x, const void *y)
+{
+	const StoreRow *a = x, *b = y;
+	if ((wish_mode == 1 || wish_mode == 3) && a->disc != b->disc) return b->disc - a->disc;
+	if (wish_mode == 2) {
+		// Gratis primero; sin precio (aún no a la venta), al final
+		int ca = a->free ? 0 : a->cents < 0 ? 1 << 30 : a->cents, cb = b->free ? 0 : b->cents < 0 ? 1 << 30 : b->cents;
+		if (ca != cb) return ca < cb ? -1 : 1;
+	}
+	return wish_prio(a->appid) - wish_prio(b->appid);
+}
+
+static void lib_apply(Tab *t)
+{
+	if (t->list.count > 1) qsort(t->list.rows, t->list.count, sizeof *t->list.rows, cmp_lib);
+}
+
+static void wish_apply(Tab *t)
+{
+	RowList *l = &t->list;
+	if (wish_mode == 3) {
+		int n = 0;
+		for (int i = 0; i < l->count; i++) {
+			if (l->rows[i].disc > 0) l->rows[n++] = l->rows[i];
+			else add_row(&wish_stash, &l->rows[i]);
+		}
+		l->count = n;
+	} else {
+		for (int i = 0; i < wish_stash.count; i++) add_row(l, &wish_stash.rows[i]);
+		wish_stash.count = 0;
+	}
+	sort_tab = t;
+	if (l->count > 1) qsort(l->rows, l->count, sizeof *l->rows, cmp_wish);
+}
+
+static void list_mode_next(void)
+{
+	Tab *t = CUR;
+	if (S.tab == TAB_LIBRARY) {
+		lib_mode = (lib_mode + 1) % 3;
+		lib_apply(t);
+		toast_icon(_(lib_mode_name[lib_mode]), IC_PAD);
+	} else if (S.tab == TAB_WISHLIST) {
+		wish_mode = (wish_mode + 1) % 4;
+		wish_apply(t);
+		toast_icon(_(wish_mode_name[wish_mode]), IC_HEART);
+	} else {
+		return;
+	}
+	t->sel = 0;
+	t->sel_y = 0;
+	t->scroll = t->scroll_target = 0;
+	t->sel_changed = osGetTime();
+}
+
+// Avisos de ofertas: al abrir la app, los juegos de tu lista de deseos que han entrado en oferta desde
+// la última vez (se recuerdan en la SD para no avisar dos veces de la misma rebaja)
+#define DEALS_FILE APP_DIR "/ofertas.txt"
+static bool deals_checked;
+
+static void deals_check(Tab *t)
+{
+	if (deals_checked || !t->wish_loaded || t->list.req || t->wish_next < t->nwish) return;
+	deals_checked = true;
+	// Lo ya avisado: «appid descuento» por línea
+	u32 seen[256];
+	int sd[256], ns = 0;
+	FILE *f = fopen(DEALS_FILE, "r");
+	if (f) {
+		unsigned long a;
+		int d;
+		while (ns < 256 && fscanf(f, "%lu %d", &a, &d) == 2) seen[ns] = (u32)a, sd[ns++] = d;
+		fclose(f);
+	}
+	const StoreRow *all[2] = {t->list.rows, wish_stash.rows};
+	int counts[2] = {t->list.count, wish_stash.count};
+	int nnew = 0;
+	const StoreRow *first = NULL;
+	f = fopen(DEALS_FILE ".tmp", "w");
+	for (int k = 0; k < 2; k++)
+		for (int i = 0; i < counts[k]; i++) {
+			const StoreRow *r = &all[k][i];
+			if (r->disc <= 0) continue;
+			bool old = false;
+			for (int j = 0; j < ns; j++) old |= seen[j] == r->appid && sd[j] >= r->disc;
+			if (!old) {
+				nnew++;
+				if (!first || r->disc > first->disc) first = r;
+			}
+			if (f) fprintf(f, "%lu %d\n", (unsigned long)r->appid, r->disc);
+		}
+	if (f) {
+		fclose(f);
+		remove(DEALS_FILE);
+		rename(DEALS_FILE ".tmp", DEALS_FILE);
+	}
+	netlog("ofertas: %d nuevas en tu lista de deseos", nnew);
+	if (!nnew) return;
+	char msg[160];
+	if (nnew == 1) snprintf(msg, sizeof msg, _("En oferta en tu lista de deseos: %s (-%d %%)"), first->name, first->disc);
+	else snprintf(msg, sizeof msg, _("%d juegos de tu lista de deseos están en oferta. El que más: %s (-%d %%)"), nnew, first->name, first->disc);
+	toast_icon(msg, IC_HEART);
+}
+
 static void notif_reset(void);
 static void flist_reset(void);
 
@@ -862,6 +992,8 @@ static void account_lists_clear(void)
 	family_reset();
 	notif_reset();
 	flist_reset();
+	wish_stash.count = 0;
+	deals_checked = false;
 	for (int ti = TAB_LIBRARY; ti < TAB_H0; ti++) {
 		Tab *t = &tabs[ti];
 		rowlist_free(&t->list);
@@ -1827,11 +1959,13 @@ static void draw_account_bar(void)
 	char title[64];
 	if (S.tab == TAB_LIBRARY) snprintf(title, sizeof title, _("Biblioteca · %d juegos"), t->list.count);
 	else if (S.tab == TAB_CART) snprintf(title, sizeof title, _("Carrito · %d"), t->list.count);
-	else snprintf(title, sizeof title, _("Lista de deseos · %d"), t->list.total);
+	else snprintf(title, sizeof title, _("Lista de deseos · %d"), wish_mode == 3 ? t->list.count : t->list.total);
+	if (S.tab == TAB_LIBRARY || S.tab == TAB_WISHLIST)
+		ui_text(BOT_W - 10, 6, _(S.tab == TAB_LIBRARY ? lib_mode_name[lib_mode] : wish_mode_name[wish_mode]), SZ_TINY, COL_ACC, AL_RIGHT, 120);
 	ui_icon(S.tab == TAB_LIBRARY ? IC_PAD : S.tab == TAB_CART ? IC_CART : IC_HEART, 28, 6, 12, COL_ACC);
 	if (S.tab == TAB_CART && shop_cart()->subtotal[0])
 		ui_text(BOT_W - 10, 5, shop_cart()->subtotal, SZ_SMALL, COL_LIME, AL_RIGHT, 0);
-	ui_text(46, 5, title, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 56);
+	ui_text(46, 5, title, SZ_SMALL, COL_WHITE, AL_LEFT, S.tab == TAB_CART ? BOT_W - 56 : BOT_W - 180);
 }
 
 
@@ -1946,6 +2080,8 @@ static void draw_store_bottom(void)
 		ui_text(BOT_W / 2, top + 30, _("No hay búsquedas recientes"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 	if (S.tab == TAB_WISHLIST && t->wish_loaded && !t->nwish)
 		ui_text(BOT_W / 2, top + 30, _("Tu lista de deseos está vacía"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
+	else if (S.tab == TAB_WISHLIST && wish_mode == 3 && !t->list.count && !t->list.req)
+		ui_text(BOT_W / 2, top + 30, _("Ningún juego de tu lista de deseos está en oferta"), SZ_SMALL, COL_DIM, AL_CENTER, 300);
 	if (S.tab == TAB_CART) {
 		if (shop_cart_loaded() && !shop_cart()->n)
 			ui_text(BOT_W / 2, top + 30, _("Tu carrito está vacío"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
@@ -1966,6 +2102,9 @@ static void draw_store_bottom(void)
 		static const char *hb[] = {"B", "Volver", "START", "Menú"};
 		if (t->list.count) draw_hints(hc, 5);
 		else draw_hints(hb, 2);
+	} else if (S.tab == TAB_LIBRARY || S.tab == TAB_WISHLIST) {
+		static const char *ho[] = {"A", "Abrir", "↑↓", "Elegir", "Y", "Ordenar", "B", "Volver"};
+		draw_hints(ho, 4);
 	} else if (S.tab >= TAB_COUNT) {
 		static const char *ha[] = {"A", "Abrir", "↑↓", "Elegir", "B", "Volver", "START", "Menú"};
 		draw_hints(ha, 4);
@@ -7305,6 +7444,10 @@ static void input_store(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		}
 		if ((kd & KEY_X) && c->n) open_pay();
 	}
+	if ((S.tab == TAB_LIBRARY || S.tab == TAB_WISHLIST) && (kd & KEY_Y)) {
+		list_mode_next();
+		return;
+	}
 	if (S.tab >= TAB_COUNT) {
 		static const int ids[] = {BT_BACKBAR};
 		if ((kd & KEY_B) || press_update(kd, kh, ku, tp, ids, 1) == BT_BACKBAR) {
@@ -8452,8 +8595,18 @@ int main(int argc, char **argv)
 		for (int ti = 0; ti < TAB_ALL; ti++) {
 			Tab *t = &tabs[ti];
 			if (ti == TAB_HOME) continue;   // Inicio no tiene lista propia: son las de TAB_H0…
-			else if (ti == TAB_LIBRARY) owned_poll(t);
-			else if (ti == TAB_WISHLIST) wish_poll(t);
+			else if (ti == TAB_LIBRARY) {
+				int before = t->list.count;
+				owned_poll(t);
+				if (lib_mode && t->list.count != before) lib_apply(t);
+			} else if (ti == TAB_WISHLIST) {
+				int before = t->list.count;
+				wish_poll(t);
+				if ((wish_mode || wish_stash.count) && t->list.count != before) wish_apply(t);
+				// Con un orden o para los avisos de ofertas hace falta la lista entera: se sigue pidiendo sola
+				if (auth_logged() && t->wish_loaded && !t->list.req && t->wish_next < t->nwish && (wish_mode || !deals_checked)) tab_more(TAB_WISHLIST);
+				if (auth_logged() && S.scene != SC_SPLASH && S.scene != SC_ACCOUNTS && S.scene_anim >= 1) deals_check(t);   // con la tienda ya a la vista
+			}
 			else if (ti == TAB_SEARCH) search_poll(t);
 			else {
 				// Betas: si una página falla, se vuelve a pedir la misma

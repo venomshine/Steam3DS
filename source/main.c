@@ -2335,6 +2335,7 @@ static void fmt_date(u32 t, char *out, size_t n);
 static void draw_review_preview(const AppInfo *a);
 static void review_editor_close(void);
 static void remote_close(void);
+static void award_close(void);
 static void remote_poll(const AppInfo *a);
 static int press_update(u32 kd, u32 kh, u32 ku, touchPosition *tp, const int *ids, int n);
 static bool key_repeat(u32 down, u32 held, u32 mask);
@@ -2371,6 +2372,7 @@ static void open_game(u32 appid, bool push)
 	S.rscroll = 0;
 	review_editor_close();
 	remote_close();
+	award_close();
 	S.lsel = 0;
 	S.lscroll = 0;
 	S.lsel_y = 0;
@@ -4193,6 +4195,148 @@ static void input_hist(u32 kd, u32 kh, touchPosition *tp)
 	if (key_repeat(kd, kh, KEY_UP) && HI.sel > 0) HI.sel--;
 }
 
+// ---------------------------------------------------------------------------- Premios a las reseñas
+
+#define AW_MAX 16
+static struct {
+	bool open;
+	float anim;
+	SteamAward a[AW_MAX];
+	int n, sel;
+	bool loaded;
+	long long points;
+	Req *cfg, *pts, *give;
+	u64 target;
+	u32 confirm;
+	u64 confirm_at;
+} AW;
+
+static const char *award_name(const SteamAward *a)
+{
+	static const char *es[] = {"Ganador", "Precioso", "Útil", "En llamas", "Gracioso", "Cien", "Salvavidas", "Perfecto", "Más uno", "Inteligente", "Oro puro", "Entrañable"};
+	if (a->id >= 24 && a->id <= 35) return _(es[a->id - 24]);
+	return a->title;
+}
+
+static void award_close(void)
+{
+	AW.open = false;
+}
+
+static void award_open(u64 review_id)
+{
+	AW.open = true;
+	AW.target = review_id;
+	AW.sel = 0;
+	AW.confirm = 0;
+	if (!AW.loaded && !AW.cfg) AW.cfg = steam_req_award_config();
+	if (!AW.pts) AW.pts = steam_req_points(auth_info()->steamid, auth_token());
+	AW.points = -1;
+}
+
+static void award_poll(void)
+{
+	if (AW.cfg && AW.cfg->state >= REQ_DONE) {
+		int n = AW.cfg->state == REQ_DONE ? steam_parse_award_config(AW.cfg->data, AW.a, AW_MAX) : -1;
+		AW.n = n < 0 ? 0 : n;
+		AW.loaded = n > 0;
+		net_release(AW.cfg);
+		AW.cfg = NULL;
+	}
+	if (AW.pts && AW.pts->state >= REQ_DONE) {
+		AW.points = AW.pts->state == REQ_DONE ? steam_parse_points(AW.pts->data) : -1;
+		net_release(AW.pts);
+		AW.pts = NULL;
+	}
+	if (AW.give && AW.give->state >= REQ_DONE) {
+		Req *r = AW.give;
+		bool ok = r->state == REQ_DONE && r->http == 200 && (r->eresult == 1 || r->eresult == 0);
+		netlog("premio: -> %s (HTTP %ld, eresult %d)", ok ? "ok" : "fallo", r->http, r->eresult);
+		toast_icon(ok ? _("Premio enviado. ¡Gracias por apoyar a la comunidad!") : r->eresult == 107 || r->eresult == 6 ? _("No tienes puntos suficientes")
+			: r->eresult == 29 ? _("Ya le has dado ese premio") : _("No se pudo enviar el premio"), IC_TROPHY);
+		net_release(r);
+		AW.give = NULL;
+		if (ok) AW.open = false;
+	}
+}
+
+static void award_icon(u32 id, char *out, size_t n)
+{
+	snprintf(out, n, "https://store.akamai.steamstatic.com/public/images/loyalty/reactions/still/%lu.png", (unsigned long)id);
+}
+
+static void draw_award(void)
+{
+	float an = ease_out_cubic(AW.anim);
+	if (an <= 0.01f) return;
+	ui_rect(0, 0, BOT_W, SCR_H, C2D_Color32(0, 0, 0, (u8)(0x90 * an)));
+	float y0 = 58 + (1 - an) * 60;
+	fx_panel(6, y0, BOT_W - 12, SCR_H - y0 + 16, 16, an);
+	ui_text(18, y0 + 10, _("Dar un premio a esta reseña"), SZ_BODY, col_alpha(COL_WHITE, an), AL_LEFT, 200);
+	if (AW.points >= 0) {
+		char pts[24], t[48];
+		fmt_points(AW.points, pts, sizeof pts);
+		snprintf(t, sizeof t, _("Tienes %s puntos"), pts);
+		ui_text(BOT_W - 18, y0 + 12, t, SZ_TINY, col_alpha(COL_LIME, an), AL_RIGHT, 110);
+	}
+	if (!AW.loaded) {
+		ui_spinner(BOT_W / 2, y0 + 80, 6, COL_DIM);
+		return;
+	}
+	const int cols = 6;
+	const float cell = 46, gx = (BOT_W - cols * cell) / 2, gy = y0 + 34;
+	for (int i = 0; i < AW.n; i++) {
+		float x = gx + (i % cols) * cell, y = gy + (i / cols) * cell;
+		if (i == AW.sel) fx_select(x + 1, y + 1, cell - 2, cell - 2, 8, an);
+		char url[160];
+		award_icon(AW.a[i].id, url, sizeof url);
+		const Pic *p = img_get(url, 64);
+		if (p) img_draw_fit(p, x + 6, y + 6, cell - 12, cell - 12);
+	}
+	const SteamAward *a = &AW.a[AW.sel < AW.n ? AW.sel : 0];
+	char t[96], pts[24];
+	fmt_points(a->cost, pts, sizeof pts);
+	float ty = gy + ((AW.n + cols - 1) / cols) * cell + 6;
+	snprintf(t, sizeof t, _("%s · %s puntos"), award_name(a), pts);
+	ui_text(BOT_W / 2, ty, t, SZ_SMALL, col_alpha(COL_WHITE, an), AL_CENTER, 290);
+	bool confirm = AW.confirm == a->id && osGetTime() < AW.confirm_at;
+	ui_text(BOT_W / 2, ty + 18, AW.give ? _("Enviando…") : confirm ? _("Pulsa A otra vez para darlo") : _("A: dar el premio · B: cancelar"), SZ_TINY,
+		col_alpha(confirm ? COL_ACC : COL_DIM, an), AL_CENTER, 290);
+}
+
+static void input_award(u32 kd, u32 kh, touchPosition *tp)
+{
+	if (kd & KEY_B) {
+		AW.open = false;
+		return;
+	}
+	const int cols = 6;
+	if (key_repeat(kd, kh, KEY_RIGHT) && AW.sel + 1 < AW.n) AW.sel++;
+	if (key_repeat(kd, kh, KEY_LEFT) && AW.sel > 0) AW.sel--;
+	if (key_repeat(kd, kh, KEY_DOWN) && AW.sel + cols < AW.n) AW.sel += cols;
+	if (key_repeat(kd, kh, KEY_UP) && AW.sel >= cols) AW.sel -= cols;
+	if ((kd & KEY_TOUCH)) {
+		const float cell = 46, gx = (BOT_W - cols * cell) / 2, gy = 58 + 34;
+		int c = (int)((tp->px - gx) / cell), r = (int)((tp->py - gy) / cell);
+		int i = r * cols + c;
+		if (tp->py >= gy && c >= 0 && c < cols && i >= 0 && i < AW.n) {
+			if (i == AW.sel) kd |= KEY_A;
+			AW.sel = i;
+		}
+	}
+	if (!(kd & KEY_A) || !AW.loaded || AW.give || AW.sel >= AW.n) return;
+	const SteamAward *a = &AW.a[AW.sel];
+	if (AW.points >= 0 && AW.points < a->cost) {
+		toast(_("No tienes puntos suficientes"));
+	} else if (AW.confirm == a->id && osGetTime() < AW.confirm_at) {
+		AW.confirm = 0;
+		AW.give = steam_req_award(1, AW.target, a->id, auth_token());
+	} else {
+		AW.confirm = a->id;
+		AW.confirm_at = osGetTime() + 4000;
+	}
+}
+
 // ---------------------------------------------------------------------------- Editor de tu reseña
 
 static const Box B_RUP = {12, 64, 145, 30};
@@ -4481,6 +4625,9 @@ static void draw_game_bottom(void)
 		static const char *hw[] = {"A", "Escribir reseña", "↑↓", "Leer", "Y", "Filtrar", "B", "Volver"};
 		static const char *he[] = {"A", "Editar reseña", "↑↓", "Leer", "Y", "Filtrar", "B", "Volver"};
 		draw_hints(MR.r.has ? he : hw, 4);
+	} else if (S.sec == SEC_REVIEWS && auth_logged()) {
+		static const char *h[] = {"A", "Premiar", "↑↓", "Leer", "Y", "Filtrar", "B", "Volver"};
+		draw_hints(h, 4);
 	} else if (S.sec == SEC_REVIEWS) {
 		static const char *h[] = {"↑↓", "Leer", "Y", "Filtrar", "L R", "Apartado", "B", "Volver"};
 		draw_hints(h, 4);
@@ -4494,6 +4641,7 @@ static void draw_game_bottom(void)
 	if (a) draw_pick(a);
 	if (a && RE.open) draw_review_editor(a);
 	if (a) draw_remote(a);
+	draw_award();
 }
 
 // ============================================================================
@@ -8752,6 +8900,10 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		input_remote(a, kd, kh, tp);
 		return;
 	}
+	if (AW.open) {
+		input_award(kd, kh, tp);
+		return;
+	}
 	if (S.show_qr) {
 		// El QR para comprar en el móvil tapa la ficha: solo se cierra
 		if (kd & (KEY_B | KEY_Y)) S.show_qr = false;
@@ -8822,6 +8974,11 @@ static void input_game(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		if (!mine && S.rsel < 0) S.rsel = 0;
 		if (mine && S.rsel == -1 && (kd & KEY_A) && MR.loaded) {
 			review_editor_open(a);
+			return;
+		}
+		// A en la reseña de otra persona: darle un premio con tus puntos de Steam
+		if (S.rsel >= 0 && S.rsel < S.nreviews && (kd & KEY_A) && auth_logged() && S.reviews[S.rsel].id) {
+			award_open(S.reviews[S.rsel].id);
 			return;
 		}
 		if (S.rsel >= S.nreviews - 3) reviews_more();
@@ -9360,6 +9517,7 @@ int main(int argc, char **argv)
 		accset_poll();
 		pcdl_poll();
 		points_poll();
+		award_poll();
 		inv_poll();
 		hist_poll();
 		xp_poll();
@@ -9375,6 +9533,7 @@ int main(int argc, char **argv)
 		S.menu_anim = approach(S.menu_anim, S.menu_open ? 1 : 0, S.menu_open ? 12 : 18);
 		S.pick_anim = approach(S.pick_anim, S.pick_open ? 1 : 0, S.pick_open ? 12 : 18);
 		RP.anim = approach(RP.anim, RP.open && S.scene == SC_GAME ? 1 : 0, RP.open ? 12 : 18);
+		AW.anim = approach(AW.anim, AW.open && S.scene == SC_GAME ? 1 : 0, AW.open ? 12 : 18);
 		S.sub_anim = approach(S.sub_anim, S.scene == SC_STORE && (S.tab == TAB_HOME || S.tab == TAB_SEARCH) ? 1 : 0, 14);
 		S.price_x = approach(S.price_x, S.price, 16);
 		price_apply();

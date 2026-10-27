@@ -46,6 +46,8 @@ static bool jbool(const cJSON *o, const char *k)
 	return false;
 }
 
+static u64 jid(const cJSON *o, const char *k);
+
 static void copy(char *dst, size_t n, const char *src)
 {
 	snprintf(dst, n, "%s", src ? src : "");
@@ -926,6 +928,7 @@ int steam_parse_reviews(const char *json, Review *out, int max, char *cursor, si
 		}
 		out[n].text = c;
 		out[n].voted_up = jbool(r, "voted_up");
+		out[n].id = jid(r, "recommendationid");
 		const cJSON *au = cJSON_GetObjectItemCaseSensitive(r, "author");
 		out[n].hours = au ? (int)(jnum(au, "playtime_forever", 0) / 60) : 0;
 		n++;
@@ -3003,4 +3006,48 @@ bool steam_parse_badges(const char *json, SteamXp *out)
 	}
 	cJSON_Delete(root);
 	return ok;
+}
+
+// ----------------------------------------------------------------------------
+// Premios (ILoyaltyRewardsService)
+
+Req *steam_req_award_config(void)
+{
+	return net_get("https://api.steampowered.com/ILoyaltyRewardsService/GetReactionConfig/v1/", LANE_API);
+}
+
+int steam_parse_award_config(const char *json, SteamAward *out, int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	if (!resp) {
+		cJSON_Delete(root);
+		return -1;
+	}
+	int n = 0;
+	const cJSON *it, *t;
+	cJSON_ArrayForEach(it, cJSON_GetObjectItemCaseSensitive(resp, "reactions")) {
+		if (n >= max || !jbool(it, "purchaseable")) continue;
+		bool review = false;
+		cJSON_ArrayForEach(t, cJSON_GetObjectItemCaseSensitive(it, "valid_target_types"))
+			review |= cJSON_IsNumber(t) && t->valueint == 1;
+		if (!review) continue;
+		out[n].id = (u32)jnum(it, "reactionid", 0);
+		out[n].cost = (int)jnum(it, "points_cost", 0);
+		copy_utf8(out[n].title, sizeof out[n].title, jstr(it, "localized_title"));
+		n++;
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
+Req *steam_req_award(int target_type, u64 targetid, u32 reactionid, const char *token)
+{
+	cJSON *in = cJSON_CreateObject();
+	char t[24];
+	snprintf(t, sizeof t, "%llu", (unsigned long long)targetid);
+	cJSON_AddNumberToObject(in, "target_type", target_type);
+	cJSON_AddStringToObject(in, "targetid", t);
+	cJSON_AddNumberToObject(in, "reactionid", reactionid);
+	return steam_post_service("ILoyaltyRewardsService/AddReaction", in, token);
 }

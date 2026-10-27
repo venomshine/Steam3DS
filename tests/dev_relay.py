@@ -34,7 +34,7 @@ ALLOWED = ("store.steampowered.com", "api.steampowered.com", "shared.akamai.stea
            "avatars.steamstatic.com", "avatars.akamai.steamstatic.com",
            "login.steampowered.com", "checkout.steampowered.com", "steamcommunity.com", "help.steampowered.com",
            "images.steamusercontent.com", "avatars.fastly.steamstatic.com", "community.akamai.steamstatic.com",
-           "community.fastly.steamstatic.com")
+           "community.fastly.steamstatic.com", "store.akamai.steamstatic.com")
 CACHE = None
 
 
@@ -360,6 +360,9 @@ def fake_post_api(path, body):
         else:
             st["paused"] = not inp.get("enable", True)
         return {"response": {}}, 1
+    if path.endswith("AddReaction/v1/"):
+        POINTS[0] -= 500
+        return {"response": {}}, 1
     if path.endswith("RedeemPoints/v1/"):
         POINTS[0] -= 500
         return {"response": {"communityitemid": "123456789", "bundle_community_item_ids": []}}, 1
@@ -644,6 +647,23 @@ class Relay(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             sys.stderr.write("FAKE GET userdata\n")
+            return
+        # Las reseñas de la tienda: desde la nube Steam las redirige a la portada, así que se simulan
+        if FAKE and host == "store.steampowered.com" and path.startswith("appreviews/"):
+            if q.get("cursor", "*") != "*":
+                body = json.dumps({"success": 1, "reviews": [], "cursor": "fin"}).encode()
+            else:
+                pos = q.get("review_type") != "negative"
+                revs = [{"recommendationid": str(9000 + i), "review": t, "voted_up": up, "author": {"playtime_forever": 60 * h}}
+                        for i, (t, up, h) in enumerate([("Una obra maestra. La historia y la música son increíbles.", True, 120),
+                                                         ("Demasiado corto para lo que cuesta, pero bonito.", False, 8),
+                                                         ("Lo jugué en la Steam Deck y va perfecto.", True, 45)]) if q.get("review_type", "all") == "all" or up == pos]
+                body = json.dumps({"success": 1, "query_summary": {"num_reviews": len(revs)}, "reviews": revs, "cursor": "AoJ"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if FAKE and host == "store.steampowered.com" and path == "account/history/":
             rows = [("18 OCT 2026", ["Hades II", "Hades II - Banda sonora"], "Compra", "Mastercard", "31,98&euro;"),

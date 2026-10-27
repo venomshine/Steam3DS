@@ -58,6 +58,7 @@ typedef struct {
 	bool voted_up;
 	int hours;
 	char *text;
+	u64 id;                 // recommendationid (para darle un premio)
 } Review;
 
 typedef struct {
@@ -485,3 +486,9 @@ int steam_parse_history(const char *html, Purchase *out, int max);   // -1 si no
 typedef struct { int level, xp, xp_next, xp_cur, nbadges; } SteamXp;
 Req *steam_req_badges(u64 steamid, const char *token);
 bool steam_parse_badges(const char *json, SteamXp *out);
+
+// Premios con puntos de Steam (los de las reseñas: los que se pueden comprar para target_type 1)
+typedef struct { u32 id; int cost; char title[40]; } SteamAward;
+Req *steam_req_award_config(void);
+int steam_parse_award_config(const char *json, SteamAward *out, int max);   // -1 si falla
+Req *steam_req_award(int target_type, u64 targetid, u32 reactionid, const char *token);

@@ -2504,3 +2504,51 @@ Req *steam_req_pc_uninstall(u64 client, u32 appid, const char *token)
 {
 	return steam_post_service("IClientCommService/UninstallClientApp", client_input(client, appid), token);
 }
+
+// ----------------------------------------------------------------------------
+// Solicitudes de amistad
+
+int steam_parse_friend_requests(const char *json, u64 *ids, int max)
+{
+	cJSON *root = cJSON_Parse(json);
+	const cJSON *resp = root ? cJSON_GetObjectItemCaseSensitive(root, "response") : NULL;
+	const cJSON *fl = cJSON_GetObjectItemCaseSensitive(resp ? resp : root, "friendslist");
+	int n = 0;
+	const cJSON *f;
+	const cJSON *list = fl ? cJSON_GetObjectItemCaseSensitive(fl, "friends") : NULL;
+	cJSON_ArrayForEach(f, list) {
+		const char *sid = jstr(f, "ulfriendid");
+		if (!sid) sid = jstr(f, "steamid");
+		const char *rel_s = jstr(f, "relationship");
+		int rel = rel_s ? (!strcmp(rel_s, "requestrecipient") ? 2 : 0) : (int)jnum(f, "efriendrelationship", 0);
+		if (rel == 2 && sid && n < max) ids[n++] = strtoull(sid, NULL, 10);
+	}
+	cJSON_Delete(root);
+	return n;
+}
+
+Req *steam_req_friend_action(int action, u64 steamid, const char *sessionid, const char *cookies)
+{
+	char body[160];
+	const char *url = action == FRIEND_IGNORE ? "https://steamcommunity.com/actions/IgnoreFriendInviteAjax"
+	                                          : "https://steamcommunity.com/actions/AddFriendAjax";
+	snprintf(body, sizeof body, "sessionID=%s&steamid=%llu%s", sessionid, (unsigned long long)steamid,
+		action == FRIEND_ACCEPT ? "&accept_invite=1" : action == FRIEND_ADD ? "&accept_invite=0" : "");
+	return net_request(url, body, cookies);
+}
+
+// La comunidad contesta con un JSON con success (1 o true), o solo «true»
+bool steam_friend_action_ok(const Req *r)
+{
+	if (r->state != REQ_DONE || r->http != 200 || !r->data) return false;
+	cJSON *root = cJSON_Parse(r->data);
+	bool ok;
+	if (cJSON_IsObject(root)) {
+		const cJSON *sc = cJSON_GetObjectItemCaseSensitive(root, "success");
+		ok = cJSON_IsTrue(sc) || (cJSON_IsNumber(sc) && sc->valueint == 1);
+	} else {
+		ok = cJSON_IsTrue(root) || (cJSON_IsNumber(root) && root->valueint == 1);
+	}
+	cJSON_Delete(root);
+	return ok;
+}

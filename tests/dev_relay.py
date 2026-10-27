@@ -94,7 +94,7 @@ PROFILE_AS = {FAKE_ID: 76561197972494985, 76561190000000101: 76561198023414915, 
 # RELAY_KENJI=<steamid>: Kenji pasa a ser ese perfil público (para probar uno concreto)
 if os.environ.get("RELAY_KENJI"):
     PROFILE_AS[76561190000000101] = int(os.environ["RELAY_KENJI"])
-NAMES = {FAKE_ID: "VENOMSHiNE (prueba)", 76561190000000101: "Kenji", 76561190000000102: "Lucía", 76561190000000103: "Marco"}
+NAMES = {FAKE_ID: "VENOMSHiNE (prueba)", 76561190000000101: "Kenji", 76561190000000102: "Lucía", 76561190000000103: "Marco", 76561190000000109: "Sofía"}
 OWNED = [(1091500, "Cyberpunk 2077", 6120, 3), (381210, "Dead by Daylight", 2410, 1), (1145360, "Hades", 3900, 20),
          (292030, "The Witcher 3: Wild Hunt", 9300, 60), (413150, "Stardew Valley", 5200, 9), (730, "Counter-Strike 2", 12000, 2),
          (570, "Dota 2", 0, 400), (1203620, "Enshrouded", 1500, 12)]
@@ -147,6 +147,11 @@ def fake_post(host, path, body):
         PRIVACY["eCommentPermission"] = int(f.get("eCommentPermission", "1"))
         sys.stderr.write("PRIVACIDAD %s\n" % json.dumps(PRIVACY))
         return {"success": 1, "Privacy": PRIVACY}, []
+    if host == "steamcommunity.com" and path in ("actions/AddFriendAjax", "actions/IgnoreFriendInviteAjax"):
+        raw = body.decode() if isinstance(body, bytes) else (body or "")
+        f = {k: v[0] for k, v in urllib.parse.parse_qs(raw).items()}
+        sys.stderr.write("AMIGOS %s %s\n" % (path, f))
+        return ({"success": 1, "invited": [f.get("steamid")]} if f.get("sessionID") else {"success": 0}), []
     if host == "store.steampowered.com" and path.startswith("ajaxrequestplaytestaccess/"):
         return {"success": 1, "granted": 0}, []
     if host == "store.steampowered.com" and path == "friends/recommendgame":

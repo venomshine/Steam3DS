@@ -164,7 +164,7 @@ static struct {
 } S;
 
 enum { BT_NONE, BT_IGNORE, BT_CART, BT_WISH, BT_SHOTS, BT_INST, BT_PREV, BT_NEXT, BT_EXIT_NO, BT_EXIT_YES, BT_SEARCH, BT_BACKBAR,
-	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW, BT_RUP, BT_RDOWN, BT_RTEXT, BT_RVIS, BT_RCANCEL, BT_RSEND, BT_PDL };
+	BT_PLIB, BT_PWISH, BT_PLOGOUT, BT_PFRIENDS, BT_PACT, BT_PSWITCH, BT_PAYW, BT_PAYC, BT_PAYQ, BT_CVV, BT_PAYGO, BT_DEMO, BT_UGAME, BT_UQR, BT_PVIEW, BT_RUP, BT_RDOWN, BT_RTEXT, BT_RVIS, BT_RCANCEL, BT_RSEND, BT_PDL, BT_UADD, BT_UADDW, BT_UIGN };
 
 // Pestañas de la tienda
 #define HOME_PARTS 4
@@ -3560,6 +3560,33 @@ static void review_editor_open(const AppInfo *a)
 	RE.on_publish = true;
 }
 
+static void open_user(u64 id, const SteamPerson *person);
+
+// El código de amigo (o el SteamID entero) de alguien: se abre su perfil, desde donde se le añade
+static void open_fcode_keyboard(void)
+{
+	SwkbdState kb;
+	char buf[24] = "";
+	swkbdInit(&kb, SWKBD_TYPE_NUMPAD, 2, 17);
+	swkbdSetHintText(&kb, _("Código de amigo"));
+	swkbdSetButton(&kb, SWKBD_BUTTON_LEFT, _("Cancelar"), false);
+	swkbdSetButton(&kb, SWKBD_BUTTON_RIGHT, _("Buscar"), true);
+	swkbdSetFeatures(&kb, SWKBD_DARKEN_TOP_SCREEN | SWKBD_ALLOW_HOME | SWKBD_ALLOW_RESET | SWKBD_ALLOW_POWER);
+	swkbdSetValidation(&kb, SWKBD_NOTEMPTY_NOTBLANK, 0, 0);
+	if (swkbdInputText(&kb, buf, sizeof buf) != SWKBD_BUTTON_RIGHT) return;
+	unsigned long long v = strtoull(buf, NULL, 10);
+	u64 id = v >= 76561197960265728ULL ? v : v + 76561197960265728ULL;
+	if (!v || v > 76561202255233023ULL) {
+		toast(_("Ese código de amigo no es válido"));
+		return;
+	}
+	if (auth_logged() && id == auth_info()->steamid) {
+		toast(_("Ese es tu propio código de amigo"));
+		return;
+	}
+	open_user(id, NULL);
+}
+
 static void open_review_keyboard(void)
 {
 	SwkbdState kb;
@@ -4741,18 +4768,24 @@ static struct {
 	int view[MAX_FRIENDS + 4];   // lo que se ve: >= 0 un amigo; -1, -2, -3 los títulos de cada grupo
 	int nview, sel;
 	bool qr;                     // arriba, el QR para que te añadan
+	u64 rq[20];                  // quienes te han mandado solicitud
+	int nrq;
+	Req *rq_people;
+	bool want_code;              // abrir el teclado del código de amigo
 } FL;
 
 static void flist_reset(void)
 {
 	if (FL.req) net_release(FL.req);
 	if (FL.people) net_release(FL.people);
+	if (FL.rq_people) net_release(FL.rq_people);
 	memset(&FL, 0, sizeof FL);
 }
 
 static int person_group(const SteamPerson *p)
 {
-	return p->state > 0 && p->game ? 0 : p->state > 0 ? 1 : 2;   // jugando, en línea, desconectado
+	if (p->request) return 0;   // las solicitudes, arriba del todo
+	return p->state > 0 && p->game ? 1 : p->state > 0 ? 2 : 3;   // jugando, en línea, desconectado
 }
 
 // Los amigos por grupos (jugando, en línea, desconectados) y por nombre dentro de cada uno
@@ -4785,6 +4818,7 @@ static void flist_poll(void)
 	if (!auth_logged()) return;
 	if (FL.req && FL.req->state >= REQ_DONE) {
 		int n = FL.req->state == REQ_DONE ? steam_parse_friends(FL.req->data, FL.ids, MAX_FRIENDS, &FL.pending) : -1;
+		FL.nrq = n >= 0 ? steam_parse_friend_requests(FL.req->data, FL.rq, 20) : 0;
 		netlog("amigos: lista %s: %d (%d solicitudes, HTTP %ld)", FL.fallback ? "ISteamUser" : "IFriendsListService", n, FL.pending, FL.req->http);
 		net_release(FL.req);
 		FL.req = NULL;
@@ -4819,7 +4853,19 @@ static void flist_poll(void)
 		if (FL.next >= FL.nids) {
 			FL.loaded = true;
 			flist_build();
+			if (FL.nrq) FL.rq_people = steam_req_people(FL.rq, FL.nrq, auth_token());
 		}
+	}
+	// Quienes te han mandado solicitud: con su nombre y su avatar, en su propio grupo
+	if (FL.rq_people && FL.rq_people->state >= REQ_DONE) {
+		if (FL.rq_people->state == REQ_DONE) {
+			int n = steam_parse_people(FL.rq_people->data, FL.p + FL.np, MAX_FRIENDS - FL.np);
+			for (int i = 0; i < n; i++) FL.p[FL.np + i].request = true;
+			if (n > 0) FL.np += n;
+			flist_build();
+		}
+		net_release(FL.rq_people);
+		FL.rq_people = NULL;
 	}
 }
 
@@ -4841,6 +4887,11 @@ static void open_friends(void)
 static void person_status(const SteamPerson *p, char *out, size_t n, u32 *col)
 {
 	static const char *st[] = {"Desconectado", "En línea", "Ocupado", "Ausente", "Durmiendo", "Quiere intercambiar", "Quiere jugar"};
+	if (p->request) {
+		snprintf(out, n, "%s", _("Quiere ser tu amigo · Pulsa A para responder"));
+		*col = COL_ACC;
+		return;
+	}
 	if (p->state > 0 && p->game) {
 		snprintf(out, n, _("Jugando a %s"), p->game_name[0] ? p->game_name : _("un juego"));
 		*col = COL_LIME;
@@ -4871,6 +4922,7 @@ static void draw_friends_top(void)
 			: _("Todavía no tienes amigos en Steam. Escanea el código con el móvil de un amigo: se abrirá tu perfil, donde puede pulsar «Añadir amigo»."));
 		snprintf(foot, sizeof foot, _("Código de amigo: %lu"), code);
 		draw_qr_panel(url, _("Añadir amigo"), body, NULL, foot, COL_ACC);
+		ui_text(TOP_W - 12, SCR_H - 16, _("X: escribir el código de amigo de otra persona"), SZ_TINY, COL_DIM, AL_RIGHT, 380);
 		return;
 	}
 	if (!FL.loaded) {
@@ -4917,7 +4969,7 @@ static void draw_friends_bottom(void)
 	ui_text(10, 4, "‹", SZ_LARGE, COL_ACC, AL_LEFT, 0);
 	ui_icon(IC_USERS, 28, 6, 12, COL_ACC);
 	char t[64];
-	if (FL.np) snprintf(t, sizeof t, _("Amigos · %d"), FL.np);
+	if (FL.np) snprintf(t, sizeof t, _("Amigos · %d"), FL.np - FL.nrq < 0 ? 0 : FL.np - FL.nrq);
 	else snprintf(t, sizeof t, "%s", _("Amigos"));
 	ui_text(46, 5, t, SZ_SMALL, COL_WHITE, AL_LEFT, BOT_W - 140);
 	// Solicitudes que te han mandado: se responden en la app de Steam
@@ -4930,7 +4982,7 @@ static void draw_friends_bottom(void)
 	const int vis = (int)((SCR_H - 18 - top) / RH);
 	int first = FL.sel - (vis - 2);
 	if (first < 0) first = 0;
-	static const char *groups[] = {"Jugando", "En línea", "Desconectados"};
+	static const char *groups[] = {"Solicitudes de amistad", "Jugando", "En línea", "Desconectados"};
 	for (int v = first; v < FL.nview && v < first + vis; v++) {
 		float y = top + (v - first) * RH;
 		int i = FL.view[v];
@@ -4959,11 +5011,11 @@ static void draw_friends_bottom(void)
 	if (FL.loaded && !FL.np) ui_text(BOT_W / 2, LIST_Y + 40, _("Todavía no tienes amigos en Steam"), SZ_SMALL, COL_DIM, AL_CENTER, 0);
 	else if (!FL.loaded && !FL.failed) ui_spinner(BOT_W / 2, LIST_Y + 40, 6, COL_DIM);
 	bool game = FL.sel >= 0 && FL.sel < FL.nview && FL.view[FL.sel] >= 0 && FL.p[FL.view[FL.sel]].state > 0 && FL.p[FL.view[FL.sel]].game;
-	static const char *hq[] = {"Y", "Ver la lista", "B", "Volver"};
+	static const char *hq[] = {"X", "Código de amigo", "Y", "Ver la lista", "B", "Volver"};
 	static const char *hg[] = {"A", "Ver perfil", "X", "Ver el juego", "Y", "Añadir amigo", "B", "Volver"};
 	static const char *h[] = {"A", "Ver perfil", "↑↓", "Elegir", "Y", "Añadir amigo", "B", "Volver"};
 	static const char *h0[] = {"Y", "Añadir amigo", "B", "Volver"};
-	if (FL.qr && FL.np) draw_hints(hq, 2);
+	if (FL.qr && FL.np) draw_hints(hq, 3);
 	else if (!FL.np) draw_hints(h0, 2);
 	else if (game && !FL.qr) draw_hints(hg, 4);
 	else draw_hints(h, 4);
@@ -4984,7 +5036,10 @@ static void input_friends(u32 kd, u32 kh, touchPosition *tp)
 		return;
 	}
 	if (kd & KEY_Y) FL.qr = !FL.qr;
-	if (FL.qr) return;
+	if (FL.qr || (FL.loaded && !FL.np)) {
+		if (kd & KEY_X) FL.want_code = true;   // añadir a alguien por su código de amigo
+		if (FL.qr) return;
+	}
 	if (key_repeat(kd, kh, KEY_DOWN)) flist_move(1);
 	if (key_repeat(kd, kh, KEY_UP)) flist_move(-1);
 	if ((kd & KEY_TOUCH) && tp->py >= LIST_Y) {
@@ -5024,6 +5079,9 @@ static struct {
 	int nf, page_i;              // page_i: la siguiente que se busca en su página (-1 aún no toca)
 	u64 page_at;                 // no antes de esta hora (la comunidad limita las peticiones seguidas)
 	Req *fhead[UP_FILES];        // la cabecera de cada imagen: si es un GIF se pide el original
+	Req *fr_req;                 // aceptar, ignorar o mandar una solicitud de amistad
+	int fr_kind, rel;
+	bool rel_set;
 	bool fready[UP_FILES];
 	// Sus juegos: cuántos, horas, lo más jugado y lo último que ha jugado (con sus logros)
 	RowList games;
@@ -5062,7 +5120,7 @@ static void known_add(u64 id, const char *url)
 static void user_reset(void)
 {
 	Req **all[] = {&UP.items, &UP.shows, &UP.xml, &UP.lvreq, &UP.files, &UP.page, &UP.ach_req[0], &UP.ach_req[1], &UP.ach_req[2],
-		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2]};
+		&UP.games_req, &UP.prog_req[0], &UP.prog_req[1], &UP.prog_req[2], &UP.fr_req};
 	for (size_t i = 0; i < sizeof all / sizeof *all; i++)
 		if (*all[i]) net_release(*all[i]);
 	for (int i = 0; i < UP_FILES; i++)
@@ -5666,6 +5724,56 @@ static void draw_user_top(void)
 
 static const Box B_UGAME = {12, 120, 296, 30};
 static const Box B_UQR = {12, 156, 296, 30};
+static const Box B_UADD = {12, 190, 145, 26};      // Añadir amigo / Aceptar
+static const Box B_UADDW = {12, 190, 296, 26};
+static const Box B_UIGN = {163, 190, 145, 26};     // Ignorar la solicitud
+
+// Qué es para ti: 3 amigo, 2 te ha mandado solicitud, 1 se la has mandado tú, 0 nada, -1 no se sabe
+static int user_relation(void)
+{
+	if (user_is_me() || !UP.id) return -1;
+	if (UP.rel_set) return UP.rel;
+	for (int i = 0; i < FL.np; i++)
+		if (FL.p[i].id == UP.id) return FL.p[i].request ? 2 : 3;
+	return FL.loaded ? 0 : -1;
+}
+
+static void user_friend_poll(void)
+{
+	Req *r = UP.fr_req;
+	if (!r || r->state < REQ_DONE) return;
+	bool ok = steam_friend_action_ok(r);
+	netlog("amigos: acción %d con %llu -> %s (HTTP %ld)", UP.fr_kind, (unsigned long long)UP.id, ok ? "ok" : "fallo", r->http);
+	char name[64], t[160];
+	user_name(name, sizeof name);
+	if (!ok) snprintf(t, sizeof t, "%s", _("Steam no aceptó la acción. Inténtalo de nuevo"));
+	else if (UP.fr_kind == FRIEND_ACCEPT) snprintf(t, sizeof t, _("%s y tú ya sois amigos"), name);
+	else if (UP.fr_kind == FRIEND_IGNORE) snprintf(t, sizeof t, _("Has ignorado la solicitud de %s"), name);
+	else snprintf(t, sizeof t, _("Solicitud de amistad enviada a %s"), name);
+	toast_icon(t, IC_USERS);
+	if (ok) {
+		UP.rel_set = true;
+		UP.rel = UP.fr_kind == FRIEND_ACCEPT ? 3 : UP.fr_kind == FRIEND_IGNORE ? 0 : 1;
+		if (UP.fr_kind == FRIEND_ACCEPT) UP.person.request = false;   // ya es tu amigo
+		if (UP.fr_kind != FRIEND_ADD) {
+			// La lista de amigos se vuelve a pedir ya (con el nuevo amigo, o sin la solicitud)
+			flist_reset();
+			FL.at = osGetTime();
+			FL.req = steam_req_friends(auth_info()->steamid, auth_token(), false);
+		}
+	}
+	net_release(r);
+	UP.fr_req = NULL;
+}
+
+static void user_friend_action(int kind)
+{
+	char ck[1200];
+	if (UP.fr_req || !auth_web_cookies("steamcommunity.com", ck, sizeof ck)) return;
+	UP.fr_kind = kind;
+	UP.fr_req = steam_req_friend_action(kind, UP.id, auth_sessionid(), ck);
+	memset(ck, 0, sizeof ck);
+}
 
 static bool user_playing(void)
 {
@@ -5692,6 +5800,17 @@ static void draw_user_bottom(void)
 	if (user_playing())
 		draw_button_k(&B_UGAME, "X", false, IC_PAD, _("Ver el juego"), C2D_Color32(0x75, 0xb0, 0x22, 0xff), C2D_Color32(0x58, 0x8a, 0x1b, 0xff), COL_WHITE, 1, S.pressed == BT_UGAME);
 	draw_button_k(&B_UQR, "Y", false, IC_PHONE, UP.qr ? _("Volver al perfil") : _("Ver en Steam"), COL_BTN2, COL_BTN2, COL_ACC, 1, S.pressed == BT_UQR);
+	int rel = user_relation();
+	bool busy = UP.fr_req != NULL;
+	u32 g1 = C2D_Color32(0x75, 0xb0, 0x22, 0xff), g2 = C2D_Color32(0x58, 0x8a, 0x1b, 0xff);
+	if (rel == 2) {
+		draw_button_k(&B_UADD, "A", false, IC_CHECK, busy && UP.fr_kind == FRIEND_ACCEPT ? _("Aceptando…") : _("Aceptar"), g1, g2, COL_WHITE, 1, S.pressed == BT_UADD);
+		draw_button_k(&B_UIGN, "SELECT", false, IC_HIDE, busy && UP.fr_kind == FRIEND_IGNORE ? _("Ignorando…") : _("Ignorar"), COL_BTN2, COL_BTN2, COL_DIM, 1, S.pressed == BT_UIGN);
+	} else if (rel == 0) {
+		draw_button_k(&B_UADDW, "A", false, IC_USERS, busy ? _("Enviando…") : _("Añadir amigo"), g1, g2, COL_WHITE, 1, S.pressed == BT_UADDW);
+	} else if (rel == 1) {
+		draw_button_k(&B_UADDW, NULL, false, IC_CHECK, _("Solicitud enviada"), COL_BTN2, COL_BTN2, COL_DIM, 0.6f, false);
+	}
 	static const char *h[] = {"↑↓", "Desplazar", "Y", "Ver en Steam", "B", "Volver"};
 	draw_hints(h, 3);
 }
@@ -5714,10 +5833,19 @@ static void input_user(u32 kd, u32 kh, u32 ku, touchPosition *tp)
 		else go_scene(UP.back, -1);
 		return;
 	}
-	int ids[2] = {BT_UQR, BT_UGAME};
-	int b = press_update(kd, kh, ku, tp, ids, user_playing() ? 2 : 1);
+	int ids[5] = {BT_UQR}, nids = 1, rel = user_relation();
+	if (user_playing()) ids[nids++] = BT_UGAME;
+	if (rel == 2) ids[nids++] = BT_UADD, ids[nids++] = BT_UIGN;
+	if (rel == 0) ids[nids++] = BT_UADDW;
+	int b = press_update(kd, kh, ku, tp, ids, nids);
 	if (kd & KEY_Y) b = BT_UQR;
 	if ((kd & KEY_X) && user_playing()) b = BT_UGAME;
+	if ((kd & KEY_A) && rel == 2) b = BT_UADD;
+	if ((kd & KEY_A) && rel == 0) b = BT_UADDW;
+	if ((kd & KEY_SELECT) && rel == 2) b = BT_UIGN;
+	if (b == BT_UADD) user_friend_action(FRIEND_ACCEPT);
+	if (b == BT_UIGN) user_friend_action(FRIEND_IGNORE);
+	if (b == BT_UADDW) user_friend_action(FRIEND_ADD);
 	if (b == BT_UQR) UP.qr = !UP.qr;
 	if (b == BT_UGAME) {
 		open_game(UP.person.game, true);
@@ -7693,6 +7821,9 @@ static const Box *button_box(int id)
 	case BT_UQR: return &B_UQR;
 	case BT_PVIEW: return &B_PVIEW;
 	case BT_PDL: return &B_PDL;
+	case BT_UADD: return &B_UADD;
+	case BT_UADDW: return &B_UADDW;
+	case BT_UIGN: return &B_UIGN;
 	case BT_RUP: return &B_RUP;
 	case BT_RDOWN: return &B_RDOWN;
 	case BT_RTEXT: return &B_RTEXT;
@@ -8282,6 +8413,11 @@ int main(int argc, char **argv)
 			open_keyboard();
 			kd = kh = ku = 0;
 		}
+		if (FL.want_code) {
+			FL.want_code = false;
+			open_fcode_keyboard();
+			kd = kh = ku = 0;
+		}
 		if (RE.want_kb) {
 			RE.want_kb = false;
 			open_review_keyboard();
@@ -8354,6 +8490,7 @@ int main(int argc, char **argv)
 		// Tu cuenta enseña siempre tu fondo y tu marco (aunque vengas del perfil de un amigo)
 		if (S.scene == SC_PROFILE && auth_logged() && UP.id != auth_info()->steamid) user_load(auth_info()->steamid);
 		user_poll();
+		user_friend_poll();
 		accset_poll();
 		pcdl_poll();
 

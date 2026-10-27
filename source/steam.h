@@ -232,6 +232,7 @@ typedef struct {
 	u32 game;               // a qué está jugando (0 nada)
 	char game_name[64];
 	u32 last_off;           // última vez que se desconectó
+	bool request;           // te ha mandado una solicitud de amistad (aún no es tu amigo)
 } SteamPerson;
 Req *steam_req_people(const u64 *ids, int n, const char *token);
 
@@ -404,3 +405,10 @@ Req *steam_req_pc_apps(u64 client, const char *token);
 int steam_parse_pc_apps(const char *json, PcApp **out, long long *free_bytes);   // malloc; -1 si falla
 Req *steam_req_pc_downloads(u64 client, bool enable, const char *token);
 Req *steam_req_pc_uninstall(u64 client, u32 appid, const char *token);
+
+// Solicitudes de amistad que te han mandado (de la misma lista de amigos) y responderlas o mandar
+// una, con los mismos formularios de la comunidad (actions/AddFriendAjax e IgnoreFriendInviteAjax)
+int steam_parse_friend_requests(const char *json, u64 *ids, int max);
+enum { FRIEND_ADD, FRIEND_ACCEPT, FRIEND_IGNORE };
+Req *steam_req_friend_action(int action, u64 steamid, const char *sessionid, const char *cookies);
+bool steam_friend_action_ok(const Req *r);
